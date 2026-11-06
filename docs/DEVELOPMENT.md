@@ -32,6 +32,10 @@
   `update_controller` apply them between steps without touching the state. Structural changes
   (segment count, base type) require `reset()`.
 - Experiments run the same `Simulator` in a `QThread`; results are deterministic.
+- The robust auto-tuner (`simulation/tuning.py`) runs in a `QThread` and evaluates candidates
+  in a `ProcessPoolExecutor` (spawned workers re-import the entry module, hence the
+  `if __name__ == "__main__"` guards and `multiprocessing.freeze_support()` in `main.py` /
+  `pendulum_sim/__main__.py`). `workers=1` evaluates serially.
 
 ## Adding things
 
@@ -53,6 +57,8 @@ python -m pytest tests/test_physics.py tests/test_controller.py tests/test_simul
 
 | File | Covers |
 |---|---|
+| `tests/test_tuning.py` | push-robustness metric, robust tuner (serial and parallel), cancellation |
+| `tests/test_axis_scaling.py` | calm graph scaling: expand at once, shrink slowly, no jitter, cap |
 | `tests/test_fast_dynamics.py` | the fast scalar dynamics and RK4 against the NumPy reference |
 | `tests/test_physics.py` | dynamics vs. independent Lagrangian, analytic results, energy/momentum, SciPy cross-check, actuator |
 | `tests/test_controller.py` | PID terms, sample rate/ZOH, limits, anti-windup, derivative filter, bumpless retuning, LQR stability, closed-loop balancing |
