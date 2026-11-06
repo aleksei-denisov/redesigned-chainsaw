@@ -42,19 +42,22 @@ jobs:
       - name: Run the test suite
         run: |
           set -o pipefail
-          python -m pytest -v 2>&1 | tee pytest.log || {
-            msg=$(tail -n 80 pytest.log | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
-            echo "::error title=pytest failed::$msg"
-            exit 1
+          python -m pytest -v -p no:cacheprovider 2>&1 | tee pytest.log || {
+            status=$?
+            # Surface the most relevant log lines as annotations (readable without log access).
+            grep -nE "Fatal|Error|error|FAILED|Aborted|Segmentation|File \"|PASSED|SKIPPED" pytest.log | tail -n 9 |
+              while IFS= read -r line; do echo "::error title=pytest::${line//%/%25}"; done
+            pip list 2>/dev/null | grep -iE "pyside6|shiboken|pyqtgraph|numpy|scipy" | tr '\n' ' ' | sed 's/^/::error title=versions::/'; echo
+            exit $status
           }
 
       - name: Launch the application (offscreen smoke test)
         run: |
           set -o pipefail
           python main.py --smoke-test 2 2>&1 | tee smoke.log || {
-            msg=$(tail -n 60 smoke.log | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
-            echo "::error title=smoke test failed::$msg"
-            exit 1
+            status=$?
+            tail -n 9 smoke.log | while IFS= read -r line; do echo "::error title=smoke test::${line//%/%25}"; done
+            exit $status
           }
 
       - name: Installable package entry point
