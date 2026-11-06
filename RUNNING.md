@@ -155,7 +155,7 @@ More background: [docs/CONTROL.md](docs/CONTROL.md).
 
 The tuner keeps the hardware as it is – stronger motors, faster controllers, heavier lower or
 lighter upper segments change what is achievable; re-run the tuner after such changes. Typical
-results for the built-in systems are listed in [docs/CONTROL.md](docs/CONTROL.md#4-robust-auto-tuning).
+results for the built-in systems are listed in [docs/CONTROL.md](docs/CONTROL.md#3-robust-auto-tuning).
 
 ## 6. Running and comparing experiments (*Experiments & comparison* tab)
 

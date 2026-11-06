@@ -78,6 +78,9 @@
     "noise_seed": 1,
     "telemetry_rate_hz": 200.0
   },
+  "interaction": {
+    "push_force": 0.2
+  },
   "experiment": {
     "duration": 6.0,
     "settle_tolerance_deg": 1.0,

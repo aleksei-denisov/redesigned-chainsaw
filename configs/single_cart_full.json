@@ -1,7 +1,7 @@
 {
   "version": 1,
   "name": "Single pendulum on cart \u2013 angle + cart loops",
-  "description": "Angle loop plus a cart-position loop, gains seeded by LQR. Note the negative-looking behaviour of the cart loop: to return to the centre the cart first moves away (non-minimum-phase).",
+  "description": "Angle loop plus a cart-position loop, robust gains from the auto-tuner (recovers from \u22485 N tip pushes). Note the negative-looking behaviour of the cart loop: to return to the centre the cart first moves away (non-minimum-phase).",
   "plant": {
     "base_type": "cart",
     "gravity": 9.81,
@@ -39,9 +39,9 @@
         "signal": "cart",
         "enabled": true,
         "setpoint": 0.0,
-        "kp": 10.000000000000068,
+        "kp": 42.828956637156274,
         "ki": 0.0,
-        "kd": 11.267227569855836,
+        "kd": 77.81368942838175,
         "p_enabled": true,
         "i_enabled": true,
         "d_enabled": true,
@@ -56,9 +56,9 @@
         "signal": "theta1",
         "enabled": true,
         "setpoint": 0.0,
-        "kp": 68.03086456828561,
+        "kp": 631.6046346629379,
         "ki": 0.0,
-        "kd": 11.215245463562432,
+        "kd": 48.38122054076422,
         "p_enabled": true,
         "i_enabled": true,
         "d_enabled": true,
@@ -78,13 +78,16 @@
     "noise_seed": 1,
     "telemetry_rate_hz": 200.0
   },
+  "interaction": {
+    "push_force": 2.5
+  },
   "experiment": {
-    "duration": 8.0,
+    "duration": 12.0,
     "settle_tolerance_deg": 1.0,
     "disturbance": {
       "enabled": true,
       "time": 4.0,
-      "force": 1.0,
+      "force": 2.5,
       "duration": 0.1
     }
   }

@@ -71,7 +71,45 @@ and is why hand-tuning positive gains per segment does not work.
   **non-minimum-phase** output – to move right it must first move left so that the pendulum tilts
   right (scenario `single_cart_full`).
 
-## 3. Limitations
+## 3. Robust auto-tuning
+
+**★ Auto-tune for robustness…** (PID panel) finds the best gains *for the system as it is
+configured* – masses, lengths, inertia, friction, actuator limit, lag and rate limit, controller
+rate. Implementation: [`simulation/tuning.py`](../pendulum_sim/simulation/tuning.py).
+
+- **Objective.** Primary: the *recoverable tip push* – the largest horizontal force pulse
+  (0.1 s at the tip, starting upright) after which no segment ever exceeds 60° and all are back
+  within 3° after 4 s. It is measured by doubling + bisection on the full nonlinear simulation.
+  Secondary (tie-break within the bisection resolution): the integral of the squared angles after
+  a push of half that strength, i.e. how quickly and calmly the system recovers.
+- **Search space.** The five LQR weights (log scale). Every candidate is therefore a
+  *stabilising* design mapped onto the loop gains, which keeps the search small and smooth.
+  Random exploration around the defaults is followed by refinement with a shrinking step.
+  Refining the raw gains further beyond the LQR family did not improve the result in tests.
+- **Parallel.** Candidates are evaluated in worker processes (CPU cores − 1, up to 8).
+- **Output.** All loops enabled, Kp/Kd from the best design, Ki = 0, clamping anti-windup,
+  measured-rate derivative, output limits = actuator limit. It also proposes a test push of
+  half the recoverable push.
+- **Restore original gains** brings back the gains of the loaded scenario/file.
+
+Results for the built-in systems (the scenarios ship with these tuned gains):
+
+| System | Recoverable push, default LQR weights | After robust tuning | Default *Push* |
+|---|---|---|---|
+| Single pendulum on cart (40 N) | 4.5 N | 5.1 N | 2.5 N |
+| Double pendulum on cart (40 N) | 0.34 N | 0.54 N (+59 %) | 0.25 N |
+| Pendubot, double on fixed pivot (2 N·m) | 0.63 N | 0.85 N (+35 %) | 0.4 N |
+| Triple pendulum on cart (60 N) | 0.089 N | 0.126 N (+41 %) | 0.06 N |
+
+**Why the double and triple tolerate so little.** These limits are physical, not a tuning
+problem: with an *unlimited* actuator, no lag and a 5 kHz controller the double still fails at
+≈0.36 N and the triple at ≈0.08 N with the default design. A 0.1 N·s impulse on the light upper
+segments throws them into fast relative motion; recovering requires the lower segments to swing
+far (a 0.07 N push already swings the triple's lowest segment by ~20°), and beyond that point the
+nonlinearity takes over. What *does* raise the limit is the physics: a lighter top segment, a
+heavier/longer lower segment, or a longer track. Re-run the tuner after such changes.
+
+## 4. Limitations
 
 - **Local controller.** Gains are designed for the upright equilibrium. Large initial angles,
   strong pushes or tight actuator limits can make the system fall; there is no swing-up
