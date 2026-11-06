@@ -25,12 +25,17 @@ experiment mode for comparing controller tunings under identical conditions.
 - **Multi-segment control** – one PID loop per segment angle plus a cart-position loop,
   summed into the single actuator command; gains can be seeded from an **LQR** design.
   See [docs/CONTROL.md](docs/CONTROL.md) for the principles and limitations.
+- **One-click robust auto-tune** – searches, for your exact physical system, the gains that
+  recover from the strongest push (parallel, on all CPU cores), reports the recoverable push
+  before → after, and sets a sensible test push. **Restore original gains** undoes any tuning
+  experiments in one click.
 - **Experiment & comparison mode** – deterministic runs from identical initial conditions,
   overlay plots (angle, error, control effort, cart position) and a metrics table
   (settling time, max deviation, overshoot, RMSE, control RMS/peak/energy). Save/load
   experiment sets, export CSV, load the gains of a stored run back into the controller.
 - **Telemetry** – switchable live graphs of angles, angular velocities, control error,
-  control signal (command / unsaturated / actuator), PID components, energy, cart position.
+  control signal (command / unsaturated / actuator), PID components, energy, cart position,
+  with calm axis scaling (expands at once, shrinks slowly, no jumping).
 - **Simulation control** – start, pause, resume, reset, restart, single step, speed 0.05×–8×,
   tip pushes, 9 demonstration scenarios, JSON configuration save/load.
 

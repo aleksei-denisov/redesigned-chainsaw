@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEvent, Qt
+from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QDoubleSpinBox,
     QFormLayout,
@@ -81,11 +83,47 @@ def scrollable(widget: QWidget) -> QScrollArea:
     return area
 
 
+HINT_OPACITY = 0.72  # hint text = normal text colour, slightly dimmed (readable in light and dark mode)
+
+
+class HintLabel(QLabel):
+    """Secondary explanatory text.
+
+    The colour is derived from the current text colour instead of a fixed grey, so it
+    keeps its contrast in dark mode and follows live light/dark switching (macOS).
+    """
+
+    def __init__(self, text: str) -> None:
+        super().__init__(text)
+        self.setWordWrap(True)
+        font = self.font()
+        font.setPointSizeF(max(9.0, font.pointSizeF() * 0.9))
+        self.setFont(font)
+        self._updating = False
+        self._apply_colour()
+
+    def _apply_colour(self) -> None:
+        if self._updating:
+            return
+        self._updating = True
+        try:
+            base = QApplication.palette()
+            colour = QColor(base.color(QPalette.ColorRole.WindowText))
+            colour.setAlphaF(HINT_OPACITY)
+            pal = self.palette()
+            pal.setColor(QPalette.ColorRole.WindowText, colour)
+            self.setPalette(pal)
+        finally:
+            self._updating = False
+
+    def changeEvent(self, event: QEvent) -> None:  # noqa: N802 (Qt API)
+        if event.type() in (QEvent.Type.ApplicationPaletteChange, QEvent.Type.StyleChange):
+            self._apply_colour()
+        super().changeEvent(event)
+
+
 def hint(text: str) -> QLabel:
-    label = QLabel(text)
-    label.setWordWrap(True)
-    label.setStyleSheet("color: palette(mid); font-size: 11px;")
-    return label
+    return HintLabel(text)
 
 
 def set_silently(widget, value) -> None:

@@ -1,7 +1,7 @@
 {
   "version": 1,
   "name": "Double pendulum on cart \u2013 multi-loop (LQR seeded)",
-  "description": "Two segments balanced by three parallel loops (cart, \u03b81, \u03b82). The PD gains reproduce an LQR state-feedback design.",
+  "description": "Two segments balanced by three parallel loops (cart, \u03b81, \u03b82). Robust auto-tuned gains: recovers from tip pushes up to \u22480.5 N (0.1 s).",
   "plant": {
     "base_type": "cart",
     "gravity": 9.81,
@@ -49,9 +49,9 @@
         "signal": "cart",
         "enabled": true,
         "setpoint": 0.0,
-        "kp": -9.999999999999964,
+        "kp": -24.9752352589072,
         "ki": 0.0,
-        "kd": -14.752148507004694,
+        "kd": -217.6015179213856,
         "p_enabled": true,
         "i_enabled": true,
         "d_enabled": true,
@@ -66,9 +66,9 @@
         "signal": "theta1",
         "enabled": true,
         "setpoint": 0.0,
-        "kp": 169.2481184068203,
+        "kp": 6957.350289860654,
         "ki": 0.0,
-        "kd": -4.648260601070591,
+        "kd": -45.13957941271921,
         "p_enabled": true,
         "i_enabled": true,
         "d_enabled": true,
@@ -83,9 +83,9 @@
         "signal": "theta2",
         "enabled": true,
         "setpoint": 0.0,
-        "kp": -259.29230104903263,
+        "kp": -9284.225003243246,
         "ki": 0.0,
-        "kd": -31.887892277257727,
+        "kd": -1277.8199913629217,
         "p_enabled": true,
         "i_enabled": true,
         "d_enabled": true,
@@ -105,13 +105,16 @@
     "noise_seed": 1,
     "telemetry_rate_hz": 200.0
   },
+  "interaction": {
+    "push_force": 0.25
+  },
   "experiment": {
     "duration": 8.0,
     "settle_tolerance_deg": 1.0,
     "disturbance": {
       "enabled": true,
       "time": 4.0,
-      "force": 0.2,
+      "force": 0.25,
       "duration": 0.1
     }
   }

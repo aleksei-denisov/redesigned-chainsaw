@@ -5,10 +5,15 @@ Performance notes (the graphs, not the physics, are the expensive part of a fram
 * the left axes have a fixed width, so changing tick labels never re-layouts the linked plots;
 * angles are shown wrapped to ±180° with gaps at the wrap, so a spinning pendulum keeps a
   fixed, readable y-range instead of an ever-growing one;
-* hidden graphs are not updated at all.
+* hidden graphs are not updated at all;
+* the y axes use :class:`~.axis_scaling.SmoothAxis` (expand at once, shrink slowly,
+  symmetric for signed signals, control capped near the actuator limit) and the x axis
+  shows a fixed, steadily scrolling time window – no jumping scales.
 """
 
 from __future__ import annotations
+
+import time
 
 import numpy as np
 import pyqtgraph as pg
@@ -26,6 +31,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..simulation import TelemetryRecorder
+from .axis_scaling import SmoothAxis, data_extent
 from .widgets import LOOP_COLORS, SEGMENT_COLORS, spin
 
 GRAPHS = [
@@ -38,6 +44,16 @@ GRAPHS = [
     ("cart", "Cart position", "m"),
 ]
 DEFAULT_ON = {"angles", "error", "control", "energy"}
+# Per graph: symmetric about zero?, smallest displayed span (in the graph's units).
+AXIS_STYLE = {
+    "angles": (False, 2.0),
+    "velocities": (True, 10.0),
+    "error": (True, 1.0),
+    "control": (True, 0.2),
+    "components": (True, 0.05),
+    "energy": (False, 0.01),
+    "cart": (True, 0.05),
+}
 AXIS_WIDTH = 58  # px; fixed so tick-label changes never trigger a re-layout
 
 
@@ -75,8 +91,13 @@ class TelemetryPanel(QWidget):
         self.wrap_angles.setCheckable(True)
         self.wrap_angles.setChecked(True)
         self.wrap_angles.toggled.connect(lambda _: self._force_refresh())
+        self.smooth_y = QAction("Calm Y scaling (expand fast, shrink slowly)", menu)
+        self.smooth_y.setCheckable(True)
+        self.smooth_y.setChecked(True)
+        self.smooth_y.toggled.connect(self._on_smooth_toggled)
         menu.addSeparator()
         menu.addAction(self.wrap_angles)
+        menu.addAction(self.smooth_y)
         bar.addStretch(1)
         bar.addWidget(QLabel("Loop:"))
         self.loop_combo = QComboBox()
@@ -110,6 +131,8 @@ class TelemetryPanel(QWidget):
             self.curves[key] = []
             self.splitter.addWidget(plot)
         self.plots[GRAPHS[-1][0]].setLabel("bottom", "time", "s")
+        self.axes = {key: SmoothAxis(symmetric=sym, min_span=span) for key, (sym, span) in AXIS_STYLE.items()}
+        self._on_smooth_toggled(True)
         self._signature: tuple | None = None
         self._version = -1
         self._update_visibility()
@@ -121,6 +144,23 @@ class TelemetryPanel(QWidget):
 
     def _force_refresh(self) -> None:
         self._version = -1
+
+    def _on_smooth_toggled(self, enabled: bool) -> None:
+        for key, plot in self.plots.items():
+            plot.enableAutoRange(axis="y", enable=not enabled)
+            plot.enableAutoRange(axis="x", enable=False)
+            self.axes[key].reset()
+        self._force_refresh()
+
+    def set_output_limit(self, limit: float) -> None:
+        """Cap the control graph near the actuator limit (unsaturated spikes are clipped)."""
+        self.axes["control"].cap = 1.1 * abs(limit) if limit > 0 else None
+        self.axes["control"].reset()
+
+    def reset_scales(self) -> None:
+        for axis in self.axes.values():
+            axis.reset()
+        self._force_refresh()
 
     def _curve(self, key: str, name: str, color: str, style=Qt.PenStyle.SolidLine, width: float = 1.3):
         pen = pg.mkPen(color, width=width, style=style)
@@ -167,6 +207,8 @@ class TelemetryPanel(QWidget):
         self.loop_combo.setCurrentIndex(max(0, min(current, len(loop_labels) - 1)))
         self.loop_combo.blockSignals(False)
         self._loop_labels = loop_labels
+        for axis in self.axes.values():
+            axis.reset()
         self._version = -1
 
     # ----------------------------------------------------------- refresh
@@ -185,37 +227,60 @@ class TelemetryPanel(QWidget):
         t = t_all[sl]
         n_segments, has_cart, labels = self._signature
         vis = {k: self.plots[k].isVisible() for k in self.plots}
+        series: dict[str, list[np.ndarray]] = {k: [] for k in self.plots}
+
+        def put(key: str, curve, y: np.ndarray, **kw) -> None:
+            curve.setData(t, y, **kw)
+            series[key].append(y)
+
         if vis["angles"] or vis["velocities"]:
             for i in range(n_segments):
                 ang = np.degrees(tel.column(f"theta{i + 1}")[sl])
                 if self.wrap_angles.isChecked():
-                    self.curves["angles"][i].setData(t, wrap_degrees(ang), connect="finite")
+                    put("angles", self.curves["angles"][i], wrap_degrees(ang), connect="finite")
                 else:
-                    self.curves["angles"][i].setData(t, ang)
-                self.curves["velocities"][i].setData(t, np.degrees(tel.column(f"omega{i + 1}")[sl]))
+                    put("angles", self.curves["angles"][i], ang)
+                put("velocities", self.curves["velocities"][i], np.degrees(tel.column(f"omega{i + 1}")[sl]))
         if vis["error"]:
             c = 0
             for k, label in enumerate(labels):
                 if label != "cart":
-                    self.curves["error"][c].setData(t, np.degrees(tel.column(f"error{k}")[sl]))
+                    put("error", self.curves["error"][c], np.degrees(tel.column(f"error{k}")[sl]))
                     c += 1
         if vis["control"]:
             cc = self.curves["control"]
-            cc[0].setData(t, tel.column("command")[sl])
-            cc[1].setData(t, tel.column("unsaturated")[sl])
-            cc[2].setData(t, tel.column("actuator")[sl])
-            cc[3].setData(t, tel.column("tip_force")[sl])
+            put("control", cc[0], tel.column("command")[sl])
+            put("control", cc[1], tel.column("unsaturated")[sl])
+            put("control", cc[2], tel.column("actuator")[sl])
+            put("control", cc[3], tel.column("tip_force")[sl])
         if vis["components"] and labels:
             k = max(0, min(self.loop_combo.currentIndex(), len(labels) - 1))
             for j, kind in enumerate(("p", "i", "d")):
-                self.curves["components"][j].setData(t, tel.column(f"{kind}{k}")[sl])
+                put("components", self.curves["components"][j], tel.column(f"{kind}{k}")[sl])
         if vis["energy"]:
             ec = self.curves["energy"]
-            ec[0].setData(t, tel.column("ke")[sl])
-            ec[1].setData(t, tel.column("pe")[sl])
-            ec[2].setData(t, tel.column("energy")[sl])
+            put("energy", ec[0], tel.column("ke")[sl])
+            put("energy", ec[1], tel.column("pe")[sl])
+            put("energy", ec[2], tel.column("energy")[sl])
         if vis["cart"] and has_cart:
-            self.curves["cart"][0].setData(t, tel.column("x")[sl])
+            put("cart", self.curves["cart"][0], tel.column("x")[sl])
             if "cart" in labels:
                 k = labels.index("cart")
-                self.curves["cart"][1].setData(t, tel.column(f"error{k}")[sl])
+                put("cart", self.curves["cart"][1], tel.column(f"error{k}")[sl])
+        self._apply_ranges(t, series, vis)
+
+    def _apply_ranges(self, t: np.ndarray, series: dict[str, list[np.ndarray]], vis: dict[str, bool]) -> None:
+        window = self.window.value()
+        t_end = float(t[-1]) if t.size else 0.0
+        x_hi = max(window, t_end)
+        for key, plot in self.plots.items():
+            if vis[key]:
+                plot.setXRange(x_hi - window, x_hi, padding=0.0)
+        if not self.smooth_y.isChecked():
+            return
+        now = time.monotonic()
+        for key, arrays in series.items():
+            if not vis[key] or not arrays:
+                continue
+            lo, hi = self.axes[key].update(*data_extent(arrays), now)
+            self.plots[key].setYRange(lo, hi, padding=0.0)

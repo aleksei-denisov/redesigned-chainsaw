@@ -5,6 +5,11 @@ on:
   pull_request:
   workflow_dispatch:
 
+# A newer push to the same branch cancels the older, still-running run (saves CI minutes).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     name: Tests (${{ matrix.os }}, Python ${{ matrix.python }})
@@ -17,6 +22,10 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
         python: ["3.10", "3.12"]
+        exclude:
+          # macOS minutes cost 10x on private repositories: test macOS on one Python version.
+          - os: macos-latest
+            python: "3.10"
     env:
       QT_QPA_PLATFORM: offscreen
     defaults:
@@ -80,7 +89,8 @@ jobs:
   build:
     name: Standalone app (${{ matrix.os }})
     needs: test
-    if: always()
+    # Standalone builds are slow: run them on main and when started manually (Actions tab).
+    if: always() && (github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch')
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false

@@ -20,6 +20,16 @@ from ..control import (
 from ..physics import ActuatorParams, BaseType, PlantParams, SegmentParams
 from .config import AppConfig, DisturbanceSettings, ExperimentSettings
 
+# LQR weights found by the robust auto-tuner ("thorough" preset, simulation/tuning.py) for the
+# built-in physical systems: they maximise the recoverable tip push. Re-run the tuner after
+# changing the physics (button "Auto-tune for robustness" in the PID panel).
+TUNED_WEIGHTS = {
+    "single_cart": LQRWeights(15.5, 2766.0, 5.30, 0.0377, 0.00845),
+    "double_cart": LQRWeights(0.378, 0.200, 21.5, 185.0, 0.000606),
+    "double_fixed": LQRWeights(7.49, 222.3, 0.0094, 62.3, 0.0193),
+    "triple_cart": LQRWeights(1.22, 1.95, 25.0, 83.7, 0.000115),
+}
+
 _LENGTHS = [0.5, 0.4, 0.3]
 _MASSES = [0.2, 0.15, 0.1]
 
@@ -72,7 +82,7 @@ def single_cart_pid() -> AppConfig:
         description="Classic cart-pole balanced by one PID loop on the angle. "
                     "The cart is not regulated, so it slowly drifts – enable the cart loop "
                     "(or use the LQR-seeded scenario) to hold it in place.",
-        plant=plant, controller=controller,
+        plant=plant, controller=controller, push_force=0.2,
         experiment=ExperimentSettings(duration=6.0),
     )
 
@@ -81,12 +91,13 @@ def single_cart_full() -> AppConfig:
     plant = cart_plant(1, [10.0])
     return AppConfig(
         name="Single pendulum on cart – angle + cart loops",
-        description="Angle loop plus a cart-position loop, gains seeded by LQR. "
+        description="Angle loop plus a cart-position loop, robust gains from the auto-tuner (recovers from ≈5 N tip pushes). "
                     "Note the negative-looking behaviour of the cart loop: to return to the "
                     "centre the cart first moves away (non-minimum-phase).",
-        plant=plant, controller=lqr_controller(plant),
+        plant=plant, controller=lqr_controller(plant, TUNED_WEIGHTS["single_cart"]),
+        push_force=2.5,
         experiment=ExperimentSettings(
-            duration=8.0, disturbance=DisturbanceSettings(enabled=True, time=4.0, force=1.0, duration=0.1)),
+            duration=12.0, disturbance=DisturbanceSettings(enabled=True, time=4.0, force=2.5, duration=0.1)),
     )
 
 
@@ -100,7 +111,7 @@ def single_fixed_pid() -> AppConfig:
         name="Single pendulum, base motor – PID",
         description="Fixed pivot with a torque motor (reverse-acting PID). Try lowering D "
                     "to see oscillations, or raising P to see faster, more aggressive recovery.",
-        plant=plant, controller=controller,
+        plant=plant, controller=controller, push_force=3.0,
         experiment=ExperimentSettings(duration=5.0),
     )
 
@@ -128,10 +139,11 @@ def double_cart_lqr() -> AppConfig:
     return AppConfig(
         name="Double pendulum on cart – multi-loop (LQR seeded)",
         description="Two segments balanced by three parallel loops (cart, θ1, θ2). "
-                    "The PD gains reproduce an LQR state-feedback design.",
-        plant=plant, controller=lqr_controller(plant),
+                    "Robust auto-tuned gains: recovers from tip pushes up to ≈0.5 N (0.1 s).",
+        plant=plant, controller=lqr_controller(plant, TUNED_WEIGHTS["double_cart"]),
+        push_force=0.25,
         experiment=ExperimentSettings(
-            duration=8.0, disturbance=DisturbanceSettings(enabled=True, time=4.0, force=0.2, duration=0.1)),
+            duration=8.0, disturbance=DisturbanceSettings(enabled=True, time=4.0, force=0.25, duration=0.1)),
     )
 
 
@@ -140,9 +152,10 @@ def triple_cart_lqr() -> AppConfig:
     return AppConfig(
         name="Triple pendulum on cart – multi-loop (LQR seeded)",
         description="Three segments on a cart. Needs fast, coordinated feedback from all "
-                    "loops; small gain changes quickly destabilise it.",
+                    "loops; small gain changes quickly destabilise it. Robust auto-tuned gains recover from tip pushes up to ≈0.12 N (0.1 s) – this system is inherently fragile.",
         plant=plant,
-        controller=lqr_controller(plant, LQRWeights(cart_position=10, angle=100, effort=0.1)),
+        controller=lqr_controller(plant, TUNED_WEIGHTS["triple_cart"]),
+        push_force=0.06,
         experiment=ExperimentSettings(duration=8.0),
     )
 
@@ -153,7 +166,8 @@ def double_fixed_lqr() -> AppConfig:
         name="Double pendulum, base motor (pendubot) – LQR seeded",
         description="Underactuated: only the lower joint has a motor, yet both segments are "
                     "balanced through dynamic coupling.",
-        plant=plant, controller=lqr_controller(plant),
+        plant=plant, controller=lqr_controller(plant, TUNED_WEIGHTS["double_fixed"]),
+        push_force=0.4,
         experiment=ExperimentSettings(duration=6.0),
     )
 
@@ -168,7 +182,7 @@ def double_free_swing() -> AppConfig:
         name="Double pendulum free swing (chaos)",
         description="Frictionless double pendulum without control. Motion is chaotic; the total "
                     "energy plot stays flat, which validates the integrator.",
-        plant=plant, controller=controller,
+        plant=plant, controller=controller, push_force=0.5,
         experiment=ExperimentSettings(duration=10.0),
     )
 
@@ -182,7 +196,7 @@ def hanging_damped() -> AppConfig:
         name="Hanging pendulum with joint friction",
         description="Released from 150°, the pendulum swings down to the stable hanging "
                     "equilibrium (180°) and the oscillation decays due to joint friction.",
-        plant=plant, controller=controller,
+        plant=plant, controller=controller, push_force=0.5,
         experiment=ExperimentSettings(duration=10.0),
     )
 

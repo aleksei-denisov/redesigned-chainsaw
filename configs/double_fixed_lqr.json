@@ -49,9 +49,9 @@
         "signal": "theta1",
         "enabled": true,
         "setpoint": 0.0,
-        "kp": -30.420293082436494,
+        "kp": -106.10332842207919,
         "ki": 0.0,
-        "kd": -16.529965167729003,
+        "kd": -102.36248009815031,
         "p_enabled": true,
         "i_enabled": true,
         "d_enabled": true,
@@ -66,9 +66,9 @@
         "signal": "theta2",
         "enabled": true,
         "setpoint": 0.0,
-        "kp": -81.62201808141492,
+        "kp": -647.2345495733277,
         "ki": 0.0,
-        "kd": -12.638090926531728,
+        "kd": -119.10635252674517,
         "p_enabled": true,
         "i_enabled": true,
         "d_enabled": true,
@@ -87,6 +87,9 @@
     "sensor_noise_position": 0.0,
     "noise_seed": 1,
     "telemetry_rate_hz": 200.0
+  },
+  "interaction": {
+    "push_force": 0.4
   },
   "experiment": {
     "duration": 6.0,

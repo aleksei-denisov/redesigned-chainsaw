@@ -80,12 +80,15 @@ class AppConfig:
     controller: ControllerConfig = field(default_factory=ControllerConfig)
     simulation: SimulationSettings = field(default_factory=SimulationSettings)
     experiment: ExperimentSettings = field(default_factory=ExperimentSettings)
+    push_force: float = 1.0  # N, default tip push of the toolbar Push buttons (0.1 s pulse)
 
     def validate(self) -> None:
         self.plant.validate()
         self.controller.validate()
         self.simulation.validate()
         self.experiment.validate()
+        if not 0.0 < self.push_force <= 10000.0:
+            raise ValueError("push force must be positive")
 
     def copy(self) -> "AppConfig":
         return copy.deepcopy(self)
@@ -162,6 +165,7 @@ def config_to_dict(cfg: AppConfig) -> dict[str, Any]:
             "noise_seed": s.noise_seed,
             "telemetry_rate_hz": s.telemetry_rate_hz,
         },
+        "interaction": {"push_force": cfg.push_force},
         "experiment": {
             "duration": e.duration,
             "settle_tolerance_deg": e.settle_tolerance_deg,
@@ -301,6 +305,7 @@ def config_from_dict(data: dict[str, Any]) -> AppConfig:
         controller=controller,
         simulation=simulation,
         experiment=experiment,
+        push_force=_get(data.get("interaction", {}), "push_force", 1.0, float),
     )
     cfg.validate()
     return cfg

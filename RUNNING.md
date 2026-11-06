@@ -55,7 +55,7 @@ be detached.
 | ⟳ Restart | Ctrl+Shift+R | Reset and immediately run |
 | Step | F7 | Advance by one controller period |
 | Speed | – | 0.05× … 8× real time |
-| ◀ Push / Push ▶ | Ctrl+← / Ctrl+→ | 0.1 s horizontal force at the tip (magnitude in the box between the buttons) |
+| ◀ Push / Push ▶ | Ctrl+← / Ctrl+→ | 0.1 s horizontal force at the tip (magnitude in the box between the buttons; each scenario sets a sensible default, saved with the configuration) |
 
 The physics always advances in fixed steps (default 1 ms) independent of the 60 fps display.
 If your computer cannot keep up, the simulation runs slower than real time (shown in the status
@@ -68,6 +68,13 @@ Click **Graphs ▾** above the graphs to choose which ones are shown (angles, an
 control error, control signal, PID components, energy, cart position) and whether angles are
 wrapped to ±180° (default; a spinning pendulum then stays readable). Hidden graphs cost nothing.
 *Window* sets the visible time span; *Loop* selects the loop for the PID-components graph.
+
+The Y axes use **calm scaling** (Graphs ▾ → *Calm Y scaling*, on by default): a range expands
+immediately when the signal grows (nothing is ever cut off), but shrinks only slowly once the
+signal has stayed small, so the graphs do not jump. Error, control and velocity graphs stay
+centred on zero. The control graph is limited to about the actuator limit – the dashed
+*unsaturated* command can spike far beyond what the actuator can deliver and is clipped there.
+Turn calm scaling off to get plain autoscaling.
 
 ### Pendulum view
 
@@ -105,8 +112,12 @@ Global settings:
   positive gains.
 - **Update frequency** – controller sample rate; output is held between samples.
 - **Output min / max** – controller output limits (anti-windup reacts to these).
+- **★ Auto-tune for robustness…** – one click finds the best gains for the current physical
+  system (section 5.1).
+- **↺ Restore original gains** – returns to the gains of the loaded scenario or configuration
+  file, e.g. after the system became unstable while experimenting.
 - **Seed gains from LQR…** – computes stabilising P and D gains for *all* loops (needed for 2 and
-  3 segments). Integral gains are kept.
+  3 segments) from LQR weights you choose. Integral gains are kept.
 - **Reset integrators** – clears the stored integral terms.
 
 Per-loop tabs (*Cart x*, *θ1*, *θ2*, *θ3*):
@@ -129,6 +140,22 @@ Everything applies while the simulation runs; the integral state is kept when ga
 4. Add sensor noise (Simulation & view) and compare *measured rate* with *filtered difference*.
 
 More background: [docs/CONTROL.md](docs/CONTROL.md).
+
+### 5.1 Robust auto-tune
+
+1. Set up the pendulum (any number of segments, base, actuator, controller rate).
+2. In the *PID controller* tab click **★ Auto-tune for robustness…**, pick the search effort
+   (*Normal* takes roughly 10–60 s depending on the system and the number of CPU cores) and press
+   **Start**. The live simulation pauses meanwhile; *Cancel* keeps the best result found so far
+   available.
+3. The dialog reports the **recoverable tip push** (largest 0.1 s force pulse at the tip the
+   system survives) before and after. **Apply gains** loads the result and sets the toolbar
+   *Push* force to a comfortable test value (half the recoverable push).
+4. Press **Restart** and try **◀ Push / Push ▶**.
+
+The tuner keeps the hardware as it is – stronger motors, faster controllers, heavier lower or
+lighter upper segments change what is achievable; re-run the tuner after such changes. Typical
+results for the built-in systems are listed in [docs/CONTROL.md](docs/CONTROL.md#3-robust-auto-tuning).
 
 ## 6. Running and comparing experiments (*Experiments & comparison* tab)
 

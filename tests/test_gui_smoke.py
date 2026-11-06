@@ -161,3 +161,49 @@ def test_fast_spinning_pendulum_runs(window, app):
     frames(window, app, 20)
     window.telemetry.refresh(window.sim.telemetry, force=True)
     assert window.sim.time > 0.1
+
+
+def test_robust_tune_dialog_and_restore(window, app, monkeypatch):
+    import time
+
+    from pendulum_sim.simulation import tuning
+    from pendulum_sim.ui.tuning_dialog import RobustTuneDialog
+
+    fast = tuning.TuningSettings(horizon=2.0, samples=2, refine_rounds=0, resolution=0.1, workers=1)
+    monkeypatch.setattr(tuning.TuningSettings, "preset", staticmethod(lambda name: fast))
+    window.load(scenario("single_fixed_pid"))
+    original_kp = window.controller_panel.editors[0].kp.value()
+    window.controller_panel.editors[0].kp.setValue(1.0)           # "played too much"
+    app.processEvents()
+    dialog = RobustTuneDialog(window.config, window)
+    dialog.start()
+    deadline = time.time() + 120
+    while dialog.result_value is None and time.time() < deadline:
+        app.processEvents()
+        time.sleep(0.02)
+    while dialog.thread is not None and time.time() < deadline:
+        app.processEvents()
+        time.sleep(0.02)
+    result = dialog.result_value
+    assert result is not None and result.max_push > 0
+    assert dialog.apply_btn.isEnabled()
+    window._apply_controller(result.controller, "applied")
+    assert window.sim.controller.loops[0].config.kp == pytest.approx(result.controller.loops[0].kp)
+    window._on_restore_gains()
+    assert window.controller_panel.editors[0].kp.value() == pytest.approx(original_kp)
+
+
+def test_hint_text_has_enough_contrast(app):
+    from PySide6.QtGui import QPalette
+
+    from pendulum_sim.ui.widgets import hint
+
+    label = hint("explanation")
+    fg = label.palette().color(QPalette.ColorRole.WindowText)
+    bg = label.palette().color(QPalette.ColorRole.Window)
+    # Effective colour after alpha blending must differ clearly from the background.
+    a = fg.alphaF()
+    eff = [a * c1 + (1 - a) * c2 for c1, c2 in ((fg.redF(), bg.redF()), (fg.greenF(), bg.greenF()),
+                                                (fg.blueF(), bg.blueF()))]
+    lum = lambda r, g, b: 0.2126 * r + 0.7152 * g + 0.0722 * b  # noqa: E731
+    assert abs(lum(*eff) - lum(bg.redF(), bg.greenF(), bg.blueF())) > 0.35
