@@ -9,6 +9,9 @@ jobs:
   test:
     name: Tests (${{ matrix.os }}, Python ${{ matrix.python }})
     runs-on: ${{ matrix.os }}
+    # Linux is not a primary target. PySide6 6.12 aborts inside Qt in the offscreen GUI tests
+    # on Ubuntu + Python 3.10 only (3.12 passes), so that one combination is informational.
+    continue-on-error: ${{ matrix.os == 'ubuntu-latest' && matrix.python == '3.10' }}
     strategy:
       fail-fast: false
       matrix:

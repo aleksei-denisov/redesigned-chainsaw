@@ -44,7 +44,7 @@ experiment mode for comparing controller tunings under identical conditions.
 |---|---|
 | macOS 12+ (Apple Silicon and Intel) | supported, tested in CI (`macos-latest`, Apple Silicon) |
 | Windows 10 / 11 (x64) | supported, tested in CI (`windows-latest`) |
-| Linux (x64) | works, tested in CI (`ubuntu-latest`) |
+| Linux (x64) | works with Python 3.12 (tested in CI); with Python 3.10 the offscreen GUI tests crash inside Qt (PySide6 6.12) – use 3.11+ on Linux |
 
 Python **3.10 – 3.13** (CI tests 3.10 and 3.12).
 
