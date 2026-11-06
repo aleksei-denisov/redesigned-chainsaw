@@ -191,3 +191,19 @@ def test_robust_tune_dialog_and_restore(window, app, monkeypatch):
     assert window.sim.controller.loops[0].config.kp == pytest.approx(result.controller.loops[0].kp)
     window._on_restore_gains()
     assert window.controller_panel.editors[0].kp.value() == pytest.approx(original_kp)
+
+
+def test_hint_text_has_enough_contrast(app):
+    from PySide6.QtGui import QPalette
+
+    from pendulum_sim.ui.widgets import hint
+
+    label = hint("explanation")
+    fg = label.palette().color(QPalette.ColorRole.WindowText)
+    bg = label.palette().color(QPalette.ColorRole.Window)
+    # Effective colour after alpha blending must differ clearly from the background.
+    a = fg.alphaF()
+    eff = [a * c1 + (1 - a) * c2 for c1, c2 in ((fg.redF(), bg.redF()), (fg.greenF(), bg.greenF()),
+                                                (fg.blueF(), bg.blueF()))]
+    lum = lambda r, g, b: 0.2126 * r + 0.7152 * g + 0.0722 * b  # noqa: E731
+    assert abs(lum(*eff) - lum(bg.redF(), bg.greenF(), bg.blueF())) > 0.35
