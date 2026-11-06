@@ -104,6 +104,10 @@ class MultiLoopController:
             return None
         return float(q[idx + 1]), float(qd[idx + 1])
 
+    def sample_due(self, t: float) -> bool:
+        """True when :meth:`step` would compute a new output at time ``t``."""
+        return t + 1e-12 >= self._next_sample
+
     def step(self, t: float, q: np.ndarray, qd: np.ndarray) -> ControllerOutput:
         """Return the held command; compute a new one when a sample is due."""
         if t + 1e-12 < self._next_sample:

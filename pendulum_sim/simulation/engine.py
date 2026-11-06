@@ -19,7 +19,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from ..control import ControllerConfig, ControllerOutput, MultiLoopController
-from ..physics import Actuator, MultiLinkPendulum, PlantParams, rk4_step
+from ..physics import Actuator, MultiLinkPendulum, PlantParams
 from .config import AppConfig
 from .telemetry import INDEX, MAX_LOOPS, COLUMNS, TelemetryRecorder
 
@@ -115,6 +115,8 @@ class Simulator:
         return q, qd
 
     def _tip_force(self) -> float:
+        if not self.disturbances:
+            return 0.0
         force = 0.0
         for d in self.disturbances:
             if d.start <= self.time < d.end:
@@ -124,16 +126,19 @@ class Simulator:
 
     def step(self) -> None:
         dt = self.config.simulation.dt
-        q, qd = self._measure()
-        self.last_control = self.controller.step(self.time, q, qd)
+        if self.controller.sample_due(self.time):
+            # Sensors are only read when the controller samples (saves work between samples).
+            q, qd = self._measure()
+            self.last_control = self.controller.step(self.time, q, qd)
         command = self.last_control.command + self.manual_force
         self.applied = self.actuator.step(command, dt)
         self.tip_force = self._tip_force()
         u, f = self.applied, self.tip_force
-        self.state = rk4_step(lambda s: self.model.derivative(s, u, f), self.state, dt)
+        self.state = self.model.rk4_step(self.state, u, f, dt)
         self.steps += 1
         self.time += dt  # dt may be changed by the user between steps
-        if not np.all(np.isfinite(self.state)) or np.max(np.abs(self.state)) > DIVERGENCE_LIMIT:
+        # "not <=" is also true for NaN, so this one comparison catches non-finite states.
+        if not np.abs(self.state).max() <= DIVERGENCE_LIMIT:
             raise SimulationDiverged(
                 f"simulation diverged at t = {self.time:.3f} s – reduce the time step or the gains"
             )

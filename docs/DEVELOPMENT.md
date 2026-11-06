@@ -23,6 +23,11 @@
 - The GUI timer (16 ms) asks the `Simulator` to advance `wall_time × speed`; the simulator
   executes whole fixed steps. A per-frame compute budget (10 ms) keeps the GUI responsive; if
   the budget is exceeded the backlog is dropped and the run becomes slower than real time.
+- Performance: physics steps use the scalar fast path (`physics/fast_dynamics.py`); sensors are
+  only sampled when the controller runs; graphs are drawn without antialiasing, with fixed axis
+  widths (no re-layout), peak downsampling and wrapped angles, hidden graphs are skipped, and
+  the graph refresh interval adapts (66–300 ms) when frames take longer than 20 ms. The status
+  bar shows fps and physics ms per frame.
 - Parameter edits replace dataclasses in the shared `AppConfig`; `Simulator.update_plant` /
   `update_controller` apply them between steps without touching the state. Structural changes
   (segment count, base type) require `reset()`.
@@ -48,6 +53,7 @@ python -m pytest tests/test_physics.py tests/test_controller.py tests/test_simul
 
 | File | Covers |
 |---|---|
+| `tests/test_fast_dynamics.py` | the fast scalar dynamics and RK4 against the NumPy reference |
 | `tests/test_physics.py` | dynamics vs. independent Lagrangian, analytic results, energy/momentum, SciPy cross-check, actuator |
 | `tests/test_controller.py` | PID terms, sample rate/ZOH, limits, anti-windup, derivative filter, bumpless retuning, LQR stability, closed-loop balancing |
 | `tests/test_simulation.py` | engine determinism, live updates, disturbances, noise, telemetry, JSON round trip, example files, metrics, experiments |

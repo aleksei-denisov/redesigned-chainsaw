@@ -7,7 +7,7 @@ from pathlib import Path
 
 import numpy as np
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QAction, QKeySequence
+from PySide6.QtGui import QAction, QGuiApplication, QKeySequence
 from PySide6.QtWidgets import (
     QComboBox,
     QDockWidget,
@@ -42,19 +42,24 @@ from .widgets import scrollable, spin
 
 FRAME_INTERVAL_MS = 16            # ~60 fps GUI refresh
 PHYSICS_BUDGET_S = 0.010          # max physics compute per frame (keeps the GUI responsive)
-PLOT_INTERVAL_S = 0.066           # ~15 Hz graph refresh
+PLOT_INTERVAL_S = 0.066           # ~15 Hz graph refresh (raised automatically if frames get slow)
+MAX_PLOT_INTERVAL_S = 0.3
+TARGET_FRAME_S = 0.020            # if frames take longer than this, graphs refresh less often
 SPEEDS = [0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0]
 
 
 class MainWindow(QMainWindow):
     def __init__(self, config: AppConfig) -> None:
         super().__init__()
-        self.resize(1500, 920)
+        self.resize(1500, 920)           # adjusted to the screen in fit_to_screen()
         self.config_path: Path | None = None
         self.running = False
         self._accum = 0.0
         self._last_frame = time.perf_counter()
         self._last_plot = 0.0
+        self._plot_interval = PLOT_INTERVAL_S
+        self._frame_period = FRAME_INTERVAL_MS / 1000.0
+        self._physics_ms = 0.0
         self._rtf = 0.0
         self.speed = 1.0
 
@@ -83,7 +88,7 @@ class MainWindow(QMainWindow):
         dock.setWidget(side)
         dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetMovable
                          | QDockWidget.DockWidgetFeature.DockWidgetFloatable)
-        dock.setMinimumWidth(380)
+        dock.setMinimumWidth(330)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
 
         self._build_actions()
@@ -192,8 +197,10 @@ class MainWindow(QMainWindow):
         self.status_time = QLabel()
         self.status_rtf = QLabel()
         self.status_energy = QLabel()
+        self.status_perf = QLabel()
+        self.status_perf.setToolTip("Display frame rate and physics compute time per frame")
         sb = self.statusBar()
-        for w in (self.status_state, self.status_time, self.status_rtf, self.status_energy):
+        for w in (self.status_state, self.status_time, self.status_rtf, self.status_energy, self.status_perf):
             w.setMinimumWidth(120)
             sb.addPermanentWidget(w)
 
@@ -428,8 +435,10 @@ class MainWindow(QMainWindow):
 
     def _on_frame(self) -> None:
         now = time.perf_counter()
-        wall = min(now - self._last_frame, 0.1)
+        elapsed = now - self._last_frame
+        wall = min(elapsed, 0.1)
         self._last_frame = now
+        self._frame_period = 0.9 * self._frame_period + 0.1 * elapsed
         if self.running and wall > 0:
             dt = self.config.simulation.dt
             self._accum += wall * self.speed
@@ -441,8 +450,15 @@ class MainWindow(QMainWindow):
                 self._accum -= done * dt
             rtf = done * dt / wall
             self._rtf = 0.9 * self._rtf + 0.1 * rtf
+            self._physics_ms = 0.9 * self._physics_ms + 0.1 * (time.perf_counter() - now) * 1000.0
         self._update_view()
-        if now - self._last_plot > PLOT_INTERVAL_S:
+        # Graphs are the most expensive thing to paint; refresh them less often when frames are slow
+        # so the pendulum animation and the physics stay smooth.
+        if self._frame_period > TARGET_FRAME_S:
+            self._plot_interval = min(MAX_PLOT_INTERVAL_S, self._plot_interval * 1.05)
+        else:
+            self._plot_interval = max(PLOT_INTERVAL_S, self._plot_interval * 0.98)
+        if now - self._last_plot > self._plot_interval:
             self._last_plot = now
             self.telemetry.refresh(self.sim.telemetry)
             self.controller_panel.show_output(self.sim.last_control)
@@ -473,7 +489,24 @@ class MainWindow(QMainWindow):
         else:
             self.status_rtf.setText("")
         self.status_energy.setText(f"E = {self.sim.energy():.4f} J")
+        fps = 1.0 / max(self._frame_period, 1e-3)
+        self.status_perf.setText(f"{fps:.0f} fps · physics {self._physics_ms:.1f} ms")
         self._update_actions()
+
+    def fit_to_screen(self) -> None:
+        """Size and centre the window inside the available area of its screen."""
+        screen = self.screen() or QGuiApplication.primaryScreen()
+        if screen is None:
+            return
+        avail = screen.availableGeometry()
+        width = min(1500, int(avail.width() * 0.96))
+        height = min(940, int(avail.height() * 0.94))
+        self.resize(width, height)
+        frame = self.frameGeometry()
+        frame.moveCenter(avail.center())
+        self.move(frame.topLeft())
+        if avail.width() < 1100 or avail.height() < 700:
+            self.showMaximized()
 
     # ------------------------------------------------------------- misc
     def _about(self) -> None:

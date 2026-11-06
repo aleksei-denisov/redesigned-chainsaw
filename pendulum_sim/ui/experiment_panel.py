@@ -36,7 +36,7 @@ from ..simulation import (
     save_experiments,
 )
 from .controller_panel import ControllerPanel
-from .widgets import EXPERIMENT_COLORS, check, group, hint, spin
+from .widgets import EXPERIMENT_COLORS, check, group, hint, scrollable, spin
 
 COLUMNS = ["Show", "Name", "Controller gains", "Settling [s]", "Max dev [°]", "Overshoot [%]",
            "RMSE [°]", "u RMS", "u peak", "∫u² dt", "Max |x| [m]", "Status"]
@@ -137,7 +137,8 @@ class ExperimentPanel(QWidget):
             "and compare. Runs are deterministic, so with 'Reuse' enabled every run starts from exactly "
             "the same state. Settling time = first time after which every segment stays inside the band."))
         lv.addStretch(1)
-        splitter.addWidget(left)
+        left.setMinimumWidth(280)
+        splitter.addWidget(scrollable(left))  # scrolls instead of forcing a tall window
 
         # --------------------------------------------- right: plots + table
         right = QWidget()
@@ -161,7 +162,7 @@ class ExperimentPanel(QWidget):
             plot.setLabel("left", unit)
             plot.showGrid(x=True, y=True, alpha=0.25)
             plot.addLegend(offset=(6, 6))
-            plot.setMinimumHeight(120)
+            plot.setMinimumHeight(55)
             if first is None:
                 first = plot
             else:

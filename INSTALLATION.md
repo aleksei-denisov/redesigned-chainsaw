@@ -156,4 +156,5 @@ The CI workflow builds and smoke-tests both and keeps them as downloadable workf
 | Windows: missing `VCRUNTIME140_1.dll` | Install the Microsoft Visual C++ Redistributable (x64) from Microsoft's website. |
 | Linux: `Could not load the Qt platform plugin "xcb"` | Install the Qt runtime libraries, e.g. `sudo apt-get install libxcb-cursor0 libxkbcommon-x11-0 libegl1`. |
 | Blurry UI on high-DPI displays (Windows) | Qt 6 is DPI-aware by default; check the Windows display scaling setting and restart the app. |
-| The simulation runs slower than real time | The status bar shows “slower than real time”. Increase the physics time step (Simulation & view tab), reduce the speed factor, or hide some graphs. |
+| The simulation runs slower than real time / stutters | The status bar shows the frame rate and the physics time per frame. Hide graphs you do not need (**Graphs ▾**), shorten the graph *Window*, reduce the speed factor, or increase the physics time step (Simulation & view tab). |
+| The window is larger than the screen | It sizes itself to the screen at start-up; if a configuration dock was undocked, use **View → Fit view** and drag the dock back to the right edge. |

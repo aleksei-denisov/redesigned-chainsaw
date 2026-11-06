@@ -51,6 +51,7 @@ def main(argv: list[str] | None = None) -> int:
             error = f"Could not load {args.config}:\n{exc}\n\nStarting with the default scenario."
 
     window = MainWindow(config)
+    window.fit_to_screen()
     window.show()
     if error:
         if args.smoke_test is not None:
