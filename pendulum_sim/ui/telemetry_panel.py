@@ -99,7 +99,7 @@ class TelemetryPanel(QWidget):
             plot.addLegend(offset=(6, 6))
             plot.setClipToView(True)
             plot.setDownsampling(auto=True, mode="peak")
-            plot.setMinimumHeight(70)
+            plot.setMinimumHeight(55)
             plot.getAxis("left").setWidth(AXIS_WIDTH)
             plot.setMenuEnabled(True)
             if first is None:

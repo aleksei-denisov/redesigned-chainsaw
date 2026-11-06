@@ -138,7 +138,8 @@ def test_window_fits_available_screen(window, app):
     assert window.height() <= avail.height()
     # The minimum size must also fit a 1280×720 laptop-class screen.
     hint = window.minimumSizeHint()
-    assert hint.width() <= 1280 and hint.height() <= 720
+    assert hint.width() <= 1280, hint.width()
+    assert hint.height() <= 700, hint.height()
 
 
 def test_wrapped_angle_plot_inserts_gaps():
