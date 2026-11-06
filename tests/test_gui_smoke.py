@@ -128,3 +128,35 @@ def test_config_save_and_reload(window, app, tmp_path):
     window._write_config(path)
     cfg = load_config(path)
     assert cfg.plant.n_segments == window.config.plant.n_segments
+
+
+def test_window_fits_available_screen(window, app):
+    window.fit_to_screen()
+    app.processEvents()
+    avail = window.screen().availableGeometry()
+    assert window.width() <= avail.width()
+    assert window.height() <= avail.height()
+    # The minimum size must also fit a 1280×720 laptop-class screen.
+    hint = window.minimumSizeHint()
+    assert hint.width() <= 1280 and hint.height() <= 720
+
+
+def test_wrapped_angle_plot_inserts_gaps():
+    import numpy as np
+
+    from pendulum_sim.ui.telemetry_panel import wrap_degrees
+
+    y = wrap_degrees(np.array([170.0, 179.0, 181.0, 190.0, -170.0]))
+    assert np.isnan(y[2])
+    assert y[3] == -170.0
+    assert np.nanmax(np.abs(y)) <= 180.0
+
+
+def test_fast_spinning_pendulum_runs(window, app):
+    cfg = scenario("double_free_swing")
+    cfg.plant.segments[0].initial_velocity = 40.0   # rad/s – very fast rotation
+    window.load(cfg)
+    window.start()
+    frames(window, app, 20)
+    window.telemetry.refresh(window.sim.telemetry, force=True)
+    assert window.sim.time > 0.1

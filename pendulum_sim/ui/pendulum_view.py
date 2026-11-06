@@ -63,7 +63,7 @@ class PendulumView(QWidget):
         self.trails: list[deque] = []
         self._drag_origin: QPointF | None = None
         self._drag_camera = self.camera.copy()
-        self.setMinimumSize(420, 320)
+        self.setMinimumSize(300, 220)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setMouseTracking(False)
         self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)

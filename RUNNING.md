@@ -37,7 +37,12 @@ Built-in scenarios (also available as files in `configs/` and from the toolbar *
 - **Centre, tab “Experiments & comparison”** – experiment mode (section 6).
 - **Right, “Configuration” dock** – tabs *Pendulum*, *PID controller*, *Simulation & view*.
 - **Toolbar** – run controls, speed, tip pushes, scenario selection.
-- **Status bar** – run state, simulated time, achieved speed, total energy, messages.
+- **Status bar** – run state, simulated time, achieved speed, total energy, display frame rate
+  and physics time per frame, messages.
+
+The window sizes itself to the available area of your screen at start-up (it maximises on
+small screens). All panels can be resized with their splitters, and the configuration dock can
+be detached.
 
 ## 3. Starting and controlling a simulation
 
@@ -54,7 +59,15 @@ Built-in scenarios (also available as files in `configs/` and from the toolbar *
 
 The physics always advances in fixed steps (default 1 ms) independent of the 60 fps display.
 If your computer cannot keep up, the simulation runs slower than real time (shown in the status
-bar) instead of losing accuracy.
+bar) instead of losing accuracy. When frames get slow, the graphs automatically refresh less
+often so the pendulum animation stays smooth.
+
+### Live graphs
+
+Click **Graphs ▾** above the graphs to choose which ones are shown (angles, angular velocities,
+control error, control signal, PID components, energy, cart position) and whether angles are
+wrapped to ±180° (default; a spinning pendulum then stays readable). Hidden graphs cost nothing.
+*Window* sets the visible time span; *Loop* selects the loop for the PID-components graph.
 
 ### Pendulum view
 

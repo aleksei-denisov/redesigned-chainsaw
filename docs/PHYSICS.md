@@ -68,6 +68,16 @@ bit-for-bit reproducible (essential for the experiment comparison) and decouples
 the GUI frame rate. The engine raises `SimulationDiverged` if the state becomes non-finite or
 unphysically large.
 
+## Fast implementation
+
+The real-time loop uses [`physics/fast_dynamics.py`](../pendulum_sim/physics/fast_dynamics.py):
+the *same* equations evaluated with plain Python floats (no NumPy call overhead on 4×4 systems),
+a hand-written Cholesky solve of the positive-definite mass matrix and RK4 on Python lists. It is
+about 2–4× faster than the NumPy reference in `model.py` (≈40–70 µs per 1 ms step on a laptop,
+i.e. 15–25× faster than real time) and is checked against it to 10⁻¹⁰ in
+`tests/test_fast_dynamics.py`. The NumPy version remains the readable reference used for
+linearisation, energies and validation.
+
 ## Validation (tests/test_physics.py)
 
 - Accelerations agree with an **independent Lagrangian** built only from body kinematics using

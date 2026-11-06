@@ -115,6 +115,10 @@ class MultiLinkPendulum:
         self.stop_stiffness = 2000.0 * self.total_mass
         self.stop_damping = 2.0 * 0.7 * np.sqrt(self.stop_stiffness * self.total_mass)
 
+        from .fast_dynamics import ScalarDynamics  # local import avoids a cycle
+
+        self._scalar = ScalarDynamics(self)
+
     @property
     def has_cart(self) -> bool:
         return self.params.base_type == BaseType.CART
@@ -211,6 +215,14 @@ class MultiLinkPendulum:
         if not self.has_cart:
             ds[0] = 0.0
         return ds
+
+    def rk4_step(self, state: np.ndarray, actuator: float, tip_force: float, dt: float) -> np.ndarray:
+        """One RK4 step using the fast scalar evaluation of the same equations.
+
+        Equivalent to ``integrators.rk4_step(lambda s: self.derivative(s, u, f), state, dt)``
+        (verified in the tests) but several times faster for 1–3 segments.
+        """
+        return np.array(self._scalar.rk4_step(state.tolist(), actuator, tip_force, dt))
 
     # ------------------------------------------------------------ energetics
     def kinetic_energy(self, state: np.ndarray) -> float:

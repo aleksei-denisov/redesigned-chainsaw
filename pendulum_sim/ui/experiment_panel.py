@@ -161,7 +161,7 @@ class ExperimentPanel(QWidget):
             plot.setLabel("left", unit)
             plot.showGrid(x=True, y=True, alpha=0.25)
             plot.addLegend(offset=(6, 6))
-            plot.setMinimumHeight(120)
+            plot.setMinimumHeight(70)
             if first is None:
                 first = plot
             else:
