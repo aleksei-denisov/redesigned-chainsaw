@@ -15,6 +15,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6")
 pytest.importorskip("pyqtgraph")
 
+from PySide6.QtCore import QEvent  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from pendulum_sim.control import LQRWeights  # noqa: E402
@@ -35,6 +36,8 @@ def window(app):
     app.processEvents()
     yield w
     w.close()
+    w.deleteLater()
+    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
     app.processEvents()
 
 
