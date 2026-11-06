@@ -1,0 +1,118 @@
+{
+  "version": 1,
+  "name": "Double pendulum on cart \u2013 multi-loop (LQR seeded)",
+  "description": "Two segments balanced by three parallel loops (cart, \u03b81, \u03b82). The PD gains reproduce an LQR state-feedback design.",
+  "plant": {
+    "base_type": "cart",
+    "gravity": 9.81,
+    "cart_mass": 1.0,
+    "cart_viscous_friction": 0.1,
+    "track_length": 4.0,
+    "actuator": {
+      "max_output": 40.0,
+      "rate_limit": 0.0,
+      "time_constant": 0.002,
+      "deadband": 0.0
+    },
+    "segments": [
+      {
+        "length": 0.5,
+        "mass": 0.2,
+        "com_ratio": 0.5,
+        "inertia": 0.004166666666666667,
+        "joint_viscous_friction": 0.0005,
+        "joint_coulomb_friction": 0.0,
+        "initial_angle_deg": 4.0,
+        "initial_velocity_dps": 0.0
+      },
+      {
+        "length": 0.4,
+        "mass": 0.15,
+        "com_ratio": 0.5,
+        "inertia": 0.0020000000000000005,
+        "joint_viscous_friction": 0.0005,
+        "joint_coulomb_friction": 0.0,
+        "initial_angle_deg": -2.0,
+        "initial_velocity_dps": 0.0
+      }
+    ]
+  },
+  "controller": {
+    "enabled": true,
+    "frequency_hz": 500.0,
+    "output_min": -40.0,
+    "output_max": 40.0,
+    "action": "direct",
+    "loops": [
+      {
+        "name": "Cart position",
+        "signal": "cart",
+        "enabled": true,
+        "setpoint": 0.0,
+        "kp": -9.999999999999964,
+        "ki": 0.0,
+        "kd": -14.752148507004694,
+        "p_enabled": true,
+        "i_enabled": true,
+        "d_enabled": true,
+        "integral_limit": 0.0,
+        "anti_windup": "clamp",
+        "back_calculation_gain": 10.0,
+        "derivative_mode": "measured_rate",
+        "derivative_filter_hz": 50.0
+      },
+      {
+        "name": "Segment 1 angle",
+        "signal": "theta1",
+        "enabled": true,
+        "setpoint": 0.0,
+        "kp": 169.2481184068203,
+        "ki": 0.0,
+        "kd": -4.648260601070591,
+        "p_enabled": true,
+        "i_enabled": true,
+        "d_enabled": true,
+        "integral_limit": 0.0,
+        "anti_windup": "clamp",
+        "back_calculation_gain": 10.0,
+        "derivative_mode": "measured_rate",
+        "derivative_filter_hz": 50.0
+      },
+      {
+        "name": "Segment 2 angle",
+        "signal": "theta2",
+        "enabled": true,
+        "setpoint": 0.0,
+        "kp": -259.29230104903263,
+        "ki": 0.0,
+        "kd": -31.887892277257727,
+        "p_enabled": true,
+        "i_enabled": true,
+        "d_enabled": true,
+        "integral_limit": 0.0,
+        "anti_windup": "clamp",
+        "back_calculation_gain": 10.0,
+        "derivative_mode": "measured_rate",
+        "derivative_filter_hz": 50.0
+      }
+    ]
+  },
+  "simulation": {
+    "dt": 0.001,
+    "sensor_noise_angle_deg": 0.0,
+    "sensor_noise_rate_dps": 0.0,
+    "sensor_noise_position": 0.0,
+    "noise_seed": 1,
+    "telemetry_rate_hz": 200.0
+  },
+  "experiment": {
+    "duration": 8.0,
+    "settle_tolerance_deg": 1.0,
+    "disturbance": {
+      "enabled": true,
+      "time": 4.0,
+      "force": 0.2,
+      "duration": 0.1
+    }
+  }
+}

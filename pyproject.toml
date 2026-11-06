@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pendulum-sim"
+version = "1.0.0"
+description = "Interactive multi-link inverted pendulum simulator with PID tuning and experiment comparison"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "PySide6>=6.5",
+    "pyqtgraph>=0.13.3",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.4"]
+build = ["pyinstaller>=6.0"]
+
+[project.scripts]
+pendulum-sim = "pendulum_sim.ui.app:main"
+
+[tool.setuptools.packages.find]
+include = ["pendulum_sim*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

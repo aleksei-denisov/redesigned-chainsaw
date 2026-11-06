@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Tests (${{ matrix.os }}, Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python: ["3.10", "3.12"]
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Qt system libraries (Linux only)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libgl1 libxkbcommon0 libxkbcommon-x11-0 libdbus-1-3 libfontconfig1
+
+      - name: Install dependencies (as documented in INSTALLATION.md)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Run the test suite
+        run: python -m pytest -v
+
+      - name: Launch the application (offscreen smoke test)
+        run: python main.py --smoke-test 2
+
+      - name: Installable package entry point
+        run: |
+          python -m pip install .
+          pendulum-sim --list-scenarios
+
+  build:
+    name: Standalone app (${{ matrix.os }})
+    needs: test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pyinstaller
+      - name: Build
+        run: python scripts/build_app.py
+      - name: Smoke-test the built app (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # GUI-subsystem executables do not block the shell, so wait explicitly.
+          $p = Start-Process -FilePath dist\PendulumSimulator\PendulumSimulator.exe -ArgumentList '--smoke-test','2' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "smoke test failed with exit code $($p.ExitCode)" }
+      - name: Smoke-test the built app (macOS)
+        if: runner.os == 'macOS'
+        run: dist/PendulumSimulator.app/Contents/MacOS/PendulumSimulator --smoke-test 2
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PendulumSimulator-${{ runner.os }}
+          path: dist/
+          retention-days: 14
