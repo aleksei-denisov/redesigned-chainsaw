@@ -1,0 +1,489 @@
+"""Main application window: wires the simulator to the view, panels and graphs."""
+
+from __future__ import annotations
+
+import time
+from pathlib import Path
+
+import numpy as np
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QAction, QKeySequence
+from PySide6.QtWidgets import (
+    QComboBox,
+    QDockWidget,
+    QFileDialog,
+    QLabel,
+    QMainWindow,
+    QMessageBox,
+    QSplitter,
+    QTabWidget,
+    QToolBar,
+)
+
+from ..control import ControllerConfig, default_action, lqr_controller
+from ..physics import PlantParams
+from ..simulation import (
+    SCENARIOS,
+    AppConfig,
+    SimulationDiverged,
+    SimulationSettings,
+    Simulator,
+    load_config,
+    save_config,
+    scenario,
+)
+from .controller_panel import ControllerPanel
+from .experiment_panel import ExperimentPanel
+from .pendulum_view import FrameData, PendulumView
+from .plant_panel import PlantPanel
+from .settings_panel import SettingsPanel
+from .telemetry_panel import TelemetryPanel
+from .widgets import scrollable, spin
+
+FRAME_INTERVAL_MS = 16            # ~60 fps GUI refresh
+PHYSICS_BUDGET_S = 0.010          # max physics compute per frame (keeps the GUI responsive)
+PLOT_INTERVAL_S = 0.066           # ~15 Hz graph refresh
+SPEEDS = [0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0]
+
+
+class MainWindow(QMainWindow):
+    def __init__(self, config: AppConfig) -> None:
+        super().__init__()
+        self.resize(1500, 920)
+        self.config_path: Path | None = None
+        self.running = False
+        self._accum = 0.0
+        self._last_frame = time.perf_counter()
+        self._last_plot = 0.0
+        self._rtf = 0.0
+        self.speed = 1.0
+
+        # ------------------------------------------------------- widgets
+        self.view = PendulumView()
+        self.telemetry = TelemetryPanel()
+        live = QSplitter(Qt.Orientation.Vertical)
+        live.addWidget(self.view)
+        live.addWidget(self.telemetry)
+        live.setSizes([520, 400])
+        self.experiments = ExperimentPanel(lambda: self.config)
+        self.tabs = QTabWidget()
+        self.tabs.addTab(live, "Live simulation")
+        self.tabs.addTab(self.experiments, "Experiments && comparison")
+        self.setCentralWidget(self.tabs)
+
+        self.plant_panel = PlantPanel()
+        self.controller_panel = ControllerPanel()
+        self.settings_panel = SettingsPanel()
+        side = QTabWidget()
+        side.addTab(scrollable(self.plant_panel), "Pendulum")
+        side.addTab(scrollable(self.controller_panel), "PID controller")
+        side.addTab(scrollable(self.settings_panel), "Simulation && view")
+        dock = QDockWidget("Configuration", self)
+        dock.setObjectName("configuration")
+        dock.setWidget(side)
+        dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetMovable
+                         | QDockWidget.DockWidgetFeature.DockWidgetFloatable)
+        dock.setMinimumWidth(380)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
+
+        self._build_actions()
+        self._build_status_bar()
+
+        # -------------------------------------------------------- signals
+        self.plant_panel.changed.connect(self._on_plant_changed)
+        self.controller_panel.changed.connect(self._on_controller_changed)
+        self.controller_panel.autoTuneRequested.connect(self._on_auto_tune)
+        self.controller_panel.resetIntegratorsRequested.connect(self._on_reset_integrators)
+        self.settings_panel.simulationChanged.connect(self._on_simulation_settings)
+        self.settings_panel.viewChanged.connect(self._on_view_settings)
+        self.settings_panel.zoomChanged.connect(self.view.set_zoom)
+        self.settings_panel.fitRequested.connect(self.view.fit)
+        self.settings_panel.clearTrailsRequested.connect(self.view.clear_trails)
+        self.view.zoomChanged.connect(self.settings_panel.set_zoom)
+        self.experiments.statusMessage.connect(self.show_message)
+        self.experiments.apply_btn.clicked.connect(self._apply_experiment_gains)
+
+        self.load(config)
+        self.timer = QTimer(self)
+        self.timer.setTimerType(Qt.TimerType.PreciseTimer)
+        self.timer.timeout.connect(self._on_frame)
+        self.timer.start(FRAME_INTERVAL_MS)
+
+    # ------------------------------------------------------------- actions
+    def _action(self, text: str, slot, shortcut: str | None = None, tip: str = "") -> QAction:
+        act = QAction(text, self)
+        act.triggered.connect(slot)
+        if shortcut:
+            act.setShortcut(QKeySequence(shortcut))
+        if tip:
+            act.setToolTip(f"{tip} ({shortcut})" if shortcut else tip)
+        self.addAction(act)
+        return act
+
+    def _build_actions(self) -> None:
+        self.act_start = self._action("▶ Start", self.start, "F5", "Start / resume the simulation")
+        self.act_pause = self._action("⏸ Pause", self.pause, "F6", "Pause the simulation")
+        self.act_toggle = self._action("Start/Pause", self.toggle_run, "Space")
+        self.act_reset = self._action("⟲ Reset", self.reset, "Ctrl+R", "Return to the initial conditions (stopped)")
+        self.act_restart = self._action("⟳ Restart", self.restart, "Ctrl+Shift+R",
+                                        "Return to the initial conditions and run")
+        self.act_step = self._action("Step", self.single_step, "F7", "Advance by one controller period")
+        self.act_push_left = self._action("◀ Push", lambda: self.push(-1), "Ctrl+Left", "Push the tip towards −x")
+        self.act_push_right = self._action("Push ▶", lambda: self.push(+1), "Ctrl+Right", "Push the tip towards +x")
+        self.act_open = self._action("Open configuration…", self.open_config, "Ctrl+O")
+        self.act_save = self._action("Save configuration", self.save_config, "Ctrl+S")
+        self.act_save_as = self._action("Save configuration as…", self.save_config_as, "Ctrl+Shift+S")
+        self.act_quit = self._action("Quit", self.close, "Ctrl+Q")
+        self.act_fit = self._action("Fit view", self.view.fit, "Ctrl+0")
+
+        tb = QToolBar("Simulation")
+        tb.setObjectName("simulation_toolbar")
+        tb.setMovable(False)
+        self.addToolBar(tb)
+        for a in (self.act_start, self.act_pause, self.act_reset, self.act_restart, self.act_step):
+            tb.addAction(a)
+        tb.addSeparator()
+        tb.addWidget(QLabel(" Speed "))
+        self.speed_combo = QComboBox()
+        for s in SPEEDS:
+            self.speed_combo.addItem(f"{s:g}×", s)
+        self.speed_combo.setCurrentIndex(SPEEDS.index(1.0))
+        self.speed_combo.currentIndexChanged.connect(lambda _: setattr(self, "speed", self.speed_combo.currentData()))
+        tb.addWidget(self.speed_combo)
+        tb.addSeparator()
+        tb.addAction(self.act_push_left)
+        self.push_force = spin(0.01, 1000.0, 1.0, 2, 0.5, "N", "Tip push force (0.1 s pulse)")
+        self.push_force.setMinimumWidth(90)
+        tb.addWidget(self.push_force)
+        tb.addAction(self.act_push_right)
+        tb.addSeparator()
+        tb.addWidget(QLabel(" Scenario "))
+        self.scenario_combo = QComboBox()
+        self.scenario_combo.addItem("— choose a demonstration —", None)
+        for key, factory in SCENARIOS.items():
+            self.scenario_combo.addItem(factory().name, key)
+        self.scenario_combo.activated.connect(self._on_scenario_chosen)
+        tb.addWidget(self.scenario_combo)
+
+        menu = self.menuBar()
+        file_menu = menu.addMenu("&File")
+        scen_menu = file_menu.addMenu("New from scenario")
+        for key, factory in SCENARIOS.items():
+            act = QAction(factory().name, self)
+            act.triggered.connect(lambda _=False, k=key: self.load(scenario(k)))
+            scen_menu.addAction(act)
+        for a in (self.act_open, self.act_save, self.act_save_as):
+            file_menu.addAction(a)
+        file_menu.addSeparator()
+        file_menu.addAction(self.act_quit)
+        sim_menu = menu.addMenu("&Simulation")
+        for a in (self.act_start, self.act_pause, self.act_toggle, self.act_reset, self.act_restart,
+                  self.act_step, self.act_push_left, self.act_push_right):
+            sim_menu.addAction(a)
+        view_menu = menu.addMenu("&View")
+        view_menu.addAction(self.act_fit)
+        help_menu = menu.addMenu("&Help")
+        about = QAction("About", self)
+        about.triggered.connect(self._about)
+        help_menu.addAction(about)
+
+    def _build_status_bar(self) -> None:
+        self.status_state = QLabel()
+        self.status_time = QLabel()
+        self.status_rtf = QLabel()
+        self.status_energy = QLabel()
+        sb = self.statusBar()
+        for w in (self.status_state, self.status_time, self.status_rtf, self.status_energy):
+            w.setMinimumWidth(120)
+            sb.addPermanentWidget(w)
+
+    def show_message(self, text: str, timeout_ms: int = 6000) -> None:
+        self.statusBar().showMessage(text, timeout_ms)
+
+    # --------------------------------------------------------- loading
+    def load(self, config: AppConfig) -> None:
+        """Replace the whole configuration (scenario, file)."""
+        self.running = False
+        try:
+            config.controller = ControllerPanel.complete_loops(config.controller, config.plant)
+            config.validate()
+            self.sim = Simulator(config)
+        except ValueError as exc:
+            QMessageBox.critical(self, "Invalid configuration", str(exc))
+            return
+        self.config = config
+        self.plant_panel.set_plant(config.plant)
+        self.controller_panel.set_config(config.controller)
+        self.settings_panel.set_simulation(config.simulation)
+        self.experiments.set_settings(config.experiment)
+        self._configure_telemetry()
+        self.view.clear_trails()
+        self._update_view()
+        QTimer.singleShot(0, self.view.fit)
+        self.setWindowTitle(f"Inverted Pendulum Simulator — {config.name}")
+        if config.description:
+            self.show_message(config.description, 15000)
+        self._update_actions()
+
+    def _configure_telemetry(self) -> None:
+        labels = ["cart" if loop.signal == "cart" else f"θ{loop.signal[5:]}"
+                  for loop in self.config.controller.loops]
+        self.telemetry.configure(self.config.plant.n_segments, self.config.plant.has_cart, labels)
+        self.telemetry.refresh(self.sim.telemetry, force=True)
+
+    def _on_scenario_chosen(self, index: int) -> None:
+        key = self.scenario_combo.itemData(index)
+        if key:
+            self.load(scenario(key))
+        self.scenario_combo.setCurrentIndex(0)
+
+    def open_config(self) -> None:
+        start = str(Path.cwd() / "configs")
+        path, _ = QFileDialog.getOpenFileName(self, "Open configuration", start, "Configuration (*.json)")
+        if not path:
+            return
+        try:
+            cfg = load_config(path)
+        except (OSError, ValueError) as exc:
+            QMessageBox.critical(self, "Could not open configuration", str(exc))
+            return
+        self.load(cfg)
+        self.config_path = Path(path)
+
+    def save_config(self) -> None:
+        if self.config_path is None:
+            self.save_config_as()
+            return
+        self._write_config(self.config_path)
+
+    def save_config_as(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(self, "Save configuration", "my_configuration.json",
+                                              "Configuration (*.json)")
+        if path:
+            if not path.lower().endswith(".json"):
+                path += ".json"
+            self._write_config(Path(path))
+
+    def _write_config(self, path: Path) -> None:
+        self.config.experiment = self.experiments.settings()
+        try:
+            save_config(self.config, path)
+        except OSError as exc:
+            QMessageBox.critical(self, "Could not save configuration", str(exc))
+            return
+        self.config_path = path
+        self.show_message(f"Configuration saved to {path}")
+
+    # ---------------------------------------------------- run control
+    def start(self) -> None:
+        self.running = True
+        self._accum = 0.0
+        self._last_frame = time.perf_counter()
+        self._update_actions()
+
+    def pause(self) -> None:
+        self.running = False
+        self._update_actions()
+
+    def toggle_run(self) -> None:
+        self.pause() if self.running else self.start()
+
+    def reset(self) -> None:
+        self.running = False
+        self._reset_sim()
+        self._update_actions()
+
+    def restart(self) -> None:
+        self._reset_sim()
+        self.start()
+
+    def single_step(self) -> None:
+        self.pause()
+        steps = max(1, int(round(self.sim.controller.period / self.config.simulation.dt)))
+        self._run_steps(steps, deadline=None)
+        self._update_view()
+        self.telemetry.refresh(self.sim.telemetry)
+
+    def push(self, direction: int) -> None:
+        self.sim.apply_disturbance(direction * self.push_force.value(), 0.1)
+        self.show_message(f"Tip push {direction * self.push_force.value():+.2f} N for 0.1 s", 2000)
+
+    def _reset_sim(self) -> None:
+        try:
+            self.sim.reset()
+        except ValueError as exc:
+            QMessageBox.critical(self, "Invalid configuration", str(exc))
+        self.view.clear_trails()
+        self._configure_telemetry()
+        self._update_view()
+
+    def _update_actions(self) -> None:
+        paused = (not self.running) and self.sim.time > 0
+        self.act_start.setText("▶ Resume" if paused else "▶ Start")
+        self.act_start.setEnabled(not self.running)
+        self.act_pause.setEnabled(self.running)
+        state = "Running" if self.running else "Paused" if paused else "Stopped (initial state)"
+        self.status_state.setText(state)
+
+    # ------------------------------------------------- parameter edits
+    def _on_plant_changed(self, plant: PlantParams, structural: bool) -> None:
+        try:
+            plant.validate()
+        except ValueError as exc:
+            self.show_message(f"⚠ {exc}")
+            return
+        if structural:
+            base_changed = plant.base_type != self.config.plant.base_type
+            ctrl = self.controller_panel.config()
+            if base_changed:
+                ctrl.action = default_action(plant)
+                ctrl.output_min, ctrl.output_max = -plant.actuator.max_output, plant.actuator.max_output
+                for loop in ctrl.loops:
+                    loop.kp, loop.ki, loop.kd, loop.enabled = 0.0, 0.0, 0.0, False
+            ctrl = ControllerPanel.complete_loops(ctrl, plant)
+            self.config.plant = plant
+            self.config.controller = ctrl
+            self.controller_panel.set_config(ctrl)
+            self.sim.update_controller(ctrl)
+            self._reset_sim()
+            QTimer.singleShot(0, self.view.fit)
+            self.show_message("Structure changed – simulation reset. Use 'Seed gains from LQR' in the "
+                              "PID panel to obtain stabilising gains.", 10000)
+            return
+        initial_changed = any(
+            a.initial_angle != b.initial_angle or a.initial_velocity != b.initial_velocity
+            for a, b in zip(plant.segments, self.config.plant.segments)
+        )
+        self.sim.update_plant(plant)
+        if initial_changed and not self.running and self.sim.time == 0.0:
+            self._reset_sim()   # show the new initial pose right away
+        self._update_view()
+
+    def _on_controller_changed(self, controller: ControllerConfig) -> None:
+        try:
+            self.sim.update_controller(controller)
+        except ValueError as exc:
+            self.show_message(f"⚠ {exc}")
+            return
+        self._configure_telemetry()
+
+    def _on_auto_tune(self, weights) -> None:
+        try:
+            ctrl = lqr_controller(self.config.plant, weights, base=self.controller_panel.config())
+        except (ValueError, np.linalg.LinAlgError) as exc:
+            QMessageBox.warning(self, "LQR design failed",
+                                f"The LQR design could not be computed for this plant:\n{exc}")
+            return
+        self.controller_panel.set_config(ctrl)
+        self.sim.update_controller(ctrl)
+        self._configure_telemetry()
+        self.show_message("Gains seeded from LQR. Reset/Restart to try them from the initial conditions.")
+
+    def _on_reset_integrators(self) -> None:
+        self.sim.controller.reset_integrators()
+        self.show_message("Integrators reset", 2000)
+
+    def _on_simulation_settings(self, settings: SimulationSettings) -> None:
+        try:
+            settings.validate()
+        except ValueError as exc:
+            self.show_message(f"⚠ {exc}")
+            return
+        self.config.simulation = settings
+
+    def _on_view_settings(self, settings) -> None:
+        self.view.settings = settings
+        self.view.update()
+
+    def _apply_experiment_gains(self) -> None:
+        result = self.experiments.selected_result()
+        if result is None:
+            QMessageBox.information(self, "Load gains", "Select an experiment in the table first.")
+            return
+        plant = self.config.plant
+        if (result.config.plant.n_segments, result.config.plant.base_type) != (plant.n_segments, plant.base_type):
+            QMessageBox.warning(self, "Load gains", "That experiment used a different pendulum structure.")
+            return
+        ctrl = result.config.copy().controller
+        self.controller_panel.set_config(ctrl)
+        self._on_controller_changed(ctrl)
+        self.show_message(f"Controller gains loaded from '{result.name}'")
+
+    # ------------------------------------------------------------ frame
+    def _run_steps(self, n: int, deadline: float | None) -> int:
+        done = 0
+        try:
+            while done < n:
+                k = min(25, n - done)
+                for _ in range(k):
+                    self.sim.step()
+                done += k
+                if deadline is not None and time.perf_counter() > deadline:
+                    break
+        except SimulationDiverged as exc:
+            self.pause()
+            QMessageBox.warning(self, "Simulation diverged", f"{exc}\n\nThe simulation was paused. "
+                                "Reset it, or reduce the time step / gains.")
+        return done
+
+    def _on_frame(self) -> None:
+        now = time.perf_counter()
+        wall = min(now - self._last_frame, 0.1)
+        self._last_frame = now
+        if self.running and wall > 0:
+            dt = self.config.simulation.dt
+            self._accum += wall * self.speed
+            wanted = int(self._accum / dt)
+            done = self._run_steps(wanted, deadline=now + PHYSICS_BUDGET_S)
+            if done < wanted:
+                self._accum = 0.0           # cannot keep up: drop the backlog (slower than real time)
+            else:
+                self._accum -= done * dt
+            rtf = done * dt / wall
+            self._rtf = 0.9 * self._rtf + 0.1 * rtf
+        self._update_view()
+        if now - self._last_plot > PLOT_INTERVAL_S:
+            self._last_plot = now
+            self.telemetry.refresh(self.sim.telemetry)
+            self.controller_panel.show_output(self.sim.last_control)
+            self._update_status()
+
+    def _update_view(self) -> None:
+        sim = self.sim
+        frame = FrameData(
+            kin=sim.model.kinematics(sim.state),
+            angles=sim.angles.copy(),
+            velocities=sim.angular_velocities.copy(),
+            cart_velocity=float(sim.state[sim.model.n + 1]),
+            time=sim.time,
+            applied=sim.applied,
+            max_output=self.config.plant.actuator.max_output,
+            tip_force=sim.tip_force,
+            has_cart=sim.model.has_cart,
+            track_length=self.config.plant.track_length,
+            lengths=sim.model.lengths.copy(),
+        )
+        self.view.set_frame(frame)
+
+    def _update_status(self) -> None:
+        self.status_time.setText(f"t = {self.sim.time:.2f} s")
+        if self.running:
+            lag = " (slower than real time)" if self._rtf < 0.95 * self.speed else ""
+            self.status_rtf.setText(f"speed {self._rtf:.2f}×{lag}")
+        else:
+            self.status_rtf.setText("")
+        self.status_energy.setText(f"E = {self.sim.energy():.4f} J")
+        self._update_actions()
+
+    # ------------------------------------------------------------- misc
+    def _about(self) -> None:
+        QMessageBox.about(self, "About", "<b>Interactive Inverted Pendulum Simulator</b><br>"
+                          "Multibody 1–3 segment pendulum on a cart or fixed pivot, multi-loop PID "
+                          "control with LQR seeding, experiment comparison.<br><br>"
+                          "See README.md, RUNNING.md and docs/ in the repository.")
+
+    def closeEvent(self, event) -> None:  # noqa: N802
+        self.timer.stop()
+        self.experiments.shutdown()
+        super().closeEvent(event)
+

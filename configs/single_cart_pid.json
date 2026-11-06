@@ -1,0 +1,91 @@
+{
+  "version": 1,
+  "name": "Single pendulum on cart \u2013 PID",
+  "description": "Classic cart-pole balanced by one PID loop on the angle. The cart is not regulated, so it slowly drifts \u2013 enable the cart loop (or use the LQR-seeded scenario) to hold it in place.",
+  "plant": {
+    "base_type": "cart",
+    "gravity": 9.81,
+    "cart_mass": 1.0,
+    "cart_viscous_friction": 0.1,
+    "track_length": 4.0,
+    "actuator": {
+      "max_output": 40.0,
+      "rate_limit": 0.0,
+      "time_constant": 0.002,
+      "deadband": 0.0
+    },
+    "segments": [
+      {
+        "length": 0.5,
+        "mass": 0.2,
+        "com_ratio": 0.5,
+        "inertia": 0.004166666666666667,
+        "joint_viscous_friction": 0.0005,
+        "joint_coulomb_friction": 0.0,
+        "initial_angle_deg": 8.0,
+        "initial_velocity_dps": 0.0
+      }
+    ]
+  },
+  "controller": {
+    "enabled": true,
+    "frequency_hz": 500.0,
+    "output_min": -40.0,
+    "output_max": 40.0,
+    "action": "direct",
+    "loops": [
+      {
+        "name": "Segment 1 angle",
+        "signal": "theta1",
+        "enabled": true,
+        "setpoint": 0.0,
+        "kp": 40.0,
+        "ki": 5.0,
+        "kd": 5.0,
+        "p_enabled": true,
+        "i_enabled": true,
+        "d_enabled": true,
+        "integral_limit": 0.0,
+        "anti_windup": "clamp",
+        "back_calculation_gain": 10.0,
+        "derivative_mode": "measured_rate",
+        "derivative_filter_hz": 50.0
+      },
+      {
+        "name": "Cart position",
+        "signal": "cart",
+        "enabled": false,
+        "setpoint": 0.0,
+        "kp": 0.0,
+        "ki": 0.0,
+        "kd": 0.0,
+        "p_enabled": true,
+        "i_enabled": true,
+        "d_enabled": true,
+        "integral_limit": 0.0,
+        "anti_windup": "clamp",
+        "back_calculation_gain": 10.0,
+        "derivative_mode": "measured_rate",
+        "derivative_filter_hz": 50.0
+      }
+    ]
+  },
+  "simulation": {
+    "dt": 0.001,
+    "sensor_noise_angle_deg": 0.0,
+    "sensor_noise_rate_dps": 0.0,
+    "sensor_noise_position": 0.0,
+    "noise_seed": 1,
+    "telemetry_rate_hz": 200.0
+  },
+  "experiment": {
+    "duration": 6.0,
+    "settle_tolerance_deg": 1.0,
+    "disturbance": {
+      "enabled": false,
+      "time": 2.0,
+      "force": 2.0,
+      "duration": 0.1
+    }
+  }
+}
