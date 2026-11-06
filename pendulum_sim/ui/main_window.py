@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import time
 from pathlib import Path
 
@@ -10,6 +11,7 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QAction, QGuiApplication, QKeySequence
 from PySide6.QtWidgets import (
     QComboBox,
+    QDialog,
     QDockWidget,
     QFileDialog,
     QLabel,
@@ -38,6 +40,7 @@ from .pendulum_view import FrameData, PendulumView
 from .plant_panel import PlantPanel
 from .settings_panel import SettingsPanel
 from .telemetry_panel import TelemetryPanel
+from .tuning_dialog import RobustTuneDialog
 from .widgets import scrollable, spin
 
 FRAME_INTERVAL_MS = 16            # ~60 fps GUI refresh
@@ -99,6 +102,8 @@ class MainWindow(QMainWindow):
         self.controller_panel.changed.connect(self._on_controller_changed)
         self.controller_panel.autoTuneRequested.connect(self._on_auto_tune)
         self.controller_panel.resetIntegratorsRequested.connect(self._on_reset_integrators)
+        self.controller_panel.robustTuneRequested.connect(self._on_robust_tune)
+        self.controller_panel.restoreRequested.connect(self._on_restore_gains)
         self.settings_panel.simulationChanged.connect(self._on_simulation_settings)
         self.settings_panel.viewChanged.connect(self._on_view_settings)
         self.settings_panel.zoomChanged.connect(self.view.set_zoom)
@@ -159,6 +164,7 @@ class MainWindow(QMainWindow):
         tb.addAction(self.act_push_left)
         self.push_force = spin(0.01, 1000.0, 1.0, 2, 0.5, "N", "Tip push force (0.1 s pulse)")
         self.push_force.setMinimumWidth(90)
+        self.push_force.valueChanged.connect(self._on_push_force_changed)
         tb.addWidget(self.push_force)
         tb.addAction(self.act_push_right)
         tb.addSeparator()
@@ -219,6 +225,10 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Invalid configuration", str(exc))
             return
         self.config = config
+        self._original_controller = copy.deepcopy(config.controller)
+        self.push_force.blockSignals(True)
+        self.push_force.setValue(config.push_force)
+        self.push_force.blockSignals(False)
         self.plant_panel.set_plant(config.plant)
         self.controller_panel.set_config(config.controller)
         self.settings_panel.set_simulation(config.simulation)
@@ -236,6 +246,9 @@ class MainWindow(QMainWindow):
         labels = ["cart" if loop.signal == "cart" else f"θ{loop.signal[5:]}"
                   for loop in self.config.controller.loops]
         self.telemetry.configure(self.config.plant.n_segments, self.config.plant.has_cart, labels)
+        c = self.config.controller
+        self.telemetry.set_output_limit(max(self.config.plant.actuator.max_output,
+                                            abs(c.output_min), abs(c.output_max)))
         self.telemetry.refresh(self.sim.telemetry, force=True)
 
     def _on_scenario_chosen(self, index: int) -> None:
@@ -385,6 +398,41 @@ class MainWindow(QMainWindow):
         self.sim.update_controller(ctrl)
         self._configure_telemetry()
         self.show_message("Gains seeded from LQR. Reset/Restart to try them from the initial conditions.")
+
+    def _apply_controller(self, ctrl: ControllerConfig, message: str) -> None:
+        self.controller_panel.set_config(ctrl)
+        self.sim.update_controller(ctrl)
+        self._configure_telemetry()
+        self.show_message(message)
+
+    def _on_robust_tune(self) -> None:
+        was_running = self.running
+        self.pause()                       # give the tuner all the CPU
+        self.config.controller = self.controller_panel.config()
+        dialog = RobustTuneDialog(self.config, self)
+        accepted = dialog.exec() == QDialog.DialogCode.Accepted
+        result = dialog.result_value
+        if accepted and result is not None:
+            self._apply_controller(
+                result.controller,
+                f"Robust gains applied: recoverable push {result.baseline_max_push:.3g} N → "
+                f"{result.max_push:.3g} N. Restart to try them; Push uses {result.recommended_push:g} N.")
+            self.push_force.setValue(result.recommended_push)
+        if was_running:
+            self.start()
+
+    def _on_restore_gains(self) -> None:
+        plant = self.config.plant
+        ctrl = ControllerPanel.complete_loops(copy.deepcopy(self._original_controller), plant)
+        try:
+            ctrl.validate()
+        except ValueError as exc:
+            self.show_message(f"⚠ {exc}")
+            return
+        self._apply_controller(ctrl, "Original gains restored")
+
+    def _on_push_force_changed(self, value: float) -> None:
+        self.config.push_force = value
 
     def _on_reset_integrators(self) -> None:
         self.sim.controller.reset_integrators()

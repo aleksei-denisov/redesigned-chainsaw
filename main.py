@@ -32,6 +32,9 @@ def _check_dependencies() -> None:
 
 
 if __name__ == "__main__":
+    import multiprocessing
+
+    multiprocessing.freeze_support()  # needed by the auto-tuner's worker processes in frozen apps
     if "--list-scenarios" not in sys.argv and "-h" not in sys.argv and "--help" not in sys.argv:
         _check_dependencies()
     from pendulum_sim.ui.app import main

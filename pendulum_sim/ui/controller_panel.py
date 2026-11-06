@@ -185,6 +185,8 @@ class ControllerPanel(QWidget):
     changed = Signal(object)              # ControllerConfig
     autoTuneRequested = Signal(object)    # LQRWeights
     resetIntegratorsRequested = Signal()
+    robustTuneRequested = Signal()
+    restoreRequested = Signal()
 
     def __init__(self) -> None:
         super().__init__()
@@ -208,6 +210,15 @@ class ControllerPanel(QWidget):
         form.addRow("Output (cmd / unsat.)", self.command_label)
         layout.addWidget(box)
 
+        self.robust_btn = QPushButton("★ Auto-tune for robustness…")
+        self.robust_btn.setMinimumHeight(32)
+        self.robust_btn.setToolTip("Find the gains that recover from the strongest push for this exact system")
+        self.restore_btn = QPushButton("↺ Restore original gains")
+        self.restore_btn.setToolTip("Go back to the gains of the loaded scenario / configuration file")
+        top = QHBoxLayout()
+        top.addWidget(self.robust_btn, 2)
+        top.addWidget(self.restore_btn, 1)
+        layout.addLayout(top)
         buttons = QHBoxLayout()
         self.tune_btn = QPushButton("Seed gains from LQR…")
         self.tune_btn.setToolTip("Compute P/D gains for all loops from an LQR design")
@@ -231,6 +242,8 @@ class ControllerPanel(QWidget):
             w.valueChanged.connect(self._emit)
         self.tune_btn.clicked.connect(self._ask_tune)
         self.reset_i_btn.clicked.connect(self.resetIntegratorsRequested)
+        self.robust_btn.clicked.connect(self.robustTuneRequested)
+        self.restore_btn.clicked.connect(self.restoreRequested)
 
     @staticmethod
     def complete_loops(config: ControllerConfig, plant: PlantParams) -> ControllerConfig:
