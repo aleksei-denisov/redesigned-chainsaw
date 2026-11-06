@@ -69,13 +69,17 @@ python -m pytest tests/test_physics.py tests/test_controller.py tests/test_simul
 
 `.github/workflows/ci.yml` runs on every push:
 
-1. Tests on Ubuntu, Windows and macOS with Python 3.10 and 3.12, installing exactly as
+1. Tests on Ubuntu and Windows with Python 3.10 and 3.12 and on macOS with 3.12 (macOS minutes
+   are 10× more expensive on private repositories), installing exactly as
    documented (`pip install -r requirements.txt`). Ubuntu + Python 3.10 is informational
    (`continue-on-error`): PySide6 6.12 aborts inside Qt in the offscreen GUI tests there.
 2. `python main.py --smoke-test 2` (offscreen launch + one experiment).
 3. `pip install .` and the `pendulum-sim` entry point.
 4. The `start.sh` / `start.bat` launchers.
-5. PyInstaller builds for Windows and macOS, smoke-tested, uploaded as artifacts.
+5. PyInstaller builds for Windows and macOS, smoke-tested, uploaded as artifacts – only on
+   `main` and when the workflow is started manually (GitHub → Actions → CI → Run workflow).
+
+A newer push to the same branch cancels a still-running older run.
 
 ## Documentation figures
 
