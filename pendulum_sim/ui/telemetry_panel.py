@@ -11,9 +11,9 @@ Performance notes (the graphs, not the physics, are the expensive part of a fram
   shows a fixed, steadily scrolling time window – no jumping scales.
 """
 
-import time
-
 from __future__ import annotations
+
+import time
 
 import numpy as np
 import pyqtgraph as pg
