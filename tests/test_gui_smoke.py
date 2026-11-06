@@ -15,7 +15,6 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6")
 pytest.importorskip("pyqtgraph")
 
-from PySide6.QtCore import QEvent  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from pendulum_sim.control import LQRWeights  # noqa: E402
@@ -29,16 +28,25 @@ def app():
     yield instance
 
 
-@pytest.fixture
-def window(app):
+@pytest.fixture(scope="module")
+def main_window(app):
+    # One window for the whole module: repeatedly destroying and re-creating Qt/pyqtgraph
+    # widgets in one process is fragile on some Linux Qt builds.
     w = MainWindow(scenario("single_cart_full"))
     w.show()
     app.processEvents()
     yield w
     w.close()
-    w.deleteLater()
-    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
     app.processEvents()
+
+
+@pytest.fixture
+def window(main_window, app):
+    main_window.pause()
+    main_window.experiments.clear()
+    main_window.load(scenario("single_cart_full"))
+    app.processEvents()
+    return main_window
 
 
 def frames(window, app, n=10):
