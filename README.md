@@ -49,6 +49,7 @@ experiment mode for comparing controller tunings under identical conditions.
 |---|---|
 | macOS 12+ (Apple Silicon and Intel) | supported, tested in CI (`macos-latest`, Apple Silicon) |
 | Windows 10 / 11 (x64) | supported, tested in CI (`windows-latest`) |
+| Android 9+ (arm64) | mobile app built from the same code – see [docs/ANDROID.md](docs/ANDROID.md) (phase 1) |
 | Linux (x64) | works with Python 3.12 (tested in CI); with Python 3.10 the offscreen GUI tests crash inside Qt (PySide6 6.12) – use 3.11+ on Linux |
 
 Python **3.10 – 3.13** (CI tests 3.10 and 3.12).
@@ -80,6 +81,7 @@ Or use the one-step launchers: `./start.sh` (macOS/Linux) or `start.bat` (Window
 - [docs/PHYSICS.md](docs/PHYSICS.md) – the multibody model and its validation.
 - [docs/CONTROL.md](docs/CONTROL.md) – controller structure, multi-segment strategy, limitations.
 - [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) – architecture, tests, CI, extending the project.
+- [docs/ANDROID.md](docs/ANDROID.md) – the Android app: building the APK, installing, testing.
 - [CLAUDE.md](CLAUDE.md) – working rules for contributors and AI assistants.
 
 ## Project layout
@@ -91,8 +93,10 @@ pendulum_sim/
   control/                 PID loop, multi-loop controller, LQR seeding
   simulation/              config/JSON, fixed-step engine, telemetry, experiments, metrics, scenarios
   ui/                      PySide6 window, QPainter view, panels, pyqtgraph plots
+  mobile/                  touch-first interface for the Android app (reuses ui/ view and plots)
+android/                   Android entry point, icon, build requirements, Dockerfile
 configs/                   example configurations (one per built-in scenario)
-scripts/                   export_examples.py, build_app.py, make_figures.py
+scripts/                   export_examples.py, build_app.py, build_android.py, make_figures.py
 tests/                     physics, controller, simulation and offscreen GUI tests
 docs/                      technical documentation and figures
 start.sh / start.bat       one-step launchers

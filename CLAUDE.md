@@ -24,8 +24,10 @@ Repository: https://github.com/aleksei-denisov/redesigned-chainsaw
 | `pendulum_sim/control` | PID, multi-loop controller, LQR gain seeding | numpy, scipy, physics |
 | `pendulum_sim/simulation` | Config, fixed-step engine, telemetry, experiments, metrics, scenarios | physics, control |
 | `pendulum_sim/ui` | PySide6 GUI, QPainter view, pyqtgraph plots | everything above |
+| `pendulum_sim/mobile` | Touch-first UI for Android (reuses `ui` view/plots) | everything above |
 
 - The physics/control/simulation layers must **never** import Qt. They are tested headless.
+- SciPy must stay optional in `control` (Android has none): import it with a NumPy fallback.
 - Physics runs with a fixed timestep (`SimulationConfig.dt`), decoupled from the GUI refresh rate.
 - Angles: absolute, measured from the upward vertical, radians internally, degrees in the UI/config.
 
@@ -35,6 +37,8 @@ Repository: https://github.com/aleksei-denisov/redesigned-chainsaw
 python main.py                    # launch the GUI
 python -m pytest                  # run the test suite (GUI smoke test skips without PySide6)
 python scripts/export_examples.py # regenerate configs/*.json from built-in scenarios
+python -m pendulum_sim.mobile     # desktop preview of the Android interface
+python scripts/build_android.py   # build the APK (Linux/macOS, see docs/ANDROID.md)
 ```
 
 ## Code quality
