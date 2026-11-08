@@ -2,8 +2,9 @@
 
 For the 2- and 3-link pendulums, hand-tuning a set of coupled PID loops is very
 hard. This module linearises the plant about the upright equilibrium,
-``ṡ ≈ A s + B u``, solves the continuous algebraic Riccati equation (SciPy)
-for ``u = −K s`` and maps the state-feedback gains onto the PD terms of the
+``ṡ ≈ A s + B u``, solves the continuous algebraic Riccati equation (SciPy
+when installed, otherwise the NumPy solver in :mod:`.riccati`) for
+``u = −K s`` and maps the state-feedback gains onto the PD terms of the
 parallel loops. With the controller-action sign ``σ`` (+1 direct, −1 reverse)
 the loop error is ``e = σ·y`` so ``Kp = −σ·K_position`` and
 ``Kd = −σ·K_velocity``. Integral gains are left to the user (default 0).
@@ -17,10 +18,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
-from scipy.linalg import solve_continuous_are
 
 from ..physics import MultiLinkPendulum, PlantParams
 from .multiloop import ControllerConfig
+from .riccati import solve_care
 from .pid import AntiWindup, ControlAction, DerivativeMode, PIDLoopConfig
 
 
@@ -72,7 +73,7 @@ def lqr_gain(plant: PlantParams, weights: LQRWeights | None = None) -> tuple[np.
             diag.append(w.angular_velocity)
     Q = np.diag(diag)
     R = np.array([[w.effort]])
-    P = solve_continuous_are(A, B, Q, R)
+    P = solve_care(A, B, Q, R)
     K = np.linalg.solve(R, B.T @ P)
     return K.ravel(), kept
 
