@@ -59,6 +59,12 @@ def _button(text: str, slot, tip: str = "") -> QPushButton:
     return b
 
 
+def _compact(combo: QComboBox, chars: int) -> None:
+    """Let a combo box shrink below its longest entry (the popup still shows full names)."""
+    combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+    combo.setMinimumContentsLength(chars)
+
+
 class MobileWindow(QWidget):
     def __init__(self, config: AppConfig) -> None:
         super().__init__()
@@ -78,6 +84,7 @@ class MobileWindow(QWidget):
         for key, factory in SCENARIOS.items():
             self.scenario_combo.addItem(factory().name, key)
         self.scenario_combo.activated.connect(self._on_scenario_chosen)
+        _compact(self.scenario_combo, 10)
         self.speed_combo = QComboBox()
         self.speed_combo.setMinimumHeight(TOUCH_TARGET_PX)
         for s in SPEEDS:
@@ -101,6 +108,7 @@ class MobileWindow(QWidget):
         self.telemetry = TelemetryPanel()
         for key, act in self.telemetry.toggles.items():
             act.setChecked(key in MOBILE_GRAPHS)
+        _compact(self.telemetry.loop_combo, 6)   # long loop names must not widen a phone layout
         self.content = QBoxLayout(QBoxLayout.Direction.TopToBottom)
         self.content.addWidget(self.view, 3)
         self.content.addWidget(self.telemetry, 2)
@@ -269,14 +277,17 @@ class MobileWindow(QWidget):
 
     # ------------------------------------------------------------ layout
     def resizeEvent(self, event) -> None:  # noqa: N802
-        landscape = self.width() > self.height()
+        self.apply_orientation(self.width() > self.height())
+        super().resizeEvent(event)
+
+    def apply_orientation(self, landscape: bool) -> None:
+        """Graphs below the view in portrait, beside it in landscape."""
         direction = QBoxLayout.Direction.LeftToRight if landscape else QBoxLayout.Direction.TopToBottom
         if self.content.direction() != direction:
             self.content.setDirection(direction)
-            self.content.setStretch(0, 3 if not landscape else 1)
-            self.content.setStretch(1, 2 if not landscape else 1)
+            self.content.setStretch(0, 1 if landscape else 3)
+            self.content.setStretch(1, 1 if landscape else 2)
             QTimer.singleShot(0, self.view.fit)
-        super().resizeEvent(event)
 
     # ------------------------------------------------------------- frame
     def _on_frame(self) -> None:

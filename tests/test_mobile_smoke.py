@@ -124,9 +124,12 @@ def test_lqr_seeding_and_orientation_switch(win, app):
     win.load(scenario("double_cart_lqr"))
     win.seed_lqr()
     assert "LQR" in win.status.text()
-    win.resize(800, 400)
-    app.processEvents()
+    win.apply_orientation(True)
     assert win.content.direction().name == "LeftToRight"
-    win.resize(400, 800)
-    app.processEvents()
+    win.apply_orientation(False)
     assert win.content.direction().name == "TopToBottom"
+
+
+def test_fits_a_phone_width(win, app):
+    # A 360 dp wide phone in portrait must not be forced wider by any widget.
+    assert win.minimumSizeHint().width() <= 360, win.minimumSizeHint()
