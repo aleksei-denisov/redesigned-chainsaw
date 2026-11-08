@@ -26,6 +26,8 @@ jobs:
     name: Debug APK (arm64)
     runs-on: ubuntu-24.04
     timeout-minutes: 120
+    permissions:
+      contents: write          # publish the APK as the rolling "android-latest" pre-release
     steps:
       - uses: actions/checkout@v4
 
@@ -94,6 +96,20 @@ jobs:
           path: dist/*.apk
           if-no-files-found: error
           retention-days: 30
+
+      # A direct download link for phones/tablets (artifacts are zipped and need a GitHub login):
+      # https://github.com/<owner>/<repo>/releases/download/android-latest/InvertedPendulumSimulator-debug.apk
+      - name: Publish rolling pre-release
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/android-apk' || github.ref == 'refs/heads/main')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp dist/*.apk InvertedPendulumSimulator-debug.apk
+          gh release delete android-latest --yes --cleanup-tag || true
+          gh release create android-latest InvertedPendulumSimulator-debug.apk \
+            --prerelease --target "$GITHUB_SHA" \
+            --title "Android debug APK (latest ${GITHUB_REF_NAME})" \
+            --notes "Debug build of ${GITHUB_SHA::7} from ${GITHUB_REF_NAME}. Android 9+ (API 28), arm64-v8a. Open this page on the device, tap the .apk, allow installing from this source. See docs/ANDROID.md."
 
       - name: Build log on failure
         if: failure()

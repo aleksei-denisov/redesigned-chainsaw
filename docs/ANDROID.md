@@ -70,6 +70,15 @@ python -m pendulum_sim.mobile --landscape
 
 ## Building
 
+### Download the latest APK
+
+Pushes to `main` and `android-apk` publish the debug APK as the rolling pre-release
+**android-latest** – open this link directly on the phone/tablet:
+
+<https://github.com/aleksei-denisov/redesigned-chainsaw/releases/download/android-latest/InvertedPendulumSimulator-debug.apk>
+
+Tap the downloaded file and allow installing from this source (browser) when asked.
+
 ### GitHub Actions (recommended)
 
 Every push runs `.github/workflows/android.yml` and uploads
