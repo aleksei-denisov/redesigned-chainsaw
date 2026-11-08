@@ -1,0 +1,10 @@
+# Host tools for building the Android APK (not needed to run the desktop app).
+# PySide6 must be the same version as the Android wheels that get bundled.
+PySide6==6.12.0
+buildozer==1.6.0
+cython==0.29.33
+# pyside6-android-deploy's own requirements (PySide6/scripts/requirements-android.txt)
+jinja2
+pkginfo
+tqdm
+packaging==24.1

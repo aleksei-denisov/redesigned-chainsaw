@@ -9,3 +9,9 @@ dist/
 *.spec
 *.egg-info/
 .DS_Store
+
+# Android build output (scripts/build_android.py)
+build/android/
+dist/*.apk
+dist/*.aab
+*.keystore

@@ -1,0 +1,171 @@
+name: Android
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: "Also build a signed release AAB (needs the ANDROID_KEYSTORE_* secrets)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ANDROID_NDK_VERSION: "28.2.13676358"   # r28c, required by pyside6-android-deploy
+  ANDROID_API_LEVEL: "36"                 # target API (Google Play requirement)
+  # Gradle keeps the debug keystore here; caching it keeps the debug signature stable,
+  # so a new debug APK installs over the previous one (adb install -r).
+  ANDROID_USER_HOME: /home/runner/android-user-home
+
+jobs:
+  apk:
+    name: Debug APK (arm64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"              # python-for-android requires exactly JDK 17
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: python-for-android system packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y autoconf automake libtool libltdl-dev pkg-config zip unzip \
+            cmake ninja-build libffi-dev libssl-dev zlib1g-dev gfortran
+
+      - name: Android SDK packages
+        run: |
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKMANAGER" --licenses > /dev/null || true
+          "$SDKMANAGER" "platform-tools" "platforms;android-$ANDROID_API_LEVEL" \
+            "build-tools;$ANDROID_API_LEVEL.0.0" "ndk;$ANDROID_NDK_VERSION"
+          # buildozer still looks for the command-line tools in the legacy location
+          [ -e "$ANDROID_HOME/tools" ] || ln -s "$ANDROID_HOME/cmdline-tools/latest" "$ANDROID_HOME/tools"
+
+      - name: Build tools (venv)
+        run: |
+          python -m venv build/android-venv
+          build/android-venv/bin/python -m pip install --upgrade pip
+          build/android-venv/bin/python -m pip install -r android/requirements-build.txt
+
+      - name: Cache debug keystore
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.ANDROID_USER_HOME }}/debug.keystore
+          key: android-debug-keystore
+
+      - name: Cache buildozer / python-for-android
+        uses: actions/cache@v4
+        with:
+          # no restore-keys: python-for-android does not rebuild changed recipes
+          path: |
+            ~/.buildozer
+            build/android/app/.buildozer
+            build/android/wheels
+          key: android-build-${{ hashFiles('scripts/build_android.py', 'android/requirements-build.txt') }}
+
+      - name: Build debug APK
+        run: |
+          build/android-venv/bin/python scripts/build_android.py \
+            --sdk-path "$ANDROID_HOME" --ndk-path "$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION"
+
+      - name: Inspect APK
+        run: |
+          APK=$(ls dist/*.apk)
+          ls -la "$APK"
+          AAPT="$ANDROID_HOME/build-tools/$ANDROID_API_LEVEL.0.0/aapt2"
+          "$AAPT" dump badging "$APK" | grep -E "^package:|sdkVersion|targetSdkVersion|application-label:|native-code" || true
+          unzip -l "$APK" | tail -n 1
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: inverted-pendulum-debug-apk
+          path: dist/*.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-build-logs
+          path: |
+            build/android/app/buildozer.spec
+            build/android/app/pysidedeploy.spec
+            build/android/app/.buildozer/android/platform/build-*/dists/*/build.gradle
+          if-no-files-found: ignore
+
+  release:
+    name: Signed release AAB
+    needs: apk
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      HAS_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check signing secrets
+        if: env.HAS_KEYSTORE != 'true'
+        run: |
+          echo "::error::Set ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS and ANDROID_KEY_PASSWORD (see docs/ANDROID.md)"
+          exit 1
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: python-for-android system packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y autoconf automake libtool libltdl-dev pkg-config zip unzip \
+            cmake ninja-build libffi-dev libssl-dev zlib1g-dev gfortran
+      - name: Android SDK packages
+        run: |
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKMANAGER" --licenses > /dev/null || true
+          "$SDKMANAGER" "platform-tools" "platforms;android-$ANDROID_API_LEVEL" \
+            "build-tools;$ANDROID_API_LEVEL.0.0" "ndk;$ANDROID_NDK_VERSION"
+          [ -e "$ANDROID_HOME/tools" ] || ln -s "$ANDROID_HOME/cmdline-tools/latest" "$ANDROID_HOME/tools"
+      - name: Build tools (venv)
+        run: |
+          python -m venv build/android-venv
+          build/android-venv/bin/python -m pip install -r android/requirements-build.txt
+      - name: Cache buildozer / python-for-android
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.buildozer
+            build/android/app/.buildozer
+            build/android/wheels
+          key: android-build-${{ hashFiles('scripts/build_android.py', 'android/requirements-build.txt') }}
+      - name: Build signed AAB
+        env:
+          P4A_RELEASE_KEYSTORE_PASSWD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          P4A_RELEASE_KEYALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          P4A_RELEASE_KEYALIAS_PASSWD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+          export P4A_RELEASE_KEYSTORE="$RUNNER_TEMP/release.keystore"
+          build/android-venv/bin/python scripts/build_android.py --release \
+            --sdk-path "$ANDROID_HOME" --ndk-path "$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION"
+          rm -f "$RUNNER_TEMP/release.keystore"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: inverted-pendulum-release-aab
+          path: dist/*.aab
+          if-no-files-found: error
