@@ -72,6 +72,9 @@ jobs:
             exit $status
           }
 
+      - name: Launch the mobile interface (offscreen smoke test)
+        run: python -m pendulum_sim.mobile --smoke-test 2
+
       - name: Installable package entry point
         run: |
           python -m pip install .

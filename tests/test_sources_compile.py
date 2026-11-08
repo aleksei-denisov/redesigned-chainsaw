@@ -9,7 +9,8 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCES = sorted([*(ROOT / "pendulum_sim").rglob("*.py"), *(ROOT / "scripts").glob("*.py"), ROOT / "main.py"])
+SOURCES = sorted([*(ROOT / "pendulum_sim").rglob("*.py"), *(ROOT / "scripts").glob("*.py"),
+                  *(ROOT / "android").glob("*.py"), ROOT / "main.py"])
 
 
 @pytest.mark.parametrize("path", SOURCES, ids=lambda p: str(p.relative_to(ROOT)))
