@@ -132,4 +132,9 @@ def test_lqr_seeding_and_orientation_switch(win, app):
 
 def test_fits_a_phone_width(win, app):
     # A 360 dp wide phone in portrait must not be forced wider by any widget.
-    assert win.minimumSizeHint().width() <= 360, win.minimumSizeHint()
+    from PySide6.QtWidgets import QWidget
+
+    wide = sorted((w.minimumSizeHint().width(), type(w).__name__, w.objectName())
+                  for w in win.findChildren(QWidget)
+                  if w.isVisibleTo(win) and w.minimumSizeHint().width() > 300)
+    assert win.minimumSizeHint().width() <= 360, (win.minimumSizeHint(), wide[-8:])

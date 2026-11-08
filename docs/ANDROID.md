@@ -56,7 +56,7 @@ on return the simulation continues in the state it had (no catch-up burst).
 | ▶ Start / ⏸ Pause, ⟲ Reset, Step | run control (Step = one controller period) |
 | ◀ Push / Push ▶ | tip push left / right |
 | Fit | fit the pendulum into the view |
-| LQR gains | seed the PID gains from an LQR design for the current plant |
+| LQR | seed the PID gains from an LQR design for the current plant |
 | top bar | scenario and simulation speed |
 
 Portrait shows the graphs below the pendulum, landscape beside it.

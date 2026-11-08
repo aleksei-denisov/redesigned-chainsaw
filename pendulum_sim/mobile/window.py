@@ -51,7 +51,8 @@ TOUCH_TARGET_PX = 48            # minimum button height (device-independent px �
 def _button(text: str, slot, tip: str = "") -> QPushButton:
     b = QPushButton(text)
     b.setMinimumHeight(TOUCH_TARGET_PX)
-    b.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+    # Ignored: the grid shares the width equally instead of growing to fit every label.
+    b.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
     b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
     if tip:
         b.setToolTip(tip)
@@ -63,6 +64,13 @@ def _compact(combo: QComboBox, chars: int) -> None:
     """Let a combo box shrink below its longest entry (the popup still shows full names)."""
     combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
     combo.setMinimumContentsLength(chars)
+
+
+def _shrinkable(widget: QWidget) -> None:
+    """Ignore the widget's width hints so it can never force the window wider."""
+    policy = widget.sizePolicy()
+    policy.setHorizontalPolicy(QSizePolicy.Policy.Ignored)
+    widget.setSizePolicy(policy)
 
 
 class MobileWindow(QWidget):
@@ -109,6 +117,8 @@ class MobileWindow(QWidget):
         for key, act in self.telemetry.toggles.items():
             act.setChecked(key in MOBILE_GRAPHS)
         _compact(self.telemetry.loop_combo, 6)   # long loop names must not widen a phone layout
+        # The desktop graph tool bar is wider than a phone; let it clip rather than widen the window.
+        _shrinkable(self.telemetry)
         self.content = QBoxLayout(QBoxLayout.Direction.TopToBottom)
         self.content.addWidget(self.view, 3)
         self.content.addWidget(self.telemetry, 2)
@@ -120,7 +130,7 @@ class MobileWindow(QWidget):
         self.push_left_btn = _button("◀ Push", lambda: self.push(-1))
         self.push_right_btn = _button("Push ▶", lambda: self.push(+1))
         self.fit_btn = _button("Fit", self.view.fit, "Fit the pendulum into the view")
-        self.lqr_btn = _button("LQR gains", self.seed_lqr, "Seed the PID gains from an LQR design")
+        self.lqr_btn = _button("LQR", self.seed_lqr, "Seed the PID gains from an LQR design")
         bar = QGridLayout()
         bar.setSpacing(6)
         for col, b in enumerate((self.run_btn, self.reset_btn, self.step_btn, self.lqr_btn)):
@@ -134,6 +144,8 @@ class MobileWindow(QWidget):
         root.setSpacing(6)
         root.addLayout(top)
         root.addLayout(self.content, 1)
+        _shrinkable(self.status)
+        _shrinkable(self.perf)
         status_row = QHBoxLayout()
         status_row.addWidget(self.status, 1)
         status_row.addWidget(self.perf)
