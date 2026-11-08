@@ -82,8 +82,25 @@ def main(argv: list[str] | None = None) -> int:
         window.show()
 
     if args.smoke_test is not None:
-        return _smoke_test(app, window, args.smoke_test)
-    return app.exec()
+        code = _smoke_test(app, window, args.smoke_test)
+    else:
+        code = app.exec()
+    _shutdown(app, window)
+    return code
+
+
+def _shutdown(app, window) -> None:
+    """Destroy the window while the QApplication still exists.
+
+    Leaving the order to interpreter shutdown can delete Qt objects after the
+    application object (seen as a segfault on macOS).
+    """
+    from PySide6.QtCore import QCoreApplication, QEvent
+
+    window.close()
+    window.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    app.processEvents()
 
 
 def _smoke_test(app, window, seconds: float) -> int:
@@ -97,9 +114,8 @@ def _smoke_test(app, window, seconds: float) -> int:
     def finish() -> None:
         ok = window.sim.time > 0
         print(f"mobile smoke test: t={window.sim.time:.2f}s after {time.perf_counter() - started:.1f}s wall, "
-              f"angles={[round(float(a), 4) for a in window.sim.angles]}")
+              f"angles={[round(float(a), 4) for a in window.sim.angles]}", flush=True)
         result["code"] = 0 if ok else 1
-        window.close()
         app.quit()
 
     QTimer.singleShot(int(seconds * 1000), finish)
