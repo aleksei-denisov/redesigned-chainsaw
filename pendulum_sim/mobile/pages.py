@@ -562,8 +562,8 @@ class SettingsPage(ScrollPage):
         self.perf_aa = perf.add(SwitchRow("Smooth edges", "antialiasing"))
         self.perf_fps = perf.add(ChoiceRow("Frame rate", [(f, f"{f} fps") for f in FRAME_RATES],
                                            hint="30 fps halves the drawing work and saves battery"))
-        self.perf_graph = perf.add(ChoiceRow("Graph scrolling", [(hz, f"{hz}× per second") for hz in GRAPH_RATES_HZ],
-                                             hint="how often the graphs take in new samples (never more than the "
+        self.perf_graph = perf.add(ChoiceRow("Graph scrolling", [(hz, f"{hz}/s") for hz in GRAPH_RATES_HZ],
+                                             hint="how often per second the graphs take in new samples (never more than the "
                                                   "frame rate)"))
         self.perf_cores = perf.add(SwitchRow("Use performance CPU cores",
                                              "keeps the simulation on the fast cores of the processor"))
