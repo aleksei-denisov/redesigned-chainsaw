@@ -123,9 +123,18 @@ def test_gpu_drawing_or_clean_fallback(win):
         c = charts[0]
         r = c._trace_rect.toAlignedRect().translated(c.mapTo(win, c.rect().topLeft()))
         dpr = img.devicePixelRatio()
-        colours = {img.pixelColor(int(x * dpr), int(y * dpr)).name()
-                   for x in range(r.left() + 2, r.right() - 2, 6) for y in range(r.top() + 2, r.bottom() - 2, 6)}
-        assert len(colours) > 2, colours                         # curves on the background
+        from PySide6.QtGui import QColor
+
+        pixels = [img.pixelColor(int(x * dpr), int(y * dpr))
+                  for x in range(r.left() + 2, r.right() - 2, 2) for y in range(r.top() + 2, r.bottom() - 2, 2)]
+        bg = win.palette().base().color()
+        black = sum(1 for q in pixels if q.lightness() < 8)
+        assert black < 0.5 * len(pixels), "plot area black (GL surface not drawn)"
+        assert sum(1 for q in pixels if abs(q.lightness() - bg.lightness()) <= 6) > 0.3 * len(pixels)
+        want = QColor(c.series[0].color)
+        near = [q for q in pixels if abs(q.red() - want.red()) + abs(q.green() - want.green())
+                + abs(q.blue() - want.blue()) < 90]
+        assert near, f"no {want.name()} curve pixels in the plot"
     else:
         assert not any(c.gpu for c in win.telemetry.visible_charts())
         assert win.view.gpu_surface is None
