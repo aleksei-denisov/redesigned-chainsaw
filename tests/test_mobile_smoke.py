@@ -206,8 +206,8 @@ def test_graphs_selection_limit_persistence_and_visibility(win, app):
     g.refresh(win.sim.telemetry, force=True)
     app.processEvents()
     assert all(chart._paths for chart in g.visible_charts())  # curves drawn
-    lo, hi = g.charts["angle"].axis.lo, g.charts["angle"].axis.hi
-    assert hi - lo >= 2.0                                     # minimum span, no 1e-15 ranges
+    for chart in g.visible_charts():                          # minimum span, no 1e-15 ranges
+        assert chart.axis.hi - chart.axis.lo >= chart.gdef.min_span
     # hidden graphs: no data work, refreshed on show
     g.hide()
     version = g._version

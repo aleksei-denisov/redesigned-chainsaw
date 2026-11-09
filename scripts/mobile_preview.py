@@ -248,6 +248,7 @@ def main(out_dir: str) -> int:
         if n == 4:
             win.grab().save(str(out / "tablet_four_graphs.png"))
     old.close()
+    old.deleteLater()
     graphs.set_selection(["angle", "control"])
     settle(win, 0.3)
     whole = timed(win.repaint, 10)
@@ -266,4 +267,9 @@ def main(out_dir: str) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1] if len(sys.argv) > 1 else "build/mobile-preview"))
+    code = main(sys.argv[1] if len(sys.argv) > 1 else "build/mobile-preview")
+    sys.stdout.flush()
+    sys.stderr.flush()
+    # Skip interpreter teardown: pyqtgraph objects outliving the QApplication can crash at
+    # exit, which would fail CI after all results have been written.
+    os._exit(code)

@@ -252,13 +252,7 @@ class MainWindow(QMainWindow):
             return
         self.config = config
         self._original_controller = copy.deepcopy(config.controller)
-        self.push_force.blockSignals(True)
-        self.push_force.setValue(config.push_force)
-        self.push_force.blockSignals(False)
-        self.plant_panel.set_plant(config.plant)
-        self.controller_panel.set_config(config.controller)
-        self.settings_panel.set_simulation(config.simulation)
-        self.experiments.set_settings(config.experiment)
+        self._show_config(config)
         self._configure_telemetry()
         self.view.clear_trails()
         self._update_view()
@@ -267,6 +261,29 @@ class MainWindow(QMainWindow):
         if config.description:
             self.show_message(config.description, 15000)
         self._update_actions()
+
+    # ------------------------------------------- UI <-> configuration hooks
+    # The desktop keeps the editable state in its panels; the touch interface edits the
+    # configuration directly and overrides these four methods.
+    def _show_config(self, config: AppConfig) -> None:
+        """Put a freshly loaded configuration into the editors."""
+        self.push_force.blockSignals(True)
+        self.push_force.setValue(config.push_force)
+        self.push_force.blockSignals(False)
+        self.plant_panel.set_plant(config.plant)
+        self.controller_panel.set_config(config.controller)
+        self.settings_panel.set_simulation(config.simulation)
+        self.experiments.set_settings(config.experiment)
+
+    def _ui_controller(self) -> ControllerConfig:
+        """The controller configuration as currently edited."""
+        return self.controller_panel.config()
+
+    def _show_controller(self, ctrl: ControllerConfig) -> None:
+        self.controller_panel.set_config(ctrl)
+
+    def _show_controller_output(self, out) -> None:
+        self.controller_panel.show_output(out)
 
     def _configure_telemetry(self) -> None:
         labels = ["cart" if loop.signal == "cart" else f"θ{loop.signal[5:]}"
@@ -378,7 +395,7 @@ class MainWindow(QMainWindow):
             return
         if structural:
             base_changed = plant.base_type != self.config.plant.base_type
-            ctrl = self.controller_panel.config()
+            ctrl = self._ui_controller()
             if base_changed:
                 ctrl.action = default_action(plant)
                 ctrl.output_min, ctrl.output_max = -plant.actuator.max_output, plant.actuator.max_output
@@ -387,7 +404,7 @@ class MainWindow(QMainWindow):
             ctrl = ControllerPanel.complete_loops(ctrl, plant)
             self.config.plant = plant
             self.config.controller = ctrl
-            self.controller_panel.set_config(ctrl)
+            self._show_controller(ctrl)
             self.sim.update_controller(ctrl)
             self._reset_sim()
             QTimer.singleShot(0, self.view.fit)
@@ -413,18 +430,18 @@ class MainWindow(QMainWindow):
 
     def _on_auto_tune(self, weights) -> None:
         try:
-            ctrl = lqr_controller(self.config.plant, weights, base=self.controller_panel.config())
+            ctrl = lqr_controller(self.config.plant, weights, base=self._ui_controller())
         except (ValueError, np.linalg.LinAlgError) as exc:
             QMessageBox.warning(self, "LQR design failed",
                                 f"The LQR design could not be computed for this plant:\n{exc}")
             return
-        self.controller_panel.set_config(ctrl)
+        self._show_controller(ctrl)
         self.sim.update_controller(ctrl)
         self._configure_telemetry()
         self.show_message("Gains seeded from LQR. Reset/Restart to try them from the initial conditions.")
 
     def _apply_controller(self, ctrl: ControllerConfig, message: str) -> None:
-        self.controller_panel.set_config(ctrl)
+        self._show_controller(ctrl)
         self.sim.update_controller(ctrl)
         self._configure_telemetry()
         self.show_message(message)
@@ -432,7 +449,7 @@ class MainWindow(QMainWindow):
     def _on_robust_tune(self) -> None:
         was_running = self.running
         self.pause()                       # give the tuner all the CPU
-        self.config.controller = self.controller_panel.config()
+        self.config.controller = self._ui_controller()
         dialog = RobustTuneDialog(self.config, self)
         accepted = dialog.exec() == QDialog.DialogCode.Accepted
         result = dialog.result_value
@@ -488,7 +505,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Load gains", "That experiment used a different pendulum structure.")
             return
         ctrl = result.config.copy().controller
-        self.controller_panel.set_config(ctrl)
+        self._show_controller(ctrl)
         self._on_controller_changed(ctrl)
         self.show_message(f"Controller gains loaded from '{result.name}'")
 
@@ -533,7 +550,7 @@ class MainWindow(QMainWindow):
         if now - self._last_plot > self._plot_interval:
             self._last_plot = now
             self.telemetry.refresh(self.sim.telemetry)
-            self.controller_panel.show_output(self.sim.last_control)
+            self._show_controller_output(self.sim.last_control)
             self._update_status()
 
     def _update_view(self) -> None:
