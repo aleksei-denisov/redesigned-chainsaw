@@ -155,7 +155,7 @@ def patch_buildozer_spec(version: str, release: bool) -> dict[str, str]:
     app["android.skip_update"] = "True"
     app["android.allow_backup"] = "False"
     app["source.include_exts"] = ",".join(sorted(set(
-        app.get("source.include_exts", "py").split(",") + ["py", "png", "json"])))
+        app.get("source.include_exts", "py").split(",") + ["py", "png", "json", "svg"])))
     app["source.exclude_dirs"] = "deployment,bin,.buildozer,tests"
     app["android.release_artifact"] = "aab" if release else "apk"
     app["android.debug_artifact"] = "apk"
