@@ -6,37 +6,49 @@ controller and simulation code as the desktop version and draws the pendulum wit
 the *same* QPainter view and pyqtgraph telemetry; only the window layout and the
 input handling are mobile-specific.
 
-> **Status: phase 1 (minimal APK).** The app runs the live simulation with touch
-> disturbances, start/pause/reset/step, scenario and speed selection, LQR gain
-> seeding and live graphs. The full parameter editors, PID panel, experiment mode
-> and auto-tuner follow once phase 1 is confirmed on real devices. See
-> [Known limitations](#known-limitations).
+The app has the **same features as the desktop version**: live simulation, scenarios,
+the *Pendulum*, *PID controller* and *Simulation & view* panels, LQR seeding, robust
+auto-tuning, restoring gains, resetting integrators, the experiment page with comparison
+plots and the results table, and opening/saving configurations, experiment results and
+CSV exports (through Android's file picker).
 
 ## Architecture
 
 ```
-pendulum_sim/physics, control, simulation   shared, Qt-free (unchanged behaviour)
-pendulum_sim/ui                              desktop UI – PendulumView/TelemetryPanel reused on Android
-pendulum_sim/mobile                          touch shell: window, touch view, entry point
+pendulum_sim/physics, control, simulation   shared, Qt-free
+pendulum_sim/ui                              desktop UI; MainWindow is built from overridable builders
+pendulum_sim/ui/file_io.py                   file dialogs + read/write that accept Android content:// URIs
+pendulum_sim/mobile/window.py                MobileWindow(MainWindow): touch layout, inherits every handler
+pendulum_sim/mobile/touch_view.py            PendulumView subclass: tap / drag / pinch, render resolution
+pendulum_sim/mobile/touch_style.py           finger-sized widgets, −/+ spin buttons, kinetic scrolling
+pendulum_sim/mobile/performance.py           drawing settings (saved per device) and frame timings
 android/main.py                              APK entry point (packaged as main.py)
 android/icon.svg, icon.png                   launcher icon (PNG rendered from the SVG)
 android/requirements-build.txt               host build tools (PySide6, buildozer, cython)
 android/Dockerfile                           Linux build environment
 scripts/build_android.py                     staging + pyside6-android-deploy + buildozer
+scripts/mobile_preview.py                    offscreen screenshots + drawing benchmark (CI)
 .github/workflows/android.yml                CI: debug APK on every push, signed AAB on tags
 ```
+
+`MobileWindow` subclasses the desktop `MainWindow` and replaces only the *builders*
+(layout, control bar, status bar, view class). Parameter edits, LQR/robust tuning,
+experiments, file handling and divergence handling are the desktop code, so a fix or
+feature there reaches both versions.
 
 Packaging uses Qt's official [`pyside6-android-deploy`](https://doc.qt.io/qtforpython-6/deployment/deployment-pyside6-android-deploy.html),
 which drives buildozer/python-for-android with the official PySide6 Android wheels.
 NumPy is compiled by its python-for-android recipe; pyqtgraph is pure Python.
 **SciPy is not bundled**: LQR gain seeding uses the NumPy Riccati solver in
 `pendulum_sim/control/riccati.py` when SciPy is missing (desktop keeps using SciPy;
-the two agree to ~1e-9, see `tests/test_riccati.py`).
+the two agree to ~1e-9, see `tests/test_riccati.py`). The robust auto-tuner runs in a
+single process on Android (no `multiprocessing` there), so it takes longer than on a
+multi-core desktop.
 
-Real-time pacing (`pendulum_sim/simulation/realtime.py`) keeps the physics at its
-fixed `dt`, independent of the 60 Hz display, clamps stalls to 0.1 s and limits physics
-work to 10 ms per frame. When the app goes to the background the timer and physics stop;
-on return the simulation continues in the state it had (no catch-up burst).
+Real-time pacing (`pendulum_sim/simulation/realtime.py`, also used by the desktop window)
+keeps the physics at its fixed `dt`, independent of the display, clamps stalls to 0.1 s and
+limits physics work to 10 ms per frame. When the app goes to the background the timer and
+physics stop; on return the simulation continues in the state it had (no catch-up burst).
 
 | | |
 |---|---|
@@ -45,28 +57,52 @@ on return the simulation continues in the state it had (no catch-up burst).
 | ABI | arm64-v8a (phones, tablets and Apple-Silicon emulators) |
 | PySide6 | 6.12.0 (pinned in `android/requirements-build.txt`) |
 
-## Touch controls
+## Using the app
 
-| Gesture / button | Effect |
+| Gesture / control | Effect |
 |---|---|
-| tap on the view | tip push (0.1 s, *push force*) towards the tapped side of the tip |
-| one-finger drag | continuous tip force pulling towards the finger (rubber band, capped at 4× push force) |
-| pinch | zoom about the fingers |
-| two-finger drag | pan |
-| ▶ Start / ⏸ Pause, ⟲ Reset, Step | run control (Step = one controller period) |
-| ◀ Push / Push ▶ | tip push left / right |
-| Fit | fit the pendulum into the view |
-| LQR | seed the PID gains from an LQR design for the current plant |
-| top bar | scenario and simulation speed |
+| tap on the pendulum view | tip push (0.1 s, *push force*) towards the tapped side of the tip |
+| one-finger drag on the view | continuous tip force pulling towards the finger (rubber band, capped at 4× push force) |
+| pinch / two-finger drag | zoom / pan the view |
+| ▶ Start · ⏸ Pause, ⟲ Reset, ⟳ Restart, Step | run control (Step = one controller period) |
+| ◀ Push, push force, Push ▶ | tip push left / right with the given force |
+| speed, Scenario… | simulation speed, load a demonstration |
+| ⚙ | show / hide the configuration panel (right in landscape, below in portrait) |
+| ☰ | open / save configuration, new from scenario, fit view, clear trajectories, timing read-out, about |
+| *Live* / *Experiments* tabs | live view + graphs / experiment runs and comparison |
+| *Graphs ▾* | choose the graphs (angular positions and control signal by default; all desktop graphs available) |
 
-Portrait shows the graphs below the pendulum, landscape beside it.
+Spin boxes have large − / + buttons; tap the number to type a value. On tablets the
+configuration panel is open at start, on phones it is hidden.
+
+### Performance settings
+
+*⚙ → Simulation → Performance (this device)* – saved on the device:
+
+| Setting | Effect |
+|---|---|
+| View resolution | *Native* draws the pendulum at the screen's full pixel density; *High* (1.5×), *Balanced* (1.25×) and *Fast* (1×) draw fewer pixels and scale up. *Fast* on a 2× screen is a plain pixel doubling and the cheapest. |
+| Graph refresh | upper limit (default 10 Hz); lowered automatically when frames get slow |
+| Frame rate | 60 or 30 fps |
+| Antialiased pendulum view | smooth edges; off is noticeably cheaper |
+| Timing read-out | top-right of the view: `fps · max <longest frame gap> │ physics · view · graphs` in ms per frame |
+
+The physics takes about 0.05 ms per step on a desktop CPU (≈1 ms per 60 Hz frame) and is not
+the bottleneck; drawing a 2880×1800 screen in software is. If the animation stutters, read the
+timing read-out: a large *graphs* value → fewer graphs or a lower graph refresh; a large *view*
+value → lower view resolution or no antialiasing.
 
 The mobile interface can be previewed on the desktop (mouse = one finger, wheel = zoom):
 
 ```bash
-python -m pendulum_sim.mobile             # phone-sized window
-python -m pendulum_sim.mobile --landscape
+python -m pendulum_sim.mobile                       # phone-sized window
+python -m pendulum_sim.mobile --tablet --landscape  # 1280×800 tablet
 ```
+
+CI renders the interface at a 2× pixel ratio for phone and tablet sizes and times the drawing
+(`scripts/mobile_preview.py`); the images and `benchmark.txt` are published as the
+[mobile-preview](https://github.com/aleksei-denisov/redesigned-chainsaw/releases/tag/mobile-preview)
+pre-release.
 
 ## Building
 
@@ -179,11 +215,12 @@ API 28 or newer (e.g. *Pixel 7, API 35, Google APIs ARM 64*). Start it, then
 
 ## Known limitations
 
-- **Phase 1 feature set**: no plant/PID/simulation-settings editors, no experiment mode, no
-  robust auto-tune and no configuration files on Android yet (all present on the desktop).
-  The auto-tuner will run single-process on Android (no `multiprocessing` support there).
+- Rendering is done by Qt's software rasteriser (as on the desktop); see *Performance settings*.
+- The robust auto-tuner runs single-process (slower than on a multi-core desktop).
+- Keyboard shortcuts of the desktop version are replaced by the touch bar and ☰ menu.
+- The desktop *Help → About* and window docking are not applicable; the configuration panel
+  is a collapsible side/bottom panel instead.
 - arm64-v8a only (no 32-bit devices; Qt dropped them).
 - Android 9+ only (Qt 6.8+ requirement; Android 8.x cannot run current Qt).
-- APK size is large (~100 MB+) because the PySide6 wheel is bundled whole; stripping unused
-  Qt modules is planned once the app is verified on devices.
+- APK size is large (~180 MB) because the PySide6 wheel is bundled whole.
 - First launch takes a few seconds while Python unpacks.

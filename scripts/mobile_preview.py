@@ -115,12 +115,59 @@ def main(out_dir: str) -> int:
     view_px = win.view.width(), win.view.height()
     report.append(f"Tablet landscape 1440×900 logical, view {view_px[0]}×{view_px[1]} logical, "
                   f"graphs {win.telemetry.width()}×{win.telemetry.height()} logical")
-    report.append(f"{'setting':34s} {'view ms':>8s}")
-    for render in ("native", "high", "balanced", "fast"):
-        for aa in (True, False):
-            win.apply_performance(PerformanceSettings(render=render, antialias=aa))
-            ms = timed(win.view.repaint, 40)
-            report.append(f"view {render:9s} antialias={str(aa):5s}        {ms:8.2f}")
+    report.append("Pendulum view: paint time inside paintEvent (excludes Qt's window flush)")
+    report.append(f"{'setting':44s} {'ms':>7s}")
+
+    class Collect:
+        def __init__(self):
+            self.samples = []
+
+        def add_view(self, ms):
+            self.samples.append(ms)
+
+    def view_paint_ms(repeat: int = 40) -> float:
+        c = Collect()
+        win.view.stats = c
+        win.view.repaint()
+        c.samples.clear()
+        for _ in range(repeat):
+            win.view.repaint()
+        win.view.stats = win.stats
+        return sum(c.samples) / len(c.samples)
+
+    for cache in (False, True):
+        win.view.cache_grid = cache
+        for render in ("native", "high", "balanced", "fast"):
+            for aa in (True, False):
+                win.apply_performance(PerformanceSettings(render=render, antialias=aa))
+                ms = view_paint_ms()
+                report.append(f"{render:9s} antialias={str(aa):5s} grid cache={str(cache):5s}        {ms:7.2f}")
+
+    # Breakdown of the scene at native resolution with antialiasing, grid cache on
+    win.apply_performance(PerformanceSettings(render="native", antialias=True))
+    win.view.cache_grid = True
+    parts = {}
+    originals = {}
+    for name in ("_draw_grid", "_draw_base", "_draw_equilibrium", "_draw_trails", "_draw_links",
+                 "_draw_force", "_draw_hud", "_draw_scale_bar", "_paint_overlay"):
+        fn = getattr(win.view, name)
+        originals[name] = fn
+
+        def wrapped(*a, _fn=fn, _name=name):
+            t = time.perf_counter()
+            try:
+                return _fn(*a)
+            finally:
+                parts[_name] = parts.get(_name, 0.0) + (time.perf_counter() - t) * 1000.0
+        setattr(win.view, name, wrapped)
+    n = 40
+    for _ in range(n):
+        win.view.repaint()
+    for name in originals:
+        delattr(win.view, name)
+    report.append("breakdown (native, antialias, grid cache):  " +
+                  "  ".join(f"{k[1:]} {v / n:.2f}" for k, v in parts.items()))
+    report.append(f"{'repaint() incl. window flush, native+AA+cache':44s} {timed(win.view.repaint, 20):7.2f}")
     win.apply_performance(PerformanceSettings())
     toggles = win.telemetry.toggles
     shown = {k for k, a in toggles.items() if a.isChecked()}

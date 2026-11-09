@@ -51,6 +51,10 @@ class TouchPendulumView(PendulumView):
         self._buffer: QImage | None = None
         self.stats = None                            # performance.FrameStats, optional
         self.overlay_text = ""                       # timing read-out, drawn top-right
+        self.cache_grid = True
+        self._grid_image: QImage | None = None
+        self._grid_key = None
+        self._grid_misses = 0
 
     # ------------------------------------------------------------ geometry
     def tip_world(self) -> np.ndarray | None:
@@ -217,6 +221,43 @@ class TouchPendulumView(PendulumView):
             p.end()
         if self.stats is not None:
             self.stats.add_view((time.perf_counter() - started) * 1000.0)
+
+    def _draw_grid(self, p: QPainter, dark: bool) -> None:
+        """Background + grid from a cached opaque image (redrawn only when the camera moves).
+
+        ~70 antialiased translucent full-height lines are one of the most expensive parts of
+        a frame on a high-density screen, yet they only change on pan/zoom/resize. The
+        cached image holds exactly what the base class draws, copied without blending.
+        """
+        if not self.cache_grid:
+            super()._draw_grid(p, dark)
+            return
+        dpr = p.device().devicePixelRatioF()
+        bg = self.palette().base().color()
+        key = (self.width(), self.height(), dpr, self.scale, float(self.camera[0]), float(self.camera[1]),
+               dark, bg.rgba(), self.antialias)
+        if key != self._grid_key:
+            self._grid_misses += 1
+            if self._grid_misses > 2:     # camera moving every frame (follow cart, gestures)
+                self._grid_key = key
+                self._grid_image = None
+                super()._draw_grid(p, dark)
+                return
+            img = QImage(max(1, round(self.width() * dpr)), max(1, round(self.height() * dpr)),
+                         QImage.Format.Format_RGB32)
+            img.setDevicePixelRatio(dpr)
+            img.fill(bg)
+            gp = QPainter(img)
+            gp.setRenderHint(QPainter.RenderHint.Antialiasing, self.antialias)
+            super()._draw_grid(gp, dark)
+            gp.end()
+            self._grid_image, self._grid_key = img, key
+        else:
+            self._grid_misses = 0
+            if self._grid_image is None:  # still moving: draw directly
+                super()._draw_grid(p, dark)
+                return
+        p.drawImage(0, 0, self._grid_image)
 
     def _paint_overlay(self, p: QPainter) -> None:
         if not self.overlay_text:
