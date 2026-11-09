@@ -152,3 +152,61 @@ def test_finite_runs_split_at_nan_and_wraps():
     assert finite_runs(np.array([170.0, 179, -179, -170])) == [slice(0, 4)]
     assert finite_runs(np.array([np.nan, np.nan])) == []
     assert finite_runs(np.array([np.nan, 1, np.nan, 2, 3, np.nan])) == [slice(1, 2), slice(3, 5)]
+
+
+# ------------------------------------------------------------ explorable plots
+def test_visible_slice_includes_one_sample_beyond_each_edge():
+    from pendulum_sim.mobile.plot_math import visible_slice
+
+    x = np.arange(10.0)
+    assert visible_slice(x, 2.5, 5.5) == slice(2, 7)
+    assert visible_slice(x, -5, 50) == slice(0, 10)
+    assert visible_slice(np.zeros(0), 0, 1) == slice(0, 0)
+
+
+def test_zoom_keeps_the_centre_in_place():
+    from pendulum_sim.mobile.plot_math import zoom_range
+
+    assert zoom_range(0.0, 10.0, 2.0, 5.0) == (2.5, 7.5)
+    lo, hi = zoom_range(0.0, 10.0, 2.0, 2.0)              # 2.0 stays at 20 % of the width
+    assert hi - lo == 5.0 and (2.0 - lo) / (hi - lo) == pytest.approx(0.2)
+    lo, hi = zoom_range(0.0, 10.0, 0.5, 5.0)              # zoom out
+    assert (lo, hi) == (-5.0, 15.0)
+    assert zoom_range(0.0, 1e-9, 1e6, 0.0, min_span=1e-6)[1] == pytest.approx(1e-6)
+
+
+def test_value_at_takes_the_nearest_sample():
+    from pendulum_sim.mobile.plot_math import value_at
+
+    x, y = np.arange(5.0), np.arange(5.0) * 2
+    assert value_at(x, y, 2.6) == 6.0 and value_at(x, y, 2.4) == 4.0
+    assert value_at(x, y, -3) == 0.0 and value_at(x, y, 99) == 8.0
+    assert np.isnan(value_at(np.zeros(0), np.zeros(0), 1.0))
+
+
+def test_extent_and_padding():
+    from pendulum_sim.mobile.plot_math import Curve, curves_extent, padded_range
+
+    c = [Curve(np.arange(5.0), np.array([0.0, 1.0, np.nan, 10.0, 2.0])), Curve(np.zeros(0), np.zeros(0))]
+    assert curves_extent(c) == (0.0, 4.0, 0.0, 10.0)
+    assert curves_extent(c, 0.0, 1.0) == (0.0, 4.0, 0.0, 1.0)     # y only near [0, 1]
+    lo, hi = padded_range(1.0, 1.0, 2.0)
+    assert hi - lo == pytest.approx(2.0 * 1.12) and (lo + hi) / 2 == pytest.approx(1.0)
+    assert padded_range(float("nan"), float("nan"), 2.0) == (-1.0, 1.0)
+
+
+def test_curves_csv_shared_and_separate_time(tmp_path):
+    import csv
+
+    from pendulum_sim.mobile.plot_math import Curve, write_curves_csv
+
+    t = np.arange(3.0)
+    path = tmp_path / "a.csv"
+    write_curves_csv(path, [Curve(t, np.array([1.0, np.nan, 3.0]), label="θ1"), Curve(t, np.ones(3), label="u")])
+    rows = list(csv.reader(path.open(encoding="utf-8")))
+    assert rows[0] == ["t_s", "θ1", "u"] and rows[2] == ["1", "", "1"] and len(rows) == 4
+    write_curves_csv(path, [Curve(t, t, label="run 1"), Curve(t[:2], t[:2], label="run 2")])
+    rows = list(csv.reader(path.open(encoding="utf-8")))
+    assert rows[0] == ["t_s (run 1)", "run 1", "t_s (run 2)", "run 2"] and rows[3] == ["2", "2", "", ""]
+    with pytest.raises(ValueError):
+        write_curves_csv(path, [])

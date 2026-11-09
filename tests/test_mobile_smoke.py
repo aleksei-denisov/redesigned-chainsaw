@@ -60,6 +60,9 @@ def win(mobile, app):
     mobile.navigate("simulate", remember=False)
     mobile._history.clear()
     mobile.load(scenario("single_cart_full"))
+    mobile.activateWindow()                  # another test's window may have taken the focus
+    if not mobile.timer.isActive():          # (application inactive → frame timer stopped)
+        mobile.timer.start()
     app.processEvents()
     return mobile
 
@@ -581,6 +584,62 @@ def test_typed_numbers_ignore_the_device_language(app):
     finally:
         QLocale.setDefault(old)
     app.processEvents()
+
+
+def test_tapping_a_graph_opens_the_explorer(win, app, tmp_path, monkeypatch):
+    from PySide6.QtCore import QEvent
+    from PySide6.QtGui import QKeyEvent
+    from PySide6.QtTest import QTest
+
+    from pendulum_sim.ui import file_io
+
+    win.navigate("graphs")
+    win.telemetry.set_selection(["angle", "control"])
+    win.start()
+    frames(win, app, 40)
+    chart = win.telemetry.charts["angle"]
+    QTest.mouseClick(chart, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, chart.rect().center())
+    app.processEvents()
+    ex = win.explorer
+    assert win.explorer_open() and ex.geometry() == win.rect() and ex.live_btn.isChecked()
+    plot = ex.plot
+    assert [c.label for c in plot.curves] == ["θ1"] and plot.curves[0].x.size > 10
+    x0, x1, _y0, _y1 = plot.view_range()
+    assert x1 == pytest.approx(plot.curves[0].x[-1]) and x1 - x0 == pytest.approx(win.telemetry.window_s)
+    advanced = chart.points_drawn
+    frames(win, app, 5)
+    assert chart.points_drawn == advanced, "graphs behind the explorer are not drawn"
+    # a drag freezes the view (no more following), zoom and read-out work, fit restores
+    plot.resize(plot.size())
+    QTest.mousePress(plot, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, plot.rect().center())
+    QTest.mouseMove(plot, plot.rect().center() + QPoint(80, 0))
+    QTest.mouseRelease(plot, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier,
+                       plot.rect().center() + QPoint(80, 0))
+    assert not ex.live_btn.isChecked() and not plot.fitted
+    frozen = plot.view_range()
+    plot.zoom(2.0, 1.0)
+    assert plot.view_range()[1] - plot.view_range()[0] == pytest.approx(0.5 * (frozen[1] - frozen[0]))
+    QTest.mouseClick(plot, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, plot.rect().center())
+    assert plot.cursor_x is not None and plot.values_at(plot.cursor_x)
+    img = plot.grab().toImage()
+    assert img.width() > 100
+    ex.fit_btn.click()
+    assert plot.fitted
+    # files: data (CSV) and image (PNG), each on its own
+    monkeypatch.setattr(file_io, "save_file_name", lambda parent, title, name, flt, suffix=None: tmp_path / name)
+    ex.data_btn.click()
+    ex.image_btn.click()
+    csv_text = (tmp_path / "angle.csv").read_text(encoding="utf-8").splitlines()
+    assert csv_text[0] == "t_s,θ1" and len(csv_text) > 10
+    assert (tmp_path / "angle.png").read_bytes()[:4] == b"\x89PNG"
+    ex.live_btn.click()
+    assert ex.live_btn.isChecked() and ex.timer.isActive()
+    # Back closes it; the graphs move again
+    QApplication.sendEvent(win, QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Back, Qt.KeyboardModifier.NoModifier))
+    assert not win.explorer_open() and win.current == "graphs" and not ex.timer.isActive()
+    frames(win, app, 5)
+    assert chart.points_drawn > advanced
+    win.pause()
 
 
 def test_loading_a_scenario_shows_the_busy_cover(win, app):

@@ -25,7 +25,7 @@ import math
 import time
 
 import numpy as np
-from PySide6.QtCore import QPointF, QRectF, QSettings, Qt, QTimer
+from PySide6.QtCore import QPointF, QRectF, QSettings, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetricsF, QImage, QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import (
     QComboBox,
@@ -107,8 +107,11 @@ class StripChart(GPUHost, QWidget):
     range, the size or the time window changes.
     """
 
+    tapped = Signal()               # a tap on the graph (opens it full-screen)
+
     def __init__(self, gdef: GraphDef, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self._tap_from: QPointF | None = None
         self.gdef = gdef
         self.series: list[Series] = []
         self.axis = AxisRange(gdef.min_span)
@@ -517,6 +520,15 @@ class StripChart(GPUHost, QWidget):
         self._static = img
 
     # ---------------------------------------------------------- paint
+    def mousePressEvent(self, event) -> None:  # noqa: N802 - touches arrive as mouse events
+        self._tap_from = event.position()
+        event.accept()
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        start, self._tap_from = self._tap_from, None
+        if start is not None and (event.position() - start).manhattanLength() < 16:
+            self.tapped.emit()
+
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
         self._resize_surface()
@@ -552,6 +564,8 @@ class StripChart(GPUHost, QWidget):
 
 class GraphsPanel(QWidget):
     """Selectable stack of :class:`StripChart` s fed from the telemetry recorder."""
+
+    chartOpened = Signal(str)       # a graph was tapped: open it full-screen (key)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -698,6 +712,23 @@ class GraphsPanel(QWidget):
             self.stats.add_graph((time.perf_counter() - started) * 1000.0, points=drawn)
         return drawn
 
+    def explore_curves(self, key: str) -> list:
+        """Copy of everything recorded for graph ``key`` (up to the telemetry buffer, ≥ 30 s)
+        as :class:`~.plot_math.Curve` s, for the full-screen explorer."""
+        from .plot_math import Curve
+
+        chart, tel = self.charts.get(key), self._tel
+        if chart is None or tel is None or len(tel) == 0:
+            return []
+        t = np.array(tel.column("t"), dtype=np.float64)
+        out = []
+        for s in chart.series:
+            y = np.array(tel.column(s.column), dtype=np.float64) * s.scale
+            if s.wrap:
+                y = wrap_degrees(y)
+            out.append(Curve(t, y, s.color, s.label, dashed=s.dashed, wrap=s.wrap))
+        return out
+
     def set_gpu(self, on: bool, samples: int = 0) -> None:
         """GPU drawing for every chart (current and future ones)."""
         self._gpu = (bool(on), samples)
@@ -775,11 +806,12 @@ class GraphsPanel(QWidget):
             chart = self.charts.get(key)
             if chart is None:
                 chart = self.charts[key] = StripChart(GRAPHS[key])
+                chart.tapped.connect(lambda k=key: self.chartOpened.emit(k))
             chart.window_s = self.window_s
             self._attach(chart)
             self.stack.addWidget(chart, 1)
             chart.show()
-        self.count_label.setText(f"{len(self.shown_keys())} of up to {MAX_VISIBLE} graphs")
+        self.count_label.setText(f"{len(self.shown_keys())} of up to {MAX_VISIBLE} graphs · tap one to explore")
         has_pid = "pid" in self.shown_keys()
         self.loop_box.setVisible(has_pid)
         self._rebuild_series()

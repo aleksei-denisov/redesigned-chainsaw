@@ -292,8 +292,12 @@ class NumberRow(QWidget):
         head.setSpacing(8)
         self.title = label(text)
         head.addWidget(self.title, 1)
-        # value: a flat button that turns into a numeric field when tapped
-        self.value_stack = QStackedLayout()
+        # value: a flat button that turns into a numeric field when tapped. The stacked
+        # layout gets its widget first: QStackedLayout shows the widget it is given, and a
+        # parentless widget that is shown becomes a window for a moment (70 value buttons
+        # flashed over the loading screen on Android)
+        vw = QWidget()
+        self.value_stack = QStackedLayout(vw)
         self.value_btn = QPushButton()
         self.value_btn.setProperty("flat", True)
         self.value_btn.setStyleSheet(f"QPushButton {{ background: transparent; border: none; "
@@ -309,8 +313,6 @@ class NumberRow(QWidget):
         self.edit.returnPressed.connect(self._end_edit)
         self.value_stack.addWidget(self.value_btn)
         self.value_stack.addWidget(self.edit)
-        vw = QWidget()
-        vw.setLayout(self.value_stack)
         vw.setMinimumWidth(88)
         head.addWidget(vw)
         outer.addLayout(head)
@@ -402,9 +404,12 @@ class NumberRow(QWidget):
     def _on_slider_released(self) -> None:
         self._commit(self._value)
 
-    def _on_slider_action(self, action: int) -> None:
-        # taps on the groove (page steps) commit at once
-        if action in (QSlider.SliderAction.SliderPageStepAdd, QSlider.SliderAction.SliderPageStepSub):
+    PAGE_ACTIONS = (QSlider.SliderAction.SliderPageStepAdd.value, QSlider.SliderAction.SliderPageStepSub.value)
+
+    def _on_slider_action(self, action) -> None:
+        # taps on the groove (page steps) commit at once; the signal carries a plain int,
+        # which never equals the (non-int) enum member – compare the values
+        if int(getattr(action, "value", action)) in self.PAGE_ACTIONS:
             QTimer.singleShot(0, lambda: self._commit(self._from_pos(self.slider.value() / SLIDER_STEPS)))
 
     @property

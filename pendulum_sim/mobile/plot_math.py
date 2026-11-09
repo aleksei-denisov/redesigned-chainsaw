@@ -290,3 +290,102 @@ def finite_runs(y: np.ndarray, wrap: bool = False, jump: float = 180.0) -> list[
     stops[:-1] = np.minimum(starts[1:], limit[:-1])
     stops[-1] = limit[-1]
     return [slice(int(a), int(b)) for a, b in zip(starts, stops) if b > a]
+
+
+# ------------------------------------------------- explorable plots (PlotView)
+@dataclass
+class Curve:
+    """One curve of a :class:`~pendulum_sim.mobile.plot_view.PlotView` (x must be ascending)."""
+
+    x: np.ndarray
+    y: np.ndarray
+    color: str = "#E0E0E0"
+    label: str = ""
+    dashed: bool = False
+    wrap: bool = False        # break the line at jumps > 180 (wrapped angles)
+    width: float = 1.6
+
+
+def visible_slice(x: np.ndarray, x0: float, x1: float) -> slice:
+    """Samples with ``x0 <= x <= x1`` plus one on each side (lines reach the edges)."""
+    if x.size == 0:
+        return slice(0, 0)
+    a = int(np.searchsorted(x, x0, side="left"))
+    b = int(np.searchsorted(x, x1, side="right"))
+    return slice(max(0, a - 1), min(x.size, b + 1))
+
+
+def curves_extent(curves: list[Curve], x0: float | None = None,
+                  x1: float | None = None) -> tuple[float, float, float, float]:
+    """(xmin, xmax, ymin, ymax) of the finite data; y only over ``[x0, x1]`` when given."""
+    xs, ys = [], []
+    for c in curves:
+        if c.x.size == 0:
+            continue
+        xs.append(c.x)
+        sl = visible_slice(c.x, x0, x1) if x0 is not None and x1 is not None else slice(None)
+        ys.append(c.y[sl])
+    xlo, xhi = finite_extent(xs)
+    ylo, yhi = finite_extent(ys)
+    return xlo, xhi, ylo, yhi
+
+
+def padded_range(lo: float, hi: float, min_span: float, pad: float = 0.06) -> tuple[float, float]:
+    """``[lo, hi]`` widened to at least ``min_span`` and padded on both sides."""
+    if not (math.isfinite(lo) and math.isfinite(hi)):
+        return -0.5 * min_span, 0.5 * min_span
+    centre, span = 0.5 * (lo + hi), max(hi - lo, min_span)
+    span *= 1.0 + 2.0 * pad
+    return centre - 0.5 * span, centre + 0.5 * span
+
+
+def zoom_range(lo: float, hi: float, factor: float, centre: float,
+               min_span: float = 1e-9, max_span: float = 1e12) -> tuple[float, float]:
+    """Zoom ``[lo, hi]`` by ``factor`` (> 1 zooms in) keeping ``centre`` in place."""
+    factor = max(factor, 1e-6)
+    span = min(max((hi - lo) / factor, min_span), max_span)
+    t = (centre - lo) / (hi - lo) if hi > lo else 0.5
+    new_lo = centre - t * span
+    return new_lo, new_lo + span
+
+
+def value_at(x: np.ndarray, y: np.ndarray, at: float) -> float:
+    """Value of the sample nearest to ``at`` (NaN when there is none)."""
+    if x.size == 0:
+        return math.nan
+    i = int(np.searchsorted(x, at))
+    if i >= x.size:
+        i = x.size - 1
+    elif i > 0 and abs(x[i - 1] - at) <= abs(x[i] - at):
+        i -= 1
+    return float(y[i])
+
+
+def write_curves_csv(path, curves: list[Curve], x_name: str = "t_s") -> None:
+    """CSV of the curves: one shared x column when all curves share x, else an x column each."""
+    import csv
+
+    if not curves:
+        raise ValueError("nothing to export")
+    shared = all(c.x.size == curves[0].x.size and np.array_equal(c.x, curves[0].x) for c in curves)
+    names = [c.label or f"curve {i + 1}" for i, c in enumerate(curves)]
+    with open(path, "w", newline="", encoding="utf-8") as fh:
+        w = csv.writer(fh)
+        if shared:
+            w.writerow([x_name, *names])
+            for row in zip(curves[0].x, *(c.y for c in curves)):
+                w.writerow(["" if not math.isfinite(v) else f"{v:.6g}" for v in row])
+            return
+        header = []
+        for name in names:
+            header += [f"{x_name} ({name})", name]
+        w.writerow(header)
+        n = max(c.x.size for c in curves)
+        for i in range(n):
+            row = []
+            for c in curves:
+                if i < c.x.size:
+                    row += [f"{c.x[i]:.6g}", "" if not math.isfinite(c.y[i]) else f"{c.y[i]:.6g}"]
+                else:
+                    row += ["", ""]
+            w.writerow(row)

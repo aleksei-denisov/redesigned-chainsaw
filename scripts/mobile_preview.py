@@ -142,6 +142,19 @@ def main(out_dir: str) -> int:
     page.verticalScrollBar().setValue(page.verticalScrollBar().maximum() // 2)
     shot("phone_portrait_system_scrolled")
     page.verticalScrollBar().setValue(0)
+    # Graph explorer (tap on a graph): live, then zoomed with a read-out
+    for size in ("tablet_landscape", "phone_portrait"):
+        win.resize(*SIZES[size])
+        win.navigate("graphs", remember=False)
+        win.open_graph("angle")
+        shot(f"{size}_graph_explorer")
+        plot = win.explorer.plot
+        plot.zoom(2.5, 1.5)
+        win.explorer._user_moved()
+        plot.cursor_x = 0.5 * (plot.view_range()[0] + plot.view_range()[1])
+        plot.update()
+        shot(f"{size}_graph_explorer_zoomed")
+        win.explorer.close_explorer()
     # Settings → Performance, with GPU (default) and with Software drawing (resolution row)
     from pendulum_sim.mobile.performance import PerformanceSettings
 

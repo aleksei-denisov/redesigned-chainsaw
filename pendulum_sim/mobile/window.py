@@ -403,6 +403,7 @@ class MobileWindow(MainWindow):
         st.saveAsRequested.connect(self.save_config_as)
         st.clearTrailsRequested.connect(self.view.clear_trails)
         st.perfTestRequested.connect(self.run_performance_test)
+        self.telemetry.chartOpened.connect(self.open_graph)
 
     # ========================================== UI <-> configuration hooks
     def _show_config(self, config: AppConfig) -> None:
@@ -477,8 +478,32 @@ class MobileWindow(MainWindow):
     def _nav_key(self, key: str) -> str:
         return key if (self._rail or key in PRIMARY) else "more"
 
+    # ======================================================= graph explorer
+    @property
+    def explorer(self):
+        """Full-window graph explorer (built on first use)."""
+        if getattr(self, "_explorer", None) is None:
+            from .plot_view import GraphExplorer
+
+            self._explorer = GraphExplorer(self, message=self.show_message)
+        return self._explorer
+
+    def explorer_open(self) -> bool:
+        return getattr(self, "_explorer", None) is not None and self._explorer.isVisible()
+
+    def open_graph(self, key: str) -> None:
+        """Graphs page → tap on a graph: full window, live until touched, then zoom/pan freely."""
+        chart = self.telemetry.charts.get(key)
+        if chart is None:
+            return
+        self.explorer.open_live(chart.gdef.title, chart.gdef.unit, lambda: self.telemetry.explore_curves(key),
+                                float(self.telemetry.window_s))
+
     def go_back(self) -> bool:
         """Android back; returns False when the app should ask before exiting."""
+        if self.explorer_open():
+            self._explorer.close_explorer()
+            return True
         if self.current == "autotune" and self._tune_busy():
             self.autotune.cancel()
             return True
@@ -572,6 +597,8 @@ class MobileWindow(MainWindow):
 
     def toast_bottom(self) -> int:
         """y (window coordinates) the toast must stay above: the current screen's control bar."""
+        if self.explorer_open():
+            return self._explorer.hint.mapTo(self, QPoint(0, 0)).y()
         bar = {"simulate": self.simulate_page.bar, "graphs": self.graphs_page.bar}.get(self.current)
         if self.current == "autotune" and self._autotune is not None:
             bar = getattr(self._autotune.pages.currentWidget(), "bar", None)
@@ -640,6 +667,8 @@ class MobileWindow(MainWindow):
     # ================================================================ layout
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
+        if self.explorer_open():
+            self._explorer.follow_parent()
         self._apply_orientation()
 
     def _apply_orientation(self) -> None:
@@ -734,7 +763,7 @@ class MobileWindow(MainWindow):
         # recover first (the next step catches up – the charts are time-based). A device that
         # simply runs below the target rate (e.g. 40 fps) still steps the graphs every frame.
         overran = gap > HITCH_FRAMES * self.perf.frame_interval_ms / 1000.0
-        if self.current == "graphs" and not overran:
+        if self.current == "graphs" and not overran and not self.explorer_open():
             # time-based: at most graph_fps steps per second, but every frame when the device
             # draws fewer frames than that (a frame-count divider halved the rate at 21 fps)
             self._graph_due -= gap
@@ -744,6 +773,8 @@ class MobileWindow(MainWindow):
         self.stats.frame(gap)
 
     def _update_view(self) -> None:
+        if self.explorer_open():               # covered by the explorer: nothing to draw
+            return
         # While paused the timer keeps running; redraw only when something changed
         # (parameter edits, reset, step). Camera gestures repaint the view themselves.
         sim = self.sim

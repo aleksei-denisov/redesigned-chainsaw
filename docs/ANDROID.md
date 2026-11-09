@@ -71,7 +71,7 @@ physics stop; on return the simulation continues in the state it had (no catch-u
 | Screen | Contents |
 |---|---|
 | **Simulate** | large pendulum view; Start/Pause, Reset, Restart, Step, push ← / force / →, speed, scenario, fit |
-| **Graphs** | up to four graphs (chips: angle, angular velocity, cart position/velocity, control force, control error, PID components, energy) next to (landscape) or below (portrait) the pendulum, with Start/Pause, Reset and pushes; time window 5–30 s |
+| **Graphs** | up to four graphs (chips: angle, angular velocity, cart position/velocity, control force, control error, PID components, energy) next to (landscape) or below (portrait) the pendulum, with Start/Pause, Reset and pushes; time window 5–30 s; **tap a graph** to open it full-window (explorer, below) |
 | **Controller** | auto-tune, seed from LQR, restore gains, reset integrators; LQR weights; controller settings; one section per PID loop (gains, P/I/D terms, derivative source, anti-windup, limits, live output) |
 | **System** | cart or fixed base, number of segments, gravity, cart and actuator, one section per segment, time step, telemetry, sensor noise |
 | **Auto-tune** | see below |
@@ -197,6 +197,29 @@ pinning off → turn it on; a large *screen* value with small parts → the uplo
 to the display (Qt draws widgets in software and uploads the changed area each frame); a
 large *max* with small parts → the system (a background app or thermal throttling) delayed
 the frame.
+
+### Graph explorer
+
+Tapping a graph on *Graphs* opens it over the whole window (`pendulum_sim/mobile/plot_view.py`,
+`GraphExplorer` around a `PlotView`). It shows everything still in the live recording (the
+last 30–60 s) and follows the running simulation (*Live*) until the plot is touched; then it
+freezes so the data stay put while exploring:
+
+| Gesture | Effect |
+|---|---|
+| pinch | zoom – sideways zooms time, up/down zooms values, diagonal both; the point between the fingers stays put |
+| one-finger drag | pan |
+| tap | read-out: cursor line with the value of every curve at that time |
+| double tap / *Fit* | all data |
+| *Live* | follow the simulation again (last *time window* seconds) |
+| *Image* / *Data* | save the graph as PNG / its curves as CSV (time + one column per curve) |
+| *Close* / Android back | back to *Graphs* |
+
+`PlotView` is QPainter only: each curve is reduced to two points per device-pixel column of
+the visible range (`downsample_minmax`), so a pan or pinch redraws in a few milliseconds
+whatever the length of the recording. While the explorer is open the graphs and the
+pendulum view behind it are not drawn (the simulation keeps running). The zoom/pan
+arithmetic, nearest-sample read-out and CSV writer are Qt-free (`plot_math.py`) and unit-tested.
 
 ### Measurements
 
@@ -400,6 +423,8 @@ API 28 or newer (e.g. *Pixel 7, API 35, Google APIs ARM 64*). Start it, then
   drawing resolution* only then;
 - tap a number, type it with "." or "," and tap anywhere else (slider, −/+, another row) or press
   *Done*: the value is taken, the field closes and the slider works again;
+- *Graphs*: tap a graph → full window, it follows the run; pinch sideways/up-down, drag, tap for
+  values, double-tap to fit, *Live* to follow again, *Image* / *Data* save PNG / CSV, back closes;
 - *Graphs*: select up to four, the fifth replaces the oldest; the choice survives a restart; the
   curves scroll smoothly (no 100 ms steps) and with 2–3 graphs the overlay stays at ~60 fps;
   *Settings → Diagnostics → Run performance test* → *Copy report*;
