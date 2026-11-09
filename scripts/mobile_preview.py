@@ -309,7 +309,7 @@ def main(out_dir: str) -> int:
             t0 = time.perf_counter()
             graphs.advance(win.sim.telemetry)
             for c in graphs.visible_charts():
-                c.repaint(c._plot.toAlignedRect())
+                c.repaint(c._trace_rect.toAlignedRect())
             steps.append((time.perf_counter() - t0) * 1000.0)
         win.timer.start()
         steps.sort()

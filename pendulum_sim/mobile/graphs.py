@@ -127,7 +127,8 @@ class StripChart(QWidget):
         self._static: QImage | None = None
         self._static_key = None
         self._plot = QRectF()
-        self._plot_px = (0, 0, 1, 1)    # plot rect in device pixels (x, y, w, h), integers
+        self._plot_px = (0, 0, 1, 1)    # trace area (inside the frame) in device pixels, integers
+        self._trace_rect = QRectF()     # the same in logical pixels
         self._trace: QImage | None = None
         self._trace_range: tuple[float, float] | None = None
         self._ring0 = 0                 # absolute column at image column 0
@@ -282,7 +283,7 @@ class StripChart(QWidget):
         self._last_y = [float(seg[2][-1]) for seg in segs]
         self._c_now = c_new
         self.points_drawn += drawn
-        self.update(self._plot.toAlignedRect())
+        self.update(self._trace_rect.toAlignedRect())
         return drawn
 
     def _update_data(self, t: np.ndarray, columns, now: float) -> None:
@@ -370,8 +371,11 @@ class StripChart(QWidget):
         # plot rect on whole device pixels: the trace image is copied 1:1 (no resampling)
         px = (round(r.left() * dpr), round(r.top() * dpr), max(1, round(r.width() * dpr)),
               max(1, round(r.height() * dpr)))
-        self._plot_px = px
-        self._plot = QRectF(px[0] / dpr, px[1] / dpr, px[2] / dpr, px[3] / dpr)
+        self._plot = QRectF(px[0] / dpr, px[1] / dpr, px[2] / dpr, px[3] / dpr)   # frame
+        b = max(1, round(dpr))                       # the trace fills the inside of the frame
+        self._plot_px = (px[0] + b, px[1] + b, max(1, px[2] - 2 * b), max(1, px[3] - 2 * b))
+        ix, iy, iw, ih = self._plot_px
+        self._trace_rect = QRectF(ix / dpr, iy / dpr, iw / dpr, ih / dpr)
         img = QImage(max(1, round(self.width() * dpr)), max(1, round(self.height() * dpr)),
                      QImage.Format.Format_RGB32)
         img.setDevicePixelRatio(dpr)
@@ -409,9 +413,10 @@ class StripChart(QWidget):
         axis = QColor(fg)
         axis.setAlpha(110)
         ticks, step = self._y_ticks(lo, hi)
-        sy = r.height() / (hi - lo)
+        inner = self._trace_rect
+        sy = inner.height() / (hi - lo)
         for v in ticks:
-            y = r.bottom() - (v - lo) * sy
+            y = inner.bottom() - (v - lo) * sy
             p.setPen(QPen(axis if abs(v) < 1e-12 else grid, 1))
             p.drawLine(QPointF(r.left(), y), QPointF(r.right(), y))
             p.setPen(fg)
@@ -421,15 +426,15 @@ class StripChart(QWidget):
         # time axis: −window … now
         xticks, xstep = nice_ticks(-self.window_s, 0.0, 5)
         sx = r.width() / self.window_s
-        for v in xticks:
+        for v in xticks:                             # tick marks below the frame (the plot scrolls)
             xx = r.left() + (v + self.window_s) * sx
-            p.setPen(QPen(grid, 1))
-            p.drawLine(QPointF(xx, r.top()), QPointF(xx, r.bottom()))
+            p.setPen(QPen(axis, 1))
+            p.drawLine(QPointF(xx, r.bottom()), QPointF(xx, r.bottom() + 4))
             p.setPen(fg)
             label = "now" if abs(v) < 1e-9 else f"{format_tick(v, xstep)} s"
             w = fm.horizontalAdvance(label)
             p.drawText(QPointF(min(max(xx - w / 2, r.left()), self.width() - w - 2),
-                               r.bottom() + fm.ascent() + 4), label)
+                               r.bottom() + fm.ascent() + 6), label)
         p.setPen(QPen(axis, 1))
         p.drawRect(r)
         p.end()
@@ -447,30 +452,19 @@ class StripChart(QWidget):
                 (-0.5 * self.gdef.min_span, 0.5 * self.gdef.min_span)
             self._ensure_static(lo, hi)
         p = QPainter(self)
-        plot = self._plot
-        if not plot.toAlignedRect().contains(event.rect()):
-            p.drawImage(0, 0, self._static)            # labels, legend, grid (only when needed)
-        dpr = self.devicePixelRatioF()
+        area = self._trace_rect
+        if not area.toAlignedRect().contains(event.rect()):
+            p.drawImage(0, 0, self._static)            # frame, labels, legend (only when needed)
         if self._trace is not None:
-            w = self._plot_px[2]
-            h = self._plot_px[3]
+            dpr = self.devicePixelRatioF()
+            w, h = self._plot_px[2], self._plot_px[3]
+            # with the screen's pixel ratio set on the image the copy is 1:1 in device pixels,
+            # which Qt does as a plain memory copy (a ratio-1 image would go through scaling)
+            self._trace.setDevicePixelRatio(dpr)
             for src_x, length, dst_x in ring_blits(self._c_now, self._ring0, w):
-                p.drawImage(QRectF(plot.left() + dst_x / dpr, plot.top(), length / dpr, h / dpr),
-                            self._trace, QRectF(src_x, 0, length, h))
-            # vertical time grid and the frame on top of the trace
-            fg = self.palette().text().color()
-            grid = QColor(fg)
-            grid.setAlpha(40)
-            p.setPen(QPen(grid, 0))
-            xticks, _ = nice_ticks(-self.window_s, 0.0, 5)
-            sx = plot.width() / self.window_s
-            for v in xticks:
-                xx = plot.left() + (v + self.window_s) * sx
-                p.drawLine(QPointF(xx, plot.top()), QPointF(xx, plot.bottom()))
-            axis = QColor(fg)
-            axis.setAlpha(110)
-            p.setPen(QPen(axis, 0))
-            p.drawRect(plot)
+                p.drawImage(QPointF(area.left() + dst_x / dpr, area.top()), self._trace,
+                            QRectF(src_x, 0, length, h))
+            self._trace.setDevicePixelRatio(1.0)
         p.end()
         self.paint_ms = (time.perf_counter() - started) * 1000.0
         if self.stats is not None:

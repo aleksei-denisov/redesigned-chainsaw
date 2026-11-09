@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import sys
 import time
 
 import numpy as np
@@ -64,6 +65,9 @@ if TYPE_CHECKING:
 
 DRAG_GAIN = 2.0          # drag force = DRAG_GAIN · push force · (offset / total length)
 DRAG_LIMIT = 4.0         # … clamped to ±DRAG_LIMIT · push force
+TIME_UPDATES = sys.version_info >= (3, 11)
+
+
 class _NoExperiments:
     """Stand-in when the Experiments screen was never opened (closing the window)."""
 
@@ -712,8 +716,14 @@ class MobileWindow(MainWindow):
                 f"view {s.view_ms.value:.1f} · graphs {s.graph_data_ms:.1f}+{s.graph_paint_ms:.1f} · "
                 f"screen {s.update_ms:.1f} ms/frame │ {self._cpu_text}")
 
-    def event(self, event) -> bool:  # noqa: D401 - Qt override
-        """Time each screen update (painting + composing + hand-over to the display)."""
+    def _timed_event(self, event) -> bool:
+        """``event()`` override (installed below): times each screen update.
+
+        Painting + composing + hand-over to the display. Not installed on Python 3.10:
+        there a Python ``event()`` that calls back into Qt, which then calls the Python
+        ``paintEvent`` s, crashed PySide6 while a worker thread was running Python (seen
+        on Windows CI; the APK runs Python 3.14).
+        """
         if event.type() == QEvent.Type.UpdateRequest:
             started = time.perf_counter()
             result = super().event(event)
@@ -734,3 +744,7 @@ class MobileWindow(MainWindow):
         super()._update_status()
         if self.perf.debug_overlay:
             self.view.overlay_text = self.timing_text()
+
+
+if TIME_UPDATES:
+    MobileWindow.event = MobileWindow._timed_event
