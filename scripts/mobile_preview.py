@@ -16,6 +16,8 @@ import sys
 import time
 from pathlib import Path
 
+ROOT = Path(__file__).resolve().parents[1]
+
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -69,6 +71,49 @@ def main(out_dir: str) -> int:
         win.grab().save(str(out / f"{name}.png"))
 
     report = [f"device pixel ratio {app.devicePixelRatio():g}", ""]
+
+    # Loading screen (what follows the native splash on Android)
+    from pendulum_sim.mobile.loading import LoadingScreen
+
+    for size in ("tablet_landscape", "phone_portrait"):
+        ls = LoadingScreen(steps=5)
+        ls.resize(*SIZES[size])
+        ls.show()
+        ls.step("Loading NumPy…")
+        ls.step("Loading physics engine…")
+        ls.grab().save(str(out / f"{size}_loading.png"))
+        ls.close()
+
+    # Start-up: the app as launched, in a fresh process (median of 3)
+    import subprocess
+    import statistics
+
+    runs = []
+    for _ in range(3):
+        res = subprocess.run([sys.executable, "-m", "pendulum_sim.mobile", "--startup-test"],
+                             capture_output=True, text=True, timeout=180,
+                             env=dict(os.environ, QT_QPA_PLATFORM="offscreen"), cwd=str(ROOT))
+        runs.append(res.stdout)
+    def total(text: str, step: str) -> float:
+        lines = [ln for ln in text.splitlines() if ln.rstrip().endswith(step)]
+        return float(lines[-1].split()[0]) if lines else float("nan")
+    report.append("Start-up in a fresh process (s since process start, median of 3)")
+    for step in ("Qt ready", "loading screen shown", "NumPy loaded", "physics, control and simulation loaded",
+                 "interface modules loaded", "screens built", "main window shown"):
+        report.append(f"  {step:42s} {statistics.median(total(r, step) for r in runs):6.2f}")
+    t0 = time.perf_counter()
+    probe = MobileWindow(scenario("single_cart_full"))
+    t1 = time.perf_counter()
+    probe.experiments
+    t2 = time.perf_counter()
+    probe.autotune
+    t3 = time.perf_counter()
+    report.append(f"  built on first use: Experiments {t2 - t1:.2f} s (pyqtgraph already imported here), "
+                  f"Auto-tune {t3 - t2:.2f} s; main window alone {t1 - t0:.2f} s")
+    report.append("")
+    probe.close()
+    probe.deleteLater()
+
     win = MobileWindow(scenario("triple_cart_lqr"))
     win.show()
     win.apply_performance(PerformanceSettings(render="native"))

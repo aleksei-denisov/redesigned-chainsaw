@@ -14,6 +14,7 @@ import math
 from dataclasses import replace
 
 from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QBoxLayout, QHBoxLayout, QSizePolicy, QToolButton, QVBoxLayout, QWidget
 
 from ..control import AntiWindup, ControlAction, ControllerConfig, DerivativeMode, LQRWeights, PIDLoopConfig
@@ -561,6 +562,12 @@ class SettingsPage(ScrollPage):
         self.perf_stats = debug.add(SwitchRow("Performance overlay", "fps and per-component frame time on the view"))
         self.perf_log = debug.add(SwitchRow("Log timings", "one line per second to the system log (adb logcat)"))
         self.cpu_label = debug.add(label("", "secondary"))
+        self.startup_label = debug.add(label("", "secondary"))
+        mono = QFont("monospace")
+        mono.setStyleHint(QFont.StyleHint.Monospace)
+        mono.setPixelSize(theme.SMALL_PX - 1)
+        self.startup_label.setFont(mono)
+        self.startup_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.add(debug)
         for row in (self.perf_render, self.perf_graph, self.perf_fps):
             row.changed.connect(lambda *_: self.performanceChanged.emit(self.performance()))
@@ -579,6 +586,12 @@ class SettingsPage(ScrollPage):
         values = {k: row.isChecked() for k, row in self.view_rows.items()}
         return replace(ViewSettings(), trail_length=int(self.trail_len.value()),
                        link_width_px=self.link_width.value(), **values)
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        from .startup import TIMER
+
+        self.startup_label.setText(TIMER.report())
 
     def set_performance(self, p: PerformanceSettings) -> None:
         self.perf_render.setValue(p.render)

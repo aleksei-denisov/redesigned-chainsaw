@@ -5,6 +5,7 @@ Pipeline (the same steps run in GitHub Actions and in the Docker image)::
     stage sources  →  fetch official PySide6/shiboken6 Android wheels
                    →  pyside6-android-deploy --init   (generates p4a recipes + buildozer.spec)
                    →  patch buildozer.spec            (app id, name, icon, API levels, requirements)
+                   →  python-for-android checkout     (pinned commit + native splash screen patch)
                    →  buildozer android debug|release →  dist/*.apk | dist/*.aab
 
 Requirements: Linux or macOS host, Python ≥ 3.10 with ``PySide6==<version>``,
@@ -39,6 +40,9 @@ STAGING = BUILD / "app"
 WHEELS = BUILD / "wheels"
 DIST = ROOT / "dist"
 ANDROID_DIR = ROOT / "android"
+P4A_DIR = BUILD / "python-for-android"
+P4A_URL = "https://github.com/kivy/python-for-android.git"
+SPLASH_BG = "#15181C"                      # = pendulum_sim/mobile/theme.py BG (seamless hand-over)
 
 APP_TITLE = "Inverted Pendulum Simulator"
 PACKAGE_DOMAIN = "com.adenisov"
@@ -144,7 +148,7 @@ def patch_buildozer_spec(version: str, release: bool) -> dict[str, str]:
     app.pop("version.filename", None)
     app["icon.filename"] = "%(source.dir)s/icon.png"
     app["presplash.filename"] = "%(source.dir)s/icon.png"
-    app["android.presplash_color"] = "#14213D"
+    app["android.presplash_color"] = SPLASH_BG
     app["orientation"] = "portrait, landscape, portrait-reverse, landscape-reverse"
     app["fullscreen"] = "0"
     app["android.api"] = str(TARGET_API)
@@ -159,13 +163,89 @@ def patch_buildozer_spec(version: str, release: bool) -> dict[str, str]:
     app["source.exclude_dirs"] = "deployment,bin,.buildozer,tests"
     app["android.release_artifact"] = "aab" if release else "apk"
     app["android.debug_artifact"] = "apk"
+    p4a = prepare_p4a(app.get("p4a.branch") or "master", app.get("p4a.commit", ""))
+    if p4a is not None:
+        app["p4a.source_dir"] = str(p4a)
     with spec_file.open("w", encoding="utf-8") as f:
         spec.write(f)
     summary = {k: app.get(k, "") for k in ("requirements", "android.api", "android.minapi",
-                                           "android.archs", "p4a.commit", "p4a.extra_args")}
+                                           "android.archs", "p4a.commit", "p4a.source_dir", "p4a.extra_args")}
     for k, v in summary.items():
         log.info("buildozer %s = %s", k, v)
     return summary
+
+
+# --------------------------------------------------------------- splash screen
+SPLASH_DRAWABLE = """<?xml version="1.0" encoding="utf-8"?>
+<!-- Native splash: logo and name centred on the app background (no scaling of the bitmap). -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@color/splash_background"/>
+    <item><bitmap android:gravity="center" android:src="@drawable/splash_logo"/></item>
+</layer-list>
+"""
+SPLASH_VALUES = f"""<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="splash_background">{SPLASH_BG}</color>
+    <!-- window background until Qt draws its first frame (and the Android 12+ system splash colour) -->
+    <style name="SplashTheme" parent="@android:style/Theme.NoTitleBar">
+        <item name="android:windowBackground">@drawable/splash</item>
+    </style>
+</resources>
+"""
+SPLASH_META = ('<meta-data android:name="android.app.splash_screen_drawable" '
+               'android:resource="@drawable/splash"/>')
+
+
+def prepare_p4a(branch: str, commit: str) -> Path | None:
+    """Check out python-for-android at the commit pyside6-android-deploy pinned, add the splash.
+
+    The Qt bootstrap's activity (Qt's QtActivity) shows the drawable named by the
+    ``android.app.splash_screen_drawable`` meta-data from launch until Qt draws its
+    first frame; the ``presplash`` options of python-for-android only apply to the SDL2
+    bootstrap. The patch is defensive: if the template has changed, the build goes on
+    without the native splash (the in-app loading screen still appears).
+    """
+    try:
+        if not (P4A_DIR / ".git").exists():
+            run(["git", "clone", "--filter=blob:none", "-b", branch, P4A_URL, str(P4A_DIR)], cwd=BUILD)
+        if commit:
+            run(["git", "-c", "advice.detachedHead=false", "checkout", "-f", commit], cwd=P4A_DIR)
+        else:
+            run(["git", "checkout", "-f", branch], cwd=P4A_DIR)
+    except (OSError, subprocess.CalledProcessError) as exc:
+        log.warning("could not prepare python-for-android (%s); buildozer clones it, no native splash", exc)
+        return None
+    patch_splash(P4A_DIR)
+    return P4A_DIR
+
+
+def patch_splash(p4a: Path) -> bool:
+    bootstrap = p4a / "pythonforandroid" / "bootstraps" / "qt" / "build"
+    template = bootstrap / "templates" / "AndroidManifest.tmpl.xml"
+    if not template.exists():
+        log.warning("no Qt bootstrap manifest template at %s: no native splash", template)
+        return False
+    text = template.read_text(encoding="utf-8")
+    if "splash_screen_drawable" not in text:
+        match = re.search(r"<activity\b[^>]*?>", text, re.S)
+        if match is None or match.group(0).endswith("/>"):
+            log.warning("activity element not found in %s: no native splash", template)
+            return False
+        tag = match.group(0)
+        if "android:theme=" in tag:
+            new_tag = re.sub(r'android:theme="[^"]*"', 'android:theme="@style/SplashTheme"', tag)
+        else:
+            new_tag = tag[:-1].rstrip() + '\n                  android:theme="@style/SplashTheme">'
+        text = text[:match.start()] + new_tag + "\n            " + SPLASH_META + text[match.end():]
+        template.write_text(text, encoding="utf-8")
+    res = bootstrap / "src" / "main" / "res"
+    for sub in ("drawable", "drawable-xhdpi", "values"):
+        (res / sub).mkdir(parents=True, exist_ok=True)
+    (res / "drawable" / "splash.xml").write_text(SPLASH_DRAWABLE, encoding="utf-8")
+    (res / "values" / "splash.xml").write_text(SPLASH_VALUES, encoding="utf-8")
+    shutil.copy2(ANDROID_DIR / "splash_logo.png", res / "drawable-xhdpi" / "splash_logo.png")
+    log.info("native splash added to the Qt bootstrap (%s)", template)
+    return True
 
 
 # ------------------------------------------------------------------- building

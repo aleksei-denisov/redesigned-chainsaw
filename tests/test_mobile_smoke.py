@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import sys
 import time
+from pathlib import Path
 
 import pytest
 
@@ -399,6 +400,59 @@ def test_every_screen_scrolls_by_touch_and_keeps_actions_reachable(win, app, siz
     win.autotune.pages.setCurrentIndex(0)
     win.navigate("simulate")
     win.resize(1280, 800)
+
+
+# ------------------------------------------------------------- start-up
+def test_loading_screen_steps_and_fades_into_the_window(app):
+    from PySide6.QtWidgets import QWidget as W
+
+    from pendulum_sim.mobile.loading import LoadingScreen
+
+    screen = LoadingScreen(steps=3)
+    screen.resize(412, 915)
+    screen.show()
+    for text in ("Loading NumPy…", "Loading physics engine…", "Building screens…"):
+        screen.step(text)
+        assert screen.status == text
+    screen.finish()
+    assert screen.bar.value() == screen.bar.maximum()
+    img = screen.grab().toImage()
+    assert img.pixelColor(img.width() // 2, img.height() // 2 - 100).name() != theme.BG.lower()   # logo drawn
+    window = W()
+    window.resize(412, 915)
+    window.show()
+    screen.fade_into(window, ms=100)
+    assert not screen.isVisible() and window._loading_cover.isVisible()
+    assert wait(app, lambda: window.findChildren(type(window._loading_cover)) == [], 5)
+    window.close()
+
+
+def test_start_up_needs_neither_pyqtgraph_nor_the_tuner(tmp_path):
+    """Experiments (pyqtgraph) and Auto-tune are built on first use, not at start-up."""
+    import subprocess
+
+    code = (
+        "import sys, os\n"
+        "os.environ['QT_QPA_PLATFORM'] = 'offscreen'\n"
+        "from pendulum_sim.mobile import startup\n"
+        "from PySide6.QtWidgets import QApplication\n"
+        "app = QApplication([])\n"
+        "from pendulum_sim.mobile.window import MobileWindow\n"
+        "from pendulum_sim.simulation import scenario\n"
+        "w = MobileWindow(scenario('single_cart_full'))\n"
+        "print('at start', 'pyqtgraph' in sys.modules, 'pendulum_sim.mobile.autotune_screen' in sys.modules)\n"
+        "w.experiments; w.autotune\n"
+        "print('after use', 'pyqtgraph' in sys.modules, 'pendulum_sim.mobile.autotune_screen' in sys.modules)\n"
+        "print('age', startup.process_age() is not None or sys.platform != 'linux')\n"
+        "w.close(); w.deleteLater(); app.processEvents()\n"
+        "os._exit(0)\n"
+    )
+    env = dict(os.environ, QT_QPA_PLATFORM="offscreen", PYTHONPATH=str(Path(__file__).resolve().parents[1]))
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env, timeout=120,
+                         cwd=tmp_path)
+    assert "at start False False" in out.stdout, out.stdout + out.stderr
+    assert "after use True True" in out.stdout, out.stdout + out.stderr
+    assert "age True" in out.stdout
 
 
 def test_all_icons_render(app):

@@ -22,6 +22,8 @@ is drawn.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import time
 
 import numpy as np
@@ -46,10 +48,8 @@ from PySide6.QtWidgets import (
 
 from ..control import ControllerConfig, LQRWeights
 from ..simulation import AppConfig
-from ..ui.experiment_panel import ExperimentPanel
 from ..ui.main_window import SPEEDS, MainWindow
-from . import cpu, theme
-from .autotune_screen import AutotuneScreen
+from . import cpu, startup, theme
 from .controls import NumberRow, make_kinetic, scroll_area, tool_button
 from .graphs import GraphsPanel
 from .icons import icon
@@ -57,8 +57,19 @@ from .pages import ControllerPage, GraphsPage, NavBar, SettingsPage, SimulatePag
 from .performance import FrameStats, PerformanceSettings, instrument_graphs
 from .touch_view import TouchPendulumView
 
+if TYPE_CHECKING:
+    from ..ui.experiment_panel import ExperimentPanel
+    from .autotune_screen import AutotuneScreen
+
 DRAG_GAIN = 2.0          # drag force = DRAG_GAIN · push force · (offset / total length)
 DRAG_LIMIT = 4.0         # … clamped to ±DRAG_LIMIT · push force
+class _NoExperiments:
+    """Stand-in when the Experiments screen was never opened (closing the window)."""
+
+    def shutdown(self) -> None:
+        pass
+
+
 RAIL_MIN_WIDTH = 900     # navigation rail from this window width on (landscape) …
 RAIL_MIN_HEIGHT = 560    # … when its seven items fit vertically
 PRIMARY = ["simulate", "graphs", "controller", "system"]
@@ -126,11 +137,11 @@ class MobileWindow(MainWindow):
         """Touch editors instead of the desktop panels (no desktop panel is created)."""
         self.view = self._create_view()
         self.telemetry = self._create_telemetry()
-        self.experiments = ExperimentPanel(lambda: self.config)
+        self._experiments = None               # Experiments and Auto-tune are built on first use
+        self._autotune = None                  # (pyqtgraph and the tuner are not needed at start-up)
         self.controller_page = ControllerPage()
         self.system_page = SystemPage()
         self.settings_page = SettingsPage()
-        self.autotune = AutotuneScreen(embedded=True)
 
     def _build_layout(self) -> None:
         self.perf = PerformanceSettings.load()
@@ -138,7 +149,6 @@ class MobileWindow(MainWindow):
         self.stats.on_second = self._on_stats_second
         self.view.stats = self.stats
         self.telemetry.stats = self.stats
-        instrument_graphs(self.stats)          # pyqtgraph plots on the experiment page
         self._last_drawn = None
         self._cpu_text = ""
         self._pinned: set[int] = set()
@@ -154,13 +164,18 @@ class MobileWindow(MainWindow):
         self.graphs_page = GraphsPage(self.view, self.telemetry, [self.g_run_btn, self.g_reset_btn,
                                                                   self.g_push_left_btn, self.g_push_right_btn])
         inner = QWidget()
-        el = QVBoxLayout(inner)
-        el.setContentsMargins(8, 8, 8, 8)
-        el.addWidget(self.experiments)
+        self._exp_layout = QVBoxLayout(inner)
+        self._exp_layout.setContentsMargins(8, 8, 8, 8)
+        self._exp_loading = QLabel("Loading experiments…")
+        self._exp_loading.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._exp_layout.addWidget(self._exp_loading, 1)
         experiments_page = scroll_area(inner)  # scrolls only when the screen is too low (phone landscape)
+        self.autotune_host = QWidget()
+        self._tune_layout = QVBoxLayout(self.autotune_host)
+        self._tune_layout.setContentsMargins(0, 0, 0, 0)
         self.pages: dict[str, QWidget] = {
             "simulate": self.simulate_page, "graphs": self.graphs_page, "controller": self.controller_page,
-            "system": self.system_page, "autotune": self.autotune, "experiments": experiments_page,
+            "system": self.system_page, "autotune": self.autotune_host, "experiments": experiments_page,
             "settings": self.settings_page,
         }
         self.stack = QStackedWidget()
@@ -184,11 +199,58 @@ class MobileWindow(MainWindow):
         self._arrange(rail=False)
         self.current = "simulate"
         self.nav.set_current("simulate")
-        # finger scrolling for the experiment page's settings column, lists and table
-        # (not for the plots: QGraphicsView is a scroll area too, but pans/zooms itself)
-        for area in self.experiments.findChildren(QAbstractScrollArea):
+
+    # ------------------------------------------------ screens built on first use
+    @property
+    def experiments(self) -> ExperimentPanel:
+        if self._experiments is None:
+            self._build_experiments()
+        return self._experiments
+
+    @property
+    def autotune(self) -> AutotuneScreen:
+        if self._autotune is None:
+            self._build_autotune()
+        return self._autotune
+
+    def _tune_busy(self) -> bool:
+        return self._autotune is not None and self._autotune.busy
+
+    def _build_experiments(self) -> None:
+        import pyqtgraph as pg
+
+        from ..ui.experiment_panel import ExperimentPanel
+
+        started = time.perf_counter()
+        pal = self.palette()
+        pg.setConfigOptions(antialias=True, background=pal.base().color(), foreground=pal.text().color())
+        panel = ExperimentPanel(lambda: self.config)
+        self._experiments = panel
+        self._exp_loading.hide()
+        self._exp_layout.addWidget(panel)
+        panel.set_settings(self.config.experiment)
+        panel.statusMessage.connect(self.show_message)
+        panel.apply_btn.clicked.connect(self._apply_experiment_gains)
+        # finger scrolling for the settings column, lists and table (not for the plots:
+        # QGraphicsView is a scroll area too, but pans/zooms itself)
+        for area in panel.findChildren(QAbstractScrollArea):
             if not isinstance(area, QGraphicsView):
                 make_kinetic(area)
+        instrument_graphs(self.stats)          # time the pyqtgraph plots of this page
+        self._orient_experiments()
+        startup.TIMER.note("experiments screen built", time.perf_counter() - started)
+
+    def _build_autotune(self) -> None:
+        from .autotune_screen import AutotuneScreen
+
+        started = time.perf_counter()
+        screen = AutotuneScreen(embedded=True)
+        self._autotune = screen
+        self._tune_layout.addWidget(screen)
+        screen.applyRequested.connect(self._apply_tuning_result)
+        screen.closed.connect(self._on_autotune_closed)
+        screen.runningChanged.connect(self._on_autotune_running)
+        startup.TIMER.note("auto-tune screen built", time.perf_counter() - started)
 
     def _arrange(self, rail: bool) -> None:
         """Navigation rail at the left (tablet landscape) or bar at the bottom."""
@@ -284,11 +346,6 @@ class MobileWindow(MainWindow):
         st.saveRequested.connect(self.save_config)
         st.saveAsRequested.connect(self.save_config_as)
         st.clearTrailsRequested.connect(self.view.clear_trails)
-        self.experiments.statusMessage.connect(self.show_message)
-        self.experiments.apply_btn.clicked.connect(self._apply_experiment_gains)
-        self.autotune.applyRequested.connect(self._apply_tuning_result)
-        self.autotune.closed.connect(self._on_autotune_closed)
-        self.autotune.runningChanged.connect(self._on_autotune_running)
 
     # ========================================== UI <-> configuration hooks
     def _show_config(self, config: AppConfig) -> None:
@@ -299,7 +356,8 @@ class MobileWindow(MainWindow):
         self.system_page.set_plant(config.plant)
         self.system_page.set_simulation(config.simulation)
         self.controller_page.set_config(config.controller)
-        self.experiments.set_settings(config.experiment)
+        if self._experiments is not None:
+            self._experiments.set_settings(config.experiment)
 
     def _ui_controller(self) -> ControllerConfig:
         return self.controller_page.config()
@@ -325,7 +383,7 @@ class MobileWindow(MainWindow):
         self.navigate(key)
 
     def navigate(self, key: str, remember: bool = True) -> None:
-        if key not in self.pages or (self.autotune.busy and key != "autotune"):
+        if key not in self.pages or (self._tune_busy() and key != "autotune"):
             self.nav.set_current(self._nav_key(self.current))
             return
         if remember and key != self.current:
@@ -340,7 +398,9 @@ class MobileWindow(MainWindow):
         self.nav.set_current(self._nav_key(key))
         if self.toast.isVisible():
             QTimer.singleShot(0, self.toast.place)
-        if key == "autotune" and not self.autotune.busy and self.autotune.config is None:
+        if key == "experiments" and self._experiments is None:
+            QTimer.singleShot(30, lambda: self.experiments)   # show the screen first, then build
+        if key == "autotune" and not self._tune_busy() and self.autotune.config is None:
             self.config.controller = self._ui_controller()
             self.autotune.open(self.config)
 
@@ -349,7 +409,7 @@ class MobileWindow(MainWindow):
 
     def go_back(self) -> bool:
         """Android back; returns False when the app should ask before exiting."""
-        if self.current == "autotune" and self.autotune.busy:
+        if self.current == "autotune" and self._tune_busy():
             self.autotune.cancel()
             return True
         if self._history:
@@ -383,7 +443,7 @@ class MobileWindow(MainWindow):
     def _on_robust_tune(self) -> None:
         """Controller → 'Auto-tune': its own screen (the desktop opens a dialog)."""
         self.config.controller = self._ui_controller()
-        if not self.autotune.busy:
+        if not self._tune_busy():
             self.autotune.open(self.config)
         self.navigate("autotune")
 
@@ -443,6 +503,8 @@ class MobileWindow(MainWindow):
     def toast_bottom(self) -> int:
         """y (window coordinates) the toast must stay above: the current screen's control bar."""
         bar = {"simulate": self.simulate_page.bar, "graphs": self.graphs_page.bar}.get(self.current)
+        if self.current == "autotune" and self._autotune is not None:
+            bar = getattr(self._autotune.pages.currentWidget(), "bar", None)
         if bar is not None and bar.isVisible():
             return bar.mapTo(self, QPoint(0, 0)).y()
         return self.stack.mapTo(self, QPoint(0, self.stack.height())).y()
@@ -504,10 +566,17 @@ class MobileWindow(MainWindow):
                                      else Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         if self.toast.isVisible():
             QTimer.singleShot(0, self.toast.place)
-        splitters = self.experiments.findChildren(QSplitter)
-        if splitters:      # experiment controls beside the plots in landscape, above them in portrait
-            splitters[0].setOrientation(Qt.Orientation.Horizontal if landscape else Qt.Orientation.Vertical)
+        self._orient_experiments()
         QTimer.singleShot(0, self.view.fit)
+
+    def _orient_experiments(self) -> None:
+        """Experiment controls beside the plots in landscape, above them in portrait."""
+        if self._experiments is None:
+            return
+        splitters = self._experiments.findChildren(QSplitter)
+        if splitters:
+            landscape = self.width() > self.height()
+            splitters[0].setOrientation(Qt.Orientation.Horizontal if landscape else Qt.Orientation.Vertical)
 
     def fit_to_screen(self) -> None:
         self.showMaximized()
@@ -524,7 +593,7 @@ class MobileWindow(MainWindow):
                 self._resume_on_activate = False
                 self.start()
         else:
-            if self.autotune.busy:
+            if self._tune_busy():
                 self.autotune.cancel()        # auto-tune is a foreground operation
             if self.running:
                 self._resume_on_activate = True
@@ -533,10 +602,12 @@ class MobileWindow(MainWindow):
             self.timer.stop()
 
     def closeEvent(self, event) -> None:  # noqa: N802
-        if self.autotune.busy:
+        if self._tune_busy():
             self.autotune.cancel()
             if self.autotune.worker is not None:
                 self.autotune.worker.wait(10000)
+        if self._experiments is None:          # MainWindow.closeEvent shuts it down: nothing to do
+            self._experiments = _NoExperiments()
         super().closeEvent(event)
 
     # ================================================================= frame

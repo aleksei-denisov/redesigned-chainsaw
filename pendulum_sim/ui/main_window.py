@@ -42,12 +42,9 @@ from ..simulation import (
 from ..simulation.realtime import RealtimeStepper
 from . import file_io
 from .controller_panel import ControllerPanel
-from .experiment_panel import ExperimentPanel
 from .pendulum_view import FrameData, PendulumView
 from .plant_panel import PlantPanel
 from .settings_panel import SettingsPanel
-from .telemetry_panel import TelemetryPanel
-from .tuning_dialog import RobustTuneDialog
 from .widgets import scrollable, spin
 
 FRAME_INTERVAL_MS = 16            # ~60 fps GUI refresh
@@ -93,12 +90,16 @@ class MainWindow(QMainWindow):
 
     def _create_telemetry(self):
         """Live graphs; must offer configure / set_output_limit / refresh like TelemetryPanel."""
+        from .telemetry_panel import TelemetryPanel   # pyqtgraph: imported when first needed
+
         return TelemetryPanel()
 
     def _create_widgets(self) -> None:
         """Create the view, graphs, experiment page and configuration panels (no layout)."""
         self.view = self._create_view()
         self.telemetry = self._create_telemetry()
+        from .experiment_panel import ExperimentPanel  # pyqtgraph: imported when first needed
+
         self.experiments = ExperimentPanel(lambda: self.config)
         self.plant_panel = PlantPanel()
         self.controller_panel = ControllerPanel()
@@ -450,6 +451,8 @@ class MainWindow(QMainWindow):
         was_running = self.running
         self.pause()                       # give the tuner all the CPU
         self.config.controller = self._ui_controller()
+        from .tuning_dialog import RobustTuneDialog
+
         dialog = RobustTuneDialog(self.config, self)
         accepted = dialog.exec() == QDialog.DialogCode.Accepted
         result = dialog.result_value

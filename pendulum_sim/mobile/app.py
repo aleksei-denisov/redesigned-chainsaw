@@ -33,6 +33,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--tablet", action="store_true", help="desktop preview at tablet size")
     parser.add_argument("--smoke-test", type=float, metavar="SECONDS", default=None,
                         help="run the simulation for SECONDS, then exit (CI)")
+    parser.add_argument("--startup-test", action="store_true",
+                        help="print the start-up times once the main window is up, then exit (CI)")
     args, _unknown = parser.parse_known_args(argv)  # Android may pass launcher arguments
     return args
 
@@ -54,6 +56,9 @@ def main(argv: list[str] | None = None) -> int:
         # (e.g. a password manager) is active; the simulator does not rely on it.
         os.environ.setdefault("QT_ANDROID_DISABLE_ACCESSIBILITY", "1")
 
+    from .startup import TIMER
+
+    from PySide6.QtCore import QTimer
     from PySide6.QtWidgets import QApplication
 
     app = QApplication.instance() or QApplication(sys.argv[:1])
@@ -63,21 +68,37 @@ def main(argv: list[str] | None = None) -> int:
     from . import theme
 
     theme.apply(app)        # dark palette, 16 dp text, 48 dp touch targets (no Python style hooks)
+    TIMER.mark("Qt ready")
 
+    from .loading import LoadingScreen
+
+    loading = LoadingScreen(steps=5)
+    _show(loading, args)
+    loading.step("Loading NumPy…")
+    TIMER.mark("loading screen shown")
     try:
-        import pyqtgraph as pg
+        import numpy  # noqa: F401
 
+        TIMER.mark("NumPy loaded")
+        loading.step("Loading physics engine…")
+        from .. import control, physics, simulation  # noqa: F401
+
+        TIMER.mark("physics, control and simulation loaded")
+        loading.step("Preparing user interface…")
         from ..simulation import DEFAULT_SCENARIO, SCENARIOS, scenario
         from .window import MobileWindow
 
-        pal = app.palette()
-        pg.setConfigOptions(antialias=True, background=pal.base().color(), foreground=pal.text().color())
+        TIMER.mark("interface modules loaded")
+        loading.step("Building screens…")
         key = args.scenario if args.scenario in SCENARIOS else DEFAULT_SCENARIO
         window = MobileWindow(scenario(key))
-        # Move everything created so far (Qt wrappers, pyqtgraph items, scenarios) out of the
-        # garbage collector's view so full collections stay short while the app runs.
+        TIMER.mark("screens built")
+        loading.step("Starting simulation…")
+        # Move everything created so far (Qt wrappers, scenarios) out of the garbage
+        # collector's view so full collections stay short while the app runs.
         gc.collect()
         gc.freeze()
+        loading.finish()
     except Exception:  # noqa: BLE001 - show any start-up failure on screen
         text = traceback.format_exc()
         print(text, file=sys.stderr, flush=True)
@@ -85,22 +106,35 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         window = _error_screen(app, text)
 
-    if IS_ANDROID:
-        window.showMaximized()
-    else:
-        long_edge, short_edge = (1280, 800) if args.tablet else (860, 400)
-        if args.landscape:
-            window.resize(long_edge, short_edge)
-        else:
-            window.resize(short_edge, long_edge)
-        window.show()
+    _show(window, args)
+    loading.fade_into(window)
+    TIMER.mark("main window shown")
+    QTimer.singleShot(0, lambda: TIMER.mark("first frame"))
 
-    if args.smoke_test is not None:
+    if args.startup_test:
+        def report() -> None:
+            print(TIMER.report(), flush=True)
+            app.quit()
+        QTimer.singleShot(500, report)
+        code = app.exec()
+    elif args.smoke_test is not None:
         code = _smoke_test(app, window, args.smoke_test)
     else:
         code = app.exec()
     _shutdown(app, window)
     return code
+
+
+def _show(widget, args) -> None:
+    if IS_ANDROID:
+        widget.showMaximized()
+    else:
+        long_edge, short_edge = (1280, 800) if args.tablet else (860, 400)
+        if args.landscape:
+            widget.resize(long_edge, short_edge)
+        else:
+            widget.resize(short_edge, long_edge)
+        widget.show()
 
 
 def _shutdown(app, window) -> None:

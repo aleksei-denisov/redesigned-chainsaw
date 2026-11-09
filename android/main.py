@@ -8,6 +8,7 @@ left untouched.
 
 import sys
 
+from pendulum_sim.mobile import startup  # noqa: F401  - first: start-up timing reference
 from pendulum_sim.mobile.app import main
 
 if __name__ == "__main__":

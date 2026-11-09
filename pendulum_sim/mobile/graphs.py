@@ -56,23 +56,35 @@ from .plot_math import (
     wrap_degrees,
 )
 
-try:  # zero-copy NumPy view of a QPolygonF (pyqtgraph's helpers, already a dependency)
-    from pyqtgraph.functions import create_qpolygonf, ndarray_from_qpolygonf
+try:  # zero-copy NumPy view of a QPolygonF's point array (as pyqtgraph does it, without importing it)
+    from shiboken6 import VoidPtr as _VoidPtr
 except ImportError:  # pragma: no cover
-    create_qpolygonf = ndarray_from_qpolygonf = None
+    _VoidPtr = None
 
 WINDOWS_S = [5, 10, 20, 30]
 
 
+def polygon_buffer(n: int) -> tuple[QPolygonF, np.ndarray | None]:
+    """A ``QPolygonF`` of ``n`` points and a writable ``(n, 2)`` float64 view of its memory."""
+    poly = QPolygonF()
+    if hasattr(poly, "resize"):
+        poly.resize(n)
+    else:  # pragma: no cover - older PySide6
+        poly.fill(QPointF(), n)
+    if n == 0 or _VoidPtr is None:
+        return poly, None
+    ptr = poly.data()
+    buf = np.frombuffer(_VoidPtr(0 if ptr is None else ptr, 16 * n, True), np.float64).reshape(n, 2)
+    return poly, buf
+
+
 def _polygon(xs: np.ndarray, ys: np.ndarray) -> QPolygonF:
     n = int(xs.size)
-    if create_qpolygonf is None:
+    poly, buf = polygon_buffer(n)
+    if buf is None:
         return QPolygonF([QPointF(float(a), float(b)) for a, b in zip(xs, ys)])
-    poly = create_qpolygonf(n)
-    if n:
-        buf = ndarray_from_qpolygonf(poly)
-        buf[:, 0] = xs
-        buf[:, 1] = ys
+    buf[:, 0] = xs
+    buf[:, 1] = ys
     return poly
 
 
