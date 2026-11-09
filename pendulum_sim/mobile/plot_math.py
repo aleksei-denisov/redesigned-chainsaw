@@ -234,3 +234,59 @@ def graph_series(key: str, n_segments: int, loop_labels: list[str], loop: int = 
         return [Series("kinetic", "ke", 1.0, AUX_COLORS[2]), Series("potential", "pe", 1.0, AUX_COLORS[3]),
                 Series("total", "energy", 1.0, AUX_COLORS[0])]
     raise KeyError(key)
+
+
+# ------------------------------------------------------- scrolling strip charts
+def ring_runs(first: int, last: int, ring0: int, width: int) -> list[tuple[int, int]]:
+    """Image column ranges ``(start, length)`` holding absolute columns ``first..last``.
+
+    A scrolling chart keeps its trace in a circular image of ``width`` columns; absolute
+    pixel column ``c`` lives at image column ``(c - ring0) mod width``. The result has
+    at most two runs (split where the ring wraps); empty when ``last < first``.
+    """
+    n = last - first + 1
+    if n <= 0 or width <= 0:
+        return []
+    if n >= width:
+        return [(0, width)]
+    start = (first - ring0) % width
+    if start + n <= width:
+        return [(start, n)]
+    return [(start, width - start), (0, n - (width - start))]
+
+
+def ring_blits(newest: int, ring0: int, width: int) -> list[tuple[int, int, int]]:
+    """``(src_x, length, dst_x)`` copies that put absolute column ``newest`` at the right edge.
+
+    The oldest visible column (``newest - width + 1``) lands at ``dst_x = 0``.
+    """
+    head = (newest - ring0) % width              # image column of the newest data
+    first = head + 1                              # image column of the oldest data
+    if first >= width:
+        return [(0, width, 0)]
+    return [(first, width - first, 0), (0, first, width - first)]
+
+
+def finite_runs(y: np.ndarray, wrap: bool = False, jump: float = 180.0) -> list[slice]:
+    """Index ranges of consecutive finite values (also split at wrap-around jumps)."""
+    n = y.size
+    if n == 0:
+        return []
+    ok = np.isfinite(y)
+    brk = np.zeros(n, dtype=bool)             # True where a new run must start at i
+    brk[0] = True
+    brk[1:] = ~ok[:-1]
+    if wrap and n > 1:
+        with np.errstate(invalid="ignore"):
+            brk[1:] |= np.abs(np.diff(y)) > jump
+    starts = np.flatnonzero(ok & brk)
+    if starts.size == 0:
+        return []
+    # each run ends before the next start or the next non-finite value
+    stops = np.empty_like(starts)
+    bad = np.flatnonzero(~ok)
+    nxt_bad = np.searchsorted(bad, starts, side="left")
+    limit = np.where(nxt_bad < bad.size, bad[np.minimum(nxt_bad, max(bad.size - 1, 0))] if bad.size else n, n)
+    stops[:-1] = np.minimum(starts[1:], limit[:-1])
+    stops[-1] = limit[-1]
+    return [slice(int(a), int(b)) for a, b in zip(starts, stops) if b > a]

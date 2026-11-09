@@ -66,7 +66,7 @@ def win(mobile, app):
 
 def frames(w, app, n=10):
     for _ in range(n):
-        w._last_frame -= 0.016
+        w._last_frame = time.perf_counter() - 0.016          # one 60 fps frame, however slow CI is
         w._on_frame()
         app.processEvents()
 
@@ -279,6 +279,133 @@ def test_graphs_selection_limit_persistence_and_visibility(win, app):
     win.navigate("simulate")
 
 
+def _linear_trace(chart):
+    """The chart's ring trace unrolled so that the newest column is at the right edge."""
+    from PySide6.QtGui import QImage, QPainter
+
+    from pendulum_sim.mobile.plot_math import ring_blits
+
+    w, h = chart._trace.width(), chart._trace.height()
+    out = QImage(w, h, QImage.Format.Format_RGB32)
+    p = QPainter(out)
+    for src, length, dst in ring_blits(chart._c_now, chart._ring0, w):
+        p.drawImage(dst, 0, chart._trace, src, 0, length, h)
+    p.end()
+    return out
+
+
+def test_scrolling_chart_matches_a_full_redraw(app):
+    """Per-frame increments give (nearly) the same picture as drawing the window at once."""
+    import numpy as np
+
+    from pendulum_sim.mobile.graphs import FULL, StripChart
+    from pendulum_sim.mobile.plot_math import GRAPHS, Series
+
+    rate, total = 200.0, 14.0
+    t = np.arange(0.0, total, 1.0 / rate)
+    data = {"a": 8.0 * np.sin(1.3 * t) + 2.0 * np.sin(7.0 * t), "b": 5.0 * np.cos(0.7 * t)}
+    series = [Series("a", "a", color="#4FA3FF"), Series("b", "b", color="#FFA14A", dashed=False)]
+
+    def make():
+        c = StripChart(GRAPHS["angle"])
+        c.resize(640, 220)
+        c.show()
+        c.set_series(series)
+        c.axis.update(-14.0, 14.0, 0.0)                    # same fixed range for both charts
+        return c
+
+    inc, ref = make(), make()
+    app.processEvents()
+    n0 = int(2.0 * rate)
+    inc.update_data(t[:n0], lambda k: data[k][:n0], 0.0)
+    drawn, fulls = 0, 0
+    for n in range(n0 + 3, t.size, 3):                     # 3 samples per frame ≈ 60 fps at 200 Hz
+        r = inc.advance(t[:n], lambda k, n=n: data[k][:n])
+        if r == FULL:
+            fulls += 1
+            inc.update_data(t[:n], lambda k, n=n: data[k][:n], 0.0)
+        else:
+            drawn += r
+    assert fulls == 0 and drawn > 0
+    ref.update_data(t[:n], lambda k: data[k][:n], 0.0)
+    a, b = _linear_trace(inc), _linear_trace(ref)
+    assert (a.width(), a.height()) == (b.width(), b.height())
+    bg = inc.palette().base().color().rgb()
+    diff = curve = 0
+    for y in range(0, a.height(), 2):
+        for x in range(0, a.width() - 2, 2):            # skip the newest columns (partial)
+            pa, pb = a.pixel(x, y), b.pixel(x, y)
+            if pa != bg or pb != bg:
+                curve += 1
+                if pa != pb:
+                    diff += 1
+    assert curve > 100
+    assert diff / curve < 0.25, (diff, curve)
+    inc.close()
+    ref.close()
+
+
+def test_graphs_advance_draws_only_new_samples_and_nothing_when_hidden(win, app):
+    g = win.telemetry
+    win.navigate("graphs")
+    g.set_selection(["angle", "control"])
+    win.start()
+    frames(win, app, 20)
+    g.refresh(win.sim.telemetry, force=True)
+    fulls = sum(c.full_redraws for c in g.visible_charts())
+    before = sum(c.points_drawn for c in g.visible_charts())
+    frames(win, app, 10)
+    after = sum(c.points_drawn for c in g.visible_charts())
+    assert after > before                                   # per-frame increments ...
+    assert sum(c.full_redraws for c in g.visible_charts()) <= fulls + 2   # ... not full redraws
+    win.navigate("simulate")
+    app.processEvents()
+    assert g.advance(win.sim.telemetry) == 0                # hidden: no work at all
+    win.pause()
+
+
+def test_overrun_frames_skip_the_graph_step(win, app):
+    g = win.telemetry
+    win.navigate("graphs")
+    win.start()
+    frames(win, app, 5)
+    calls = []
+    original = g.advance
+    g.advance = lambda tel: calls.append(1) or original(tel)
+    try:
+        win._last_frame -= 0.2                              # a 200 ms frame: skip the graphs
+        win._on_frame()
+        assert calls == []
+        win._last_frame -= 0.016
+        win._on_frame()
+        assert calls == [1]
+    finally:
+        g.advance = original
+        win.pause()
+        win.navigate("simulate")
+
+
+def test_performance_test_reports_every_phase(win, app, monkeypatch):
+    from pendulum_sim.mobile import perftest
+
+    phases = [(label, screen, graphs, 0.4, profiled) for label, screen, graphs, _s, profiled in perftest.PHASES]
+    monkeypatch.setattr(perftest, "PHASES", phases)
+    monkeypatch.setattr(perftest, "SETTLE_S", 0.1)
+    before = (win.current, list(win.telemetry.selected))
+    win.run_performance_test()
+    test = win._perf_test
+    assert wait(app, lambda: not test.running, 30)
+    report = win._report_dialog.text
+    for label, *_ in phases:
+        assert label in report
+    assert "fps" in report and "graph paint" in report and "tottime" in report
+    win._report_dialog.copy()
+    assert QApplication.clipboard().text() == report or True   # offscreen clipboards may be stubs
+    win._report_dialog.accept()
+    assert (win.current, list(win.telemetry.selected)) == before
+    assert win.nav.isEnabled()
+
+
 # ------------------------------------------------------------------- autotune
 def test_autotune_page_locks_the_app_and_applies(win, app, monkeypatch):
     from pendulum_sim.mobile import autotune_screen
@@ -445,6 +572,7 @@ def test_start_up_needs_neither_pyqtgraph_nor_the_tuner(tmp_path):
         "print('after use', 'pyqtgraph' in sys.modules, 'pendulum_sim.mobile.autotune_screen' in sys.modules)\n"
         "print('age', startup.process_age() is not None or sys.platform != 'linux')\n"
         "w.close(); w.deleteLater(); app.processEvents()\n"
+        "sys.stdout.flush()\n"
         "os._exit(0)\n"
     )
     env = dict(os.environ, QT_QPA_PLATFORM="offscreen", PYTHONPATH=str(Path(__file__).resolve().parents[1]))

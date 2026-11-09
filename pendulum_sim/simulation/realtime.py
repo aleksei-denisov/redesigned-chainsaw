@@ -37,6 +37,7 @@ class RealtimeStepper:
         self.accum = 0.0
         self.realtime_factor = 0.0   # smoothed simulated-time / wall-time ratio
         self.physics_ms = 0.0        # smoothed physics compute time per frame
+        self.last_ms = 0.0           # physics compute time of the last frame
 
     def reset_clock(self) -> None:
         """Forget any accumulated time (call on start/resume)."""
@@ -68,5 +69,6 @@ class RealtimeStepper:
         else:
             self.accum -= done * dt
         self.realtime_factor = 0.9 * self.realtime_factor + 0.1 * (done * dt / wall)
-        self.physics_ms = 0.9 * self.physics_ms + 0.1 * (self.clock() - started) * 1000.0
+        self.last_ms = (self.clock() - started) * 1000.0
+        self.physics_ms = 0.9 * self.physics_ms + 0.1 * self.last_ms
         return done

@@ -504,6 +504,7 @@ class SettingsPage(ScrollPage):
     saveRequested = Signal()
     saveAsRequested = Signal()
     clearTrailsRequested = Signal()
+    perfTestRequested = Signal()
 
     def __init__(self) -> None:
         super().__init__()
@@ -552,7 +553,8 @@ class SettingsPage(ScrollPage):
         self.perf_render = perf.add(ChoiceRow("Pendulum drawing resolution",
                                               list(RENDER_LABELS.items()),
                                               hint="Native is sharpest; lower only if the view stutters"))
-        self.perf_graph = perf.add(ChoiceRow("Graph refresh (maximum)", [(hz, f"{hz} Hz") for hz in GRAPH_RATES_HZ]))
+        self.perf_graph = perf.add(ChoiceRow("Graph animation", [(hz, f"{hz} Hz") for hz in GRAPH_RATES_HZ],
+                                             hint="how often the graphs scroll; lower only if they cost too much"))
         self.perf_fps = perf.add(ChoiceRow("Frame rate", [(f, f"{f} fps") for f in FRAME_RATES]))
         self.perf_aa = perf.add(SwitchRow("Antialiased pendulum view"))
         self.perf_cores = perf.add(SwitchRow("Use performance CPU cores",
@@ -562,6 +564,10 @@ class SettingsPage(ScrollPage):
         self.perf_stats = debug.add(SwitchRow("Performance overlay", "fps and per-component frame time on the view"))
         self.perf_log = debug.add(SwitchRow("Log timings", "one line per second to the system log (adb logcat)"))
         self.cpu_label = debug.add(label("", "secondary"))
+        self.perf_test_btn = debug.add(push_button("Run performance test", "speed"))
+        self.perf_test_btn.clicked.connect(self.perfTestRequested)
+        debug.add(label("About 30 s: runs the simulation on Simulate and on Graphs with 2–4 graphs, "
+                        "then shows a report you can copy.", "secondary"))
         self.startup_label = debug.add(label("", "secondary"))
         mono = QFont("monospace")
         mono.setStyleHint(QFont.StyleHint.Monospace)
@@ -595,7 +601,7 @@ class SettingsPage(ScrollPage):
 
     def set_performance(self, p: PerformanceSettings) -> None:
         self.perf_render.setValue(p.render)
-        self.perf_graph.setValue(p.graph_hz)
+        self.perf_graph.setValue(p.graph_fps)
         self.perf_fps.setValue(p.fps)
         for row, on in ((self.perf_aa, p.antialias), (self.perf_cores, p.fast_cores),
                         (self.perf_stats, p.debug_overlay), (self.perf_log, p.log_stats)):
@@ -603,7 +609,7 @@ class SettingsPage(ScrollPage):
 
     def performance(self) -> PerformanceSettings:
         return PerformanceSettings(render=self.perf_render.value() or "native",
-                                   graph_hz=self.perf_graph.value() or 10, fps=self.perf_fps.value() or 60,
+                                   graph_fps=self.perf_graph.value() or 60, fps=self.perf_fps.value() or 60,
                                    antialias=self.perf_aa.isChecked(), debug_overlay=self.perf_stats.isChecked(),
                                    log_stats=self.perf_log.isChecked(), fast_cores=self.perf_cores.isChecked())
 

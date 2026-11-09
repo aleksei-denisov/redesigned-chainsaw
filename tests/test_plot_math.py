@@ -117,3 +117,38 @@ def test_cpu_helpers_are_safe_everywhere():
     assert cpu._ranges([0, 1, 2, 4, 6, 7]) == "0–2,4,6–7"
     text = cpu.describe()
     assert isinstance(text, str) and text
+
+
+# ------------------------------------------------------- scrolling strip charts
+def test_ring_runs_split_at_the_wrap():
+    from pendulum_sim.mobile.plot_math import ring_runs
+
+    assert ring_runs(5, 7, 0, 10) == [(5, 3)]
+    assert ring_runs(8, 12, 0, 10) == [(8, 2), (0, 3)]
+    assert ring_runs(13, 14, 3, 10) == [(0, 2)]
+    assert ring_runs(0, 50, 0, 10) == [(0, 10)]          # more than the ring: everything
+    assert ring_runs(5, 4, 0, 10) == []
+
+
+def test_ring_blits_put_the_newest_column_at_the_right_edge():
+    from pendulum_sim.mobile.plot_math import ring_blits
+
+    w = 10
+    for ring0 in (0, 3, -7):
+        for newest in range(ring0 + w - 1, ring0 + 3 * w):
+            blits = ring_blits(newest, ring0, w)
+            assert sum(length for _s, length, _d in blits) == w
+            # the destination column w-1 shows image column (newest - ring0) mod w
+            for src, length, dst in blits:
+                if dst <= w - 1 < dst + length:
+                    assert src + (w - 1 - dst) == (newest - ring0) % w
+
+
+def test_finite_runs_split_at_nan_and_wraps():
+    from pendulum_sim.mobile.plot_math import finite_runs
+
+    assert finite_runs(np.array([1.0, 2, np.nan, 3, 4, 5])) == [slice(0, 2), slice(3, 6)]
+    assert finite_runs(np.array([170.0, 179, -179, -170]), wrap=True) == [slice(0, 2), slice(2, 4)]
+    assert finite_runs(np.array([170.0, 179, -179, -170])) == [slice(0, 4)]
+    assert finite_runs(np.array([np.nan, np.nan])) == []
+    assert finite_runs(np.array([np.nan, 1, np.nan, 2, 3, np.nan])) == [slice(1, 2), slice(3, 5)]

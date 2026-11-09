@@ -274,7 +274,8 @@ def main(out_dir: str) -> int:
         2: (["angle", "control"], {"angles", "control"}),
         4: (["angle", "angular_velocity", "cart_position", "control"], {"angles", "velocities", "cart", "control"}),
     }
-    report.append(f"Graphs in {gw}×{gh} logical: one refresh = update data + paint (ms)")
+    report.append(f"Graphs in {gw}×{gh} logical (ms). pyqtgraph: one refresh; strip charts: full redraw "
+                  "(only on range/size changes) and the per-frame scroll step (new samples + plot-area paint)")
     for n, (new_keys, old_keys) in selections.items():
         graphs.set_selection(new_keys)
         for k, a in old.toggles.items():
@@ -296,9 +297,23 @@ def main(out_dir: str) -> int:
             ms = timed(new_refresh, 30)
             charts = graphs.visible_charts()
             builds = sum(c.static_builds for c in charts) - builds0
-            line += (f"   strip charts {mode}: {ms:6.2f} (data {sum(c.update_ms for c in charts):.2f} · "
+            line += (f"   full redraw {mode}: {ms:6.2f} (data {sum(c.update_ms for c in charts):.2f} · "
                      f"paint {sum(c.paint_ms for c in charts):.2f} · static rebuilds {builds}/31)")
         graphs.pen_mode = "fast"
+        # per-frame scroll step: 1/60 s of simulation, then advance + repaint of the plot areas
+        win.timer.stop()
+        win.start()
+        steps = []
+        for _ in range(90):
+            win.stepper.tick(win.sim, 1 / 60, 1.0)
+            t0 = time.perf_counter()
+            graphs.advance(win.sim.telemetry)
+            for c in graphs.visible_charts():
+                c.repaint(c._plot.toAlignedRect())
+            steps.append((time.perf_counter() - t0) * 1000.0)
+        win.timer.start()
+        steps.sort()
+        line += f"   scroll step: mean {sum(steps) / len(steps):5.2f}, p95 {steps[int(0.95 * len(steps))]:5.2f}"
         report.append(line)
         if n == 4:
             win.grab().save(str(out / "tablet_landscape_four_graphs.png"))
@@ -331,6 +346,21 @@ def main(out_dir: str) -> int:
         label = key + (f" ({len(sel)} graphs)" if sel else "")
         report.append(f"  {label:24s} mean {sum(busy) / len(busy):6.2f}   p95 {busy[int(0.95 * len(busy))]:6.2f}"
                       f"   max {busy[-1]:6.2f}")
+    # the on-device performance test, shortened (same report as Settings → Debug)
+    from pendulum_sim.mobile import perftest
+
+    perftest.PHASES = [(lbl, scr, g, 2.0, prof) for lbl, scr, g, _s, prof in perftest.PHASES]
+    test = perftest.PerformanceTest(win)
+    result = {}
+    test.finished.connect(lambda text: result.setdefault("text", text))
+    test.start()
+    deadline = time.perf_counter() + 120
+    while "text" not in result and time.perf_counter() < deadline:
+        app.processEvents()
+        time.sleep(0.002)
+    report.append("")
+    report.append(result.get("text", "performance test did not finish"))
+    report.append("")
     report.append(f"{'whole window repaint, Graphs screen':34s} {timed(win.repaint, 10):8.2f}")
     win.navigate("simulate", remember=False)
     settle(win, 0.3)

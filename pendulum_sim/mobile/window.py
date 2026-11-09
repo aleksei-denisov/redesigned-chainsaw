@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING
 import time
 
 import numpy as np
-from PySide6.QtCore import QPoint, QSize, Qt, QTimer
+from PySide6.QtCore import QEvent, QPoint, QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QGuiApplication
 from PySide6.QtWidgets import (
     QAbstractScrollArea,
@@ -39,6 +39,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QSplitter,
     QStackedWidget,
     QToolButton,
@@ -78,6 +79,47 @@ NAV_ITEMS = [("simulate", "Simulate", "simulate"), ("graphs", "Graphs", "graphs"
              ("controller", "Controller", "controller"), ("system", "System", "system"),
              ("autotune", "Auto-tune", "autotune"), ("experiments", "Experiments", "experiments"),
              ("settings", "Settings", "settings"), ("more", "More", "more")]
+
+
+class ReportDialog(QDialog):
+    """Monospace report with Copy and Close (fills most of the window)."""
+
+    def __init__(self, title: str, text: str, parent: QWidget) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.text = text
+        v = QVBoxLayout(self)
+        body = QLabel(text)
+        mono = body.font()
+        mono.setFamily("monospace")
+        mono.setStyleHint(mono.StyleHint.Monospace)
+        mono.setPixelSize(theme.SMALL_PX - 1)
+        body.setFont(mono)
+        body.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        body.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        holder = QWidget()
+        hl = QVBoxLayout(holder)
+        hl.addWidget(body)
+        hl.addStretch(1)
+        area = scroll_area(holder)
+        area.widget().setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+        area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        v.addWidget(area, 1)
+        row = QHBoxLayout()
+        self.copy_btn = QPushButton("Copy report")
+        self.copy_btn.setProperty("primary", True)
+        close = QPushButton("Close")
+        row.addWidget(close)
+        row.addWidget(self.copy_btn, 1)
+        v.addLayout(row)
+        self.copy_btn.clicked.connect(self.copy)
+        close.clicked.connect(self.accept)
+        r = parent.rect()
+        self.resize(max(320, int(r.width() * 0.92)), max(300, int(r.height() * 0.85)))
+
+    def copy(self) -> None:
+        QGuiApplication.clipboard().setText(self.text)
+        self.copy_btn.setText("Copied")
 
 
 class Toast(QLabel):
@@ -139,14 +181,18 @@ class MobileWindow(MainWindow):
         self.telemetry = self._create_telemetry()
         self._experiments = None               # Experiments and Auto-tune are built on first use
         self._autotune = None                  # (pyqtgraph and the tuner are not needed at start-up)
+        startup.TIMER.mark("  view and graphs created")
         self.controller_page = ControllerPage()
         self.system_page = SystemPage()
         self.settings_page = SettingsPage()
+        startup.TIMER.mark("  editor screens created")
 
     def _build_layout(self) -> None:
         self.perf = PerformanceSettings.load()
         self.stats = FrameStats()
         self.stats.on_second = self._on_stats_second
+        self.stats.physics_source = lambda: self.stepper.last_ms
+        self._graph_frame = 0
         self.view.stats = self.stats
         self.telemetry.stats = self.stats
         self._last_drawn = None
@@ -199,6 +245,7 @@ class MobileWindow(MainWindow):
         self._arrange(rail=False)
         self.current = "simulate"
         self.nav.set_current("simulate")
+        startup.TIMER.mark("  layout and navigation built")
 
     # ------------------------------------------------ screens built on first use
     @property
@@ -346,6 +393,7 @@ class MobileWindow(MainWindow):
         st.saveRequested.connect(self.save_config)
         st.saveAsRequested.connect(self.save_config_as)
         st.clearTrailsRequested.connect(self.view.clear_trails)
+        st.perfTestRequested.connect(self.run_performance_test)
 
     # ========================================== UI <-> configuration hooks
     def _show_config(self, config: AppConfig) -> None:
@@ -532,6 +580,24 @@ class MobileWindow(MainWindow):
             self.view.overlay_text = ""
         self.view.update()
 
+    def run_performance_test(self) -> None:
+        """Settings → Debug: ~30 s scripted measurement, then a copyable report."""
+        from .perftest import PerformanceTest
+
+        if getattr(self, "_perf_test", None) is not None and self._perf_test.running:
+            return
+        self._perf_test = PerformanceTest(self)
+        self._perf_test.progress.connect(lambda text: self.show_message(f"Performance test {text}", 6000))
+        self._perf_test.finished.connect(self._show_report)
+        self.nav.setEnabled(False)
+        self._perf_test.start()
+
+    def _show_report(self, text: str) -> None:
+        self.nav.setEnabled(not self._tune_busy())
+        dialog = ReportDialog("Performance test", text, self)
+        dialog.open()
+        self._report_dialog = dialog
+
     def _on_performance_edited(self, perf: PerformanceSettings) -> None:
         self.apply_performance(perf)
         perf.save()
@@ -618,6 +684,15 @@ class MobileWindow(MainWindow):
             duration = max(min(gap, self.stepper.max_frame_s) * self.speed, self.config.simulation.dt)
             self.sim.apply_disturbance(self.drag_force(), duration)
         super()._on_frame()
+        # Graphs: per-frame scroll (only new samples are drawn), at the chosen animation rate;
+        # skipped for a frame that overran so the pendulum and the physics keep their pace
+        # (the next step catches up – the charts are time-based).
+        overran = gap > 1.5 * self.perf.frame_interval_ms / 1000.0
+        if self.current == "graphs" and not overran:
+            self._graph_frame += 1
+            if self._graph_frame >= max(1, round(self.perf.fps / max(self.perf.graph_fps, 1))):
+                self._graph_frame = 0
+                self.telemetry.advance(self.sim.telemetry)
         self.stats.frame(gap)
 
     def _update_view(self) -> None:
@@ -634,7 +709,17 @@ class MobileWindow(MainWindow):
     def timing_text(self) -> str:
         s = self.stats
         return (f"{s.fps:.0f} fps · max {s.worst_gap_ms:.0f} ms │ physics {self.stepper.physics_ms:.1f} · "
-                f"view {s.view_ms.value:.1f} · graphs {s.graph_ms:.1f} ms/frame │ {self._cpu_text}")
+                f"view {s.view_ms.value:.1f} · graphs {s.graph_data_ms:.1f}+{s.graph_paint_ms:.1f} · "
+                f"screen {s.update_ms:.1f} ms/frame │ {self._cpu_text}")
+
+    def event(self, event) -> bool:  # noqa: D401 - Qt override
+        """Time each screen update (painting + composing + hand-over to the display)."""
+        if event.type() == QEvent.Type.UpdateRequest:
+            started = time.perf_counter()
+            result = super().event(event)
+            self.stats.add_update((time.perf_counter() - started) * 1000.0)
+            return result
+        return super().event(event)
 
     def _on_stats_second(self, _stats: FrameStats) -> None:
         if not (self.perf.debug_overlay or self.perf.log_stats or self.current == "settings"):
