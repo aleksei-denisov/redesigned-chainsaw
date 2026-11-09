@@ -278,8 +278,8 @@ class MobileWindow(MainWindow):
             combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
             combo.setMinimumContentsLength(6)
             combo.currentIndexChanged.connect(self._on_performance_edited)
-        for box in (self.perf_aa, self.perf_cores, self.perf_stats, self.perf_log):
-            box.toggled.connect(self._on_performance_edited)
+        for toggle in (self.perf_aa, self.perf_cores, self.perf_stats, self.perf_log):
+            toggle.toggled.connect(self._on_performance_edited)
         return box
 
     # ============================================================ performance
