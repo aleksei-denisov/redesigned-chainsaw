@@ -26,7 +26,7 @@ try:
 except ImportError:  # pragma: no cover - module missing in a stripped Qt build
     QOpenGLWidget = None
 
-DRAWING_MODES = [("software", "Software"), ("gpu", "GPU (OpenGL)")]
+DRAWING_MODES = [("gpu", "GPU (OpenGL) – recommended"), ("software", "Software (slower)")]
 
 
 ERRORS = {"count": 0}           # exceptions raised while drawing on the GPU (shown in the report)

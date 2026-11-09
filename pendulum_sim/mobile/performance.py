@@ -34,6 +34,7 @@ RENDER_SCALES = {"native": None, "high": 1.5, "balanced": 1.25, "fast": 1.0}
 GRAPH_RATES_HZ = [60, 30, 15]     # graph animation (scrolling) rate; ≤ the frame rate
 RANGE_CHECK_S = 0.1               # y-range bookkeeping and the status read-outs (10 Hz)
 FRAME_RATES = [60, 30]
+SETTINGS_VERSION = 2              # 2: GPU drawing is the default (older builds saved "software")
 
 
 @dataclass
@@ -84,6 +85,12 @@ class PerformanceSettings:
                 except (TypeError, ValueError):
                     continue
                 setattr(out, f.name, value)
+        try:
+            version = int(settings.value("performance/version", 0))
+        except (TypeError, ValueError):
+            version = 0
+        if version < 2:                   # saved while software drawing was the default
+            out.drawing = cls.drawing
         out.render = out.render if out.render in RENDER_SCALES else cls.render
         out.graph_fps = out.graph_fps if out.graph_fps in GRAPH_RATES_HZ else cls.graph_fps
         out.fps = out.fps if out.fps in FRAME_RATES else cls.fps
@@ -94,6 +101,7 @@ class PerformanceSettings:
         settings = settings or QSettings()
         for name, value in asdict(self).items():
             settings.setValue(f"performance/{name}", value)
+        settings.setValue("performance/version", SETTINGS_VERSION)
         settings.sync()
 
     # ------------------------------------------------------------------ presets
@@ -101,28 +109,39 @@ class PerformanceSettings:
     def preset(self) -> str:
         """Key of the :data:`PRESETS` entry these settings match, or ``"custom"``."""
         for key, (_label, _hint, values) in PRESETS.items():
-            if all(getattr(self, name) == value for name, value in values.items()) and \
-                    (self.drawing == "gpu" or self.render == "native"):
+            if all(getattr(self, name) == value for name, value in values.items()):
                 return key
         return "custom"
 
     def with_preset(self, key: str) -> "PerformanceSettings":
-        """Copy with the preset's drawing, antialiasing and rates (other fields kept)."""
+        """Copy with the preset's edge smoothing and rates (drawing method and the rest kept)."""
         if key not in PRESETS:
             return replace(self)
-        return replace(self, render="native", **PRESETS[key][2])
+        return replace(self, **PRESETS[key][2])
 
 
-# One-tap combinations (Settings → Performance → Preset). The device/diagnostics fields
-# (CPU cores, overlay, log) are not part of a preset.
+# One-tap combinations (Settings → Performance → Preset). The drawing method (Diagnostics)
+# and the device fields (CPU cores, overlay, log) are not part of a preset.
 PRESETS: dict[str, tuple[str, str, dict]] = {
-    "smooth": ("Smooth", "GPU drawing, smooth edges, 60 fps, graphs scroll 60 times a second",
-               {"drawing": "gpu", "antialias": True, "fps": 60, "graph_fps": 60}),
-    "balanced": ("Balanced", "GPU drawing without edge smoothing, graphs scroll 30 times a second",
-                 {"drawing": "gpu", "antialias": False, "fps": 60, "graph_fps": 30}),
+    "smooth": ("Smooth", "smooth edges, 60 fps, graphs scroll 60 times a second",
+               {"antialias": True, "fps": 60, "graph_fps": 60}),
+    "balanced": ("Balanced", "no edge smoothing, graphs scroll 30 times a second",
+                 {"antialias": False, "fps": 60, "graph_fps": 30}),
     "saver": ("Battery saver", "30 fps and graphs scrolling 15 times a second: about half the work",
-              {"drawing": "gpu", "antialias": False, "fps": 30, "graph_fps": 15}),
+              {"antialias": False, "fps": 30, "graph_fps": 15}),
 }
+
+# Shown under Settings → Diagnostics → Drawing method.
+SOFTWARE_DRAWING_NOTE = (
+    "GPU (OpenGL) is the normal way: the graphics chip draws the pendulum and the graphs. "
+    "Software is another way of drawing that is much slower on most devices: the processor paints "
+    "every pixel itself, on the same thread that runs the simulation (4 million pixels per frame on a "
+    "2560×1600 screen, edge smoothing costs extra per pixel), and because Android shows apps "
+    "through the graphics chip anyway, the finished picture of the whole screen (about 16 MB) is "
+    "then copied to it every frame – on a Xiaomi Pad 6 the copy alone takes about 10 ms of a 16 ms "
+    "frame. The graphics chip instead draws in parallel, smooths edges in hardware and needs no copy. "
+    "Use Software only if GPU drawing shows errors on this device; it looks the same everywhere and "
+    "needs no OpenGL driver.")
 
 
 class Smoothed:

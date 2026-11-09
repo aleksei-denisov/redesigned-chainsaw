@@ -38,7 +38,7 @@ from .controls import (
 )
 from .gpu import DRAWING_MODES
 from .icons import icon
-from .performance import FRAME_RATES, GRAPH_RATES_HZ, PRESETS, PerformanceSettings
+from .performance import FRAME_RATES, GRAPH_RATES_HZ, PRESETS, SOFTWARE_DRAWING_NOTE, PerformanceSettings
 
 GAIN_RANGE = 1e6
 
@@ -556,9 +556,6 @@ class SettingsPage(ScrollPage):
         self.perf_preset = perf.add(ChoiceRow("Preset", [(k, v[0]) for k, v in PRESETS.items()]
                                               + [("custom", "Custom")]))
         self.perf_preset.buttons["custom"].setEnabled(False)       # shown, not chosen: "you changed something"
-        self.perf_drawing = perf.add(ChoiceRow("Drawing", DRAWING_MODES))
-        self.perf_render = perf.add(ChoiceRow("Software drawing resolution", list(RENDER_LABELS.items()),
-                                              hint="Native is sharpest; a lower resolution draws fewer pixels"))
         self.perf_aa = perf.add(SwitchRow("Smooth edges", "antialiasing"))
         self.perf_fps = perf.add(ChoiceRow("Frame rate", [(f, f"{f} fps") for f in FRAME_RATES],
                                            hint="30 fps halves the drawing work and saves battery"))
@@ -568,7 +565,12 @@ class SettingsPage(ScrollPage):
         self.perf_cores = perf.add(SwitchRow("Use performance CPU cores",
                                              "keeps the simulation on the fast cores of the processor"))
         self.add(perf)
-        debug = Section("Diagnostics", expanded=False)
+        debug = self.diagnostics = Section("Diagnostics", expanded=False)
+        # The drawing method lives here: GPU is the way to draw, software only a fallback.
+        self.perf_drawing = debug.add(ChoiceRow("Drawing method (advanced)", DRAWING_MODES))
+        self.perf_drawing_note = debug.add(label(SOFTWARE_DRAWING_NOTE, "secondary"))
+        self.perf_render = debug.add(ChoiceRow("Software drawing resolution", list(RENDER_LABELS.items()),
+                                               hint="Native is sharpest; a lower resolution draws fewer pixels"))
         self.perf_stats = debug.add(SwitchRow("Performance overlay", "fps and per-component frame time on the view"))
         self.perf_log = debug.add(SwitchRow("Log timings", "one line per second to the system log (adb logcat)"))
         self.cpu_label = debug.add(label("", "secondary"))
@@ -616,10 +618,7 @@ class SettingsPage(ScrollPage):
                                   "your own combination – tap a preset to go back to one")
         gpu = p.drawing == "gpu"
         self.perf_drawing.setValue(p.drawing)
-        self.perf_drawing.set_hint(
-            "OpenGL draws the pendulum and the graphs; the whole screen is not copied every frame (fastest)"
-            if gpu else "Qt's software renderer – slower on high-resolution screens; use it if GPU drawing "
-                        "misbehaves on this device")
+        self.perf_drawing.set_hint("" if gpu else "Software drawing is on – the app runs slower on most devices")
         self.perf_render.setVisible(not gpu)    # the GPU always draws at the screen's own resolution
         self.perf_render.setValue(p.render)
         self.perf_aa.set_hint("4× multisampling on the GPU" if gpu else
@@ -682,9 +681,13 @@ class NavBar(QWidget):
         keys = visible_keys or [k for k, _, _ in self.items]
         for key, _t, _i in self.items:
             b = self.buttons[key]
-            b.setVisible(key in keys)
+            if b.parentWidget() is None:
+                # a widget made visible without a parent becomes a window of its own for a
+                # moment – on Android the rail's icons flashed over the loading screen
+                b.setParent(self)
             if key in keys:
                 lay.addWidget(b)
+            b.setVisible(key in keys)
             b.setMinimumSize(QSize(76, 64) if vertical else QSize(56, 60))
         if vertical:
             lay.addStretch(1)

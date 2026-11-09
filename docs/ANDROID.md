@@ -94,7 +94,10 @@ blocked the app left the screen black or half-drawn.
 
 Numbers are edited with a slider (logarithmic for gains and wide ranges), large − / +
 steppers, or by tapping the value and typing it; a change is applied when the finger is
-lifted. On/off settings are switches, choices are chips, long screens scroll with the
+lifted. Typed values accept "." and "," as decimal separator whatever the device language
+(a locale-bound validator rejected "30.408" on a Russian device and the field never closed);
+typing ends with *Done*/Enter or a touch anywhere else, text that is not a number keeps the
+old value. On/off settings are switches, choices are chips, long screens scroll with the
 finger (no horizontal scrolling). All icons are bundled SVGs, so nothing depends on the
 device's fonts.
 
@@ -131,18 +134,20 @@ keep the screen on.
 
 ### Performance settings
 
-*Settings → Performance* – saved on the device. Rows that only apply to one drawing mode are
-shown only for it:
+*Settings → Performance* – saved on the device. The drawing method is not a performance
+choice any more: the app draws with the GPU; software drawing is kept as a fallback under
+*Diagnostics*. Settings saved by older builds (when software was the default) are switched to
+GPU once.
 
 | Setting | Effect |
 |---|---|
-| Preset | one tap sets drawing, smooth edges, frame rate and graph scrolling: **Smooth** (default: GPU, smooth edges, 60 fps, graphs 60×/s), **Balanced** (GPU, no edge smoothing, graphs 30×/s), **Battery saver** (GPU, 30 fps, graphs 15×/s). Any other combination shows as *Custom* |
-| Drawing | **GPU (OpenGL)** (default): the pendulum view and the graphs are drawn by the GPU (`QOpenGLWidget`, same QPainter code through Qt's OpenGL engine), which skips the per-frame copy of the whole window image (~10 ms on the Pad 6); *Software* is the fallback and is used automatically if no OpenGL context can be created |
-| Software drawing resolution (*Software only*) | *Native* (default) draws the pendulum at the screen's full pixel density; *1.5×*, *1.25×* and *1×* draw fewer pixels and scale up. The GPU always draws at the screen's own resolution |
+| Preset | one tap sets smooth edges, frame rate and graph scrolling: **Smooth** (default: smooth edges, 60 fps, graphs 60×/s), **Balanced** (no edge smoothing, graphs 30×/s), **Battery saver** (30 fps, graphs 15×/s). Any other combination shows as *Custom* |
 | Smooth edges | antialiasing: 4× multisampling on the GPU, antialiased painting in software (default on) |
 | Frame rate | 60 or 30 fps |
 | Graph scrolling | how often the graphs take in new samples: 60 (default), 30 or 15 times per second, never more than the frame rate; each step draws only the new samples |
 | Use performance CPU cores | pins the simulation thread to the big cores (Snapdragon 870: 3.2 + 3 × 2.42 GHz instead of the 1.8 GHz efficiency cores) |
+| Drawing method (*Diagnostics*, advanced) | **GPU (OpenGL)** (default): the pendulum view and the graphs are drawn by the GPU (`QOpenGLWidget`, same QPainter code through Qt's OpenGL engine). *Software* is another way of drawing, much slower on most devices: the CPU paints every pixel on the UI thread (≈4 M pixels per frame on a 2560×1600 screen, antialiasing costs extra per pixel) and, because Android composes apps with the GPU anyway, the whole window image (≈16 MB) is copied to the GPU every frame – ≈10 ms of a 16 ms frame on the Pad 6. It is kept because it needs no OpenGL driver and is used automatically if no OpenGL context can be created |
+| Software drawing resolution (*Diagnostics*, software only) | *Native* (default) draws the pendulum at the screen's full pixel density; *1.5×*, *1.25×* and *1×* draw fewer pixels and scale up. The GPU always draws at the screen's own resolution |
 | Performance overlay (*Diagnostics*) | at the top right of the view: `fps · max <longest frame gap> │ physics · view · graphs <data>+<paint> · screen <whole update>` in ms per frame, and the CPU core in use |
 | Log timings (*Diagnostics*) | the same line once per second in `adb logcat` (tag `python`) |
 | Run performance test (*Diagnostics*) | about 45 s: with GPU drawing Simulate, Graphs with 2, 3 and 4 graphs and a Python profile, then Simulate and Graphs with software drawing for comparison; shows a report with *Copy report* (also printed to `adb logcat`) |
@@ -228,6 +233,10 @@ shortened performance test). A tablet is slower in absolute terms; on the device
    page and shown in one step. (On Android every top-level Qt window is a surface of its own;
    a separate loading window closing while the main window opened was composed in changing
    order and flashed up again over the app, and a fade over the GPU-drawn view flickered.)
+   For the same reason no widget is made visible before it has a parent: a parentless widget
+   that is shown becomes a window for a moment (the navigation rail's icons flashed over the
+   loading screen). `tests/test_mobile_smoke.py` records every widget shown as a window while
+   the screens are built and on every screen.
 3. **Lazy screens**: the Experiments screen (and with it pyqtgraph) and the Auto-tune screen are
    built the first time they are opened; the desktop window imports its pyqtgraph panels inside
    its builders (desktop behaviour unchanged); icons are rendered at two sizes instead of seven.
@@ -386,8 +395,11 @@ API 28 or newer (e.g. *Pixel 7, API 35, Google APIs ARM 64*). Start it, then
   walks back through the screens with **one** press each (no "Click again to close the app" toast)
   and asks before leaving on *Simulate*;
 - *Scenario* → another scenario: a steady *Loading …* cover, no black or flickering frames;
-- *Settings → Performance*: *Software drawing resolution* appears only with *Software*; the presets
-  switch the rows below them, any manual change shows *Custom*;
+- *Settings → Performance*: the presets switch the rows below them, any manual change shows
+  *Custom*; *Diagnostics → Drawing method* switches to Software (slower) and shows *Software
+  drawing resolution* only then;
+- tap a number, type it with "." or "," and tap anywhere else (slider, −/+, another row) or press
+  *Done*: the value is taken, the field closes and the slider works again;
 - *Graphs*: select up to four, the fifth replaces the oldest; the choice survives a restart; the
   curves scroll smoothly (no 100 ms steps) and with 2–3 graphs the overlay stays at ~60 fps;
   *Settings → Diagnostics → Run performance test* → *Copy report*;

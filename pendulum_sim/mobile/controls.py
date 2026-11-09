@@ -15,10 +15,25 @@ from __future__ import annotations
 import math
 from typing import Callable
 
-from PySide6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, QRect, QRectF, QSize, Qt, QTimer, Property, Signal
-from PySide6.QtGui import QColor, QDoubleValidator, QFont, QPainter
+from PySide6.QtCore import (
+    Property,
+    QEasingCurve,
+    QEvent,
+    QObject,
+    QPoint,
+    QPropertyAnimation,
+    QRect,
+    QRectF,
+    QRegularExpression,
+    QSize,
+    Qt,
+    QTimer,
+    Signal,
+)
+from PySide6.QtGui import QColor, QFont, QGuiApplication, QPainter, QRegularExpressionValidator
 from PySide6.QtWidgets import (
     QAbstractButton,
+    QApplication,
     QAbstractScrollArea,
     QButtonGroup,
     QFrame,
@@ -42,6 +57,56 @@ from . import theme
 from .icons import icon
 
 SLIDER_STEPS = 1000
+# Typed numbers: digits, one decimal separator ("." or "," – whatever the keyboard of the
+# device language offers), optional sign and exponent. Locale-independent on purpose:
+# QDoubleValidator follows the device language (Russian: decimal comma), rejected
+# "30.408" as invalid, and Qt never finishes editing on invalid text – the field stayed
+# open for good.
+NUMBER_PATTERN = r"[-+]?[0-9]*([.,][0-9]*)?([eE][-+]?[0-9]*)?"
+
+
+def parse_number(text: str) -> float | None:
+    """Float from typed text (``,`` or ``.`` as decimal separator); None if it is not one."""
+    try:
+        v = float(text.strip().replace(",", "."))
+    except ValueError:
+        return None
+    return v if math.isfinite(v) else None
+
+
+class _EditCloser(QObject):
+    """Application-wide: a touch anywhere outside the number being typed finishes it.
+
+    Sliders, steppers, buttons and scroll areas take no keyboard focus, so a tap on
+    them did not end the edit (``editingFinished`` only comes with focus loss or Enter).
+    """
+
+    active: "NumberRow | None" = None
+    _installed = False
+
+    @classmethod
+    def watch(cls, row: "NumberRow") -> None:
+        app = QApplication.instance()
+        if app is not None and not cls._installed:
+            cls._instance = cls()
+            app.installEventFilter(cls._instance)
+            cls._installed = True
+        if cls.active is not None and cls.active is not row:
+            cls.active.finish_edit()
+        cls.active = row
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802 - Qt API
+        row = _EditCloser.active
+        if row is None or event.type() not in (QEvent.Type.MouseButtonPress, QEvent.Type.TouchBegin):
+            return False
+        if not isinstance(obj, QWidget):
+            return False
+        try:
+            if obj is not row.edit and not row.edit.isAncestorOf(obj):
+                row.finish_edit()
+        except RuntimeError:              # the row was deleted meanwhile
+            _EditCloser.active = None
+        return False
 
 
 # ------------------------------------------------------------------ helpers
@@ -236,10 +301,12 @@ class NumberRow(QWidget):
         self.value_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.value_btn.clicked.connect(self._begin_edit)
         self.edit = QLineEdit()
-        self.edit.setValidator(QDoubleValidator(minimum, maximum, max(decimals, 6)))
-        self.edit.setInputMethodHints(Qt.InputMethodHint.ImhFormattedNumbersOnly)
+        self.edit.setValidator(QRegularExpressionValidator(QRegularExpression(NUMBER_PATTERN), self.edit))
+        self.edit.setInputMethodHints(Qt.InputMethodHint.ImhFormattedNumbersOnly
+                                      | Qt.InputMethodHint.ImhNoPredictiveText)
         self.edit.setAlignment(Qt.AlignmentFlag.AlignRight)
         self.edit.editingFinished.connect(self._end_edit)
+        self.edit.returnPressed.connect(self._end_edit)
         self.value_stack.addWidget(self.value_btn)
         self.value_stack.addWidget(self.edit)
         vw = QWidget()
@@ -255,11 +322,14 @@ class NumberRow(QWidget):
         self.plus.setAutoRepeat(True)
         self.minus.setAutoRepeatDelay(400)
         self.plus.setAutoRepeatDelay(400)
+        self.minus.pressed.connect(self.finish_edit)
+        self.plus.pressed.connect(self.finish_edit)
         self.minus.clicked.connect(lambda: self._nudge(-1))
         self.plus.clicked.connect(lambda: self._nudge(+1))
         self.slider = QSlider(Qt.Orientation.Horizontal)
         self.slider.setRange(0, SLIDER_STEPS)
         self.slider.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.slider.sliderPressed.connect(self.finish_edit)
         self.slider.sliderMoved.connect(self._on_slider_moved)
         self.slider.sliderReleased.connect(self._on_slider_released)
         self.slider.actionTriggered.connect(self._on_slider_action)
@@ -337,20 +407,37 @@ class NumberRow(QWidget):
         if action in (QSlider.SliderAction.SliderPageStepAdd, QSlider.SliderAction.SliderPageStepSub):
             QTimer.singleShot(0, lambda: self._commit(self._from_pos(self.slider.value() / SLIDER_STEPS)))
 
+    @property
+    def editing(self) -> bool:
+        return self.value_stack.currentIndex() == 1
+
     def _begin_edit(self) -> None:
+        _EditCloser.watch(self)
         self.edit.setText(fmt_number(self._value, self.decimals))
         self.value_stack.setCurrentIndex(1)
         self.edit.setFocus()
         self.edit.selectAll()
 
+    def finish_edit(self) -> None:
+        """Commit what was typed (or keep the old value if it is not a number)."""
+        self._end_edit()
+
     def _end_edit(self) -> None:
-        if self.value_stack.currentIndex() != 1:
+        if not self.editing:
             return
+        if _EditCloser.active is self:
+            _EditCloser.active = None
+        im = QGuiApplication.inputMethod()
+        if im is not None and self.edit.hasFocus():
+            im.commit()                    # digits still being composed by the keyboard
+        text = self.edit.text()
         self.value_stack.setCurrentIndex(0)
-        try:
-            v = float(self.edit.text().replace(",", "."))
-        except ValueError:
-            self._show_value()
+        self.edit.clearFocus()
+        if im is not None:
+            im.hide()
+        v = parse_number(text)
+        if v is None:
+            self._show_value()             # not a number: the old value stays
             return
         self._commit(v)
 

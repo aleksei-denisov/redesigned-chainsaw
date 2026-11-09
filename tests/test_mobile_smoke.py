@@ -196,34 +196,52 @@ def test_settings_page_view_and_performance(win, app):
 
 def test_performance_presets():
     default = PerformanceSettings()
-    assert default.preset == "smooth"
+    assert default.preset == "smooth" and default.drawing == "gpu"
     saver = default.with_preset("saver")
     assert (saver.drawing, saver.antialias, saver.fps, saver.graph_fps) == ("gpu", False, 30, 15)
     assert saver.preset == "saver" and saver.fast_cores == default.fast_cores
     from dataclasses import replace
 
-    assert replace(saver, drawing="software").preset == "custom"
-    assert replace(default, render="fast").preset == "smooth"      # resolution is software-only
-    assert replace(default, drawing="software", render="native").preset == "custom"
+    soft = replace(saver, drawing="software", render="fast")
+    assert soft.preset == "saver"                                   # the drawing method is not a preset
+    assert soft.with_preset("smooth").drawing == "software" and soft.with_preset("smooth").render == "fast"
+    assert replace(default, fps=30).preset == "custom"
 
 
-def test_performance_menu_presets_and_software_only_rows(win, app):
+def test_old_saved_software_drawing_becomes_gpu(tmp_path):
+    """Builds before GPU became the default saved drawing=software for everyone."""
+    s = QSettings(str(tmp_path / "old.ini"), QSettings.Format.IniFormat)
+    s.setValue("performance/drawing", "software")
+    s.setValue("performance/fps", 30)
+    s.sync()
+    loaded = PerformanceSettings.load(s)
+    assert loaded.drawing == "gpu" and loaded.fps == 30
+    PerformanceSettings(drawing="software").save(s)                 # chosen now: kept
+    assert PerformanceSettings.load(s).drawing == "software"
+
+
+def test_performance_menu_presets_and_drawing_in_diagnostics(win, app):
     st = win.settings_page
     win.apply_performance(PerformanceSettings())
     try:
         assert st.perf_preset.value() == "smooth"
         assert st.perf_render.isHidden(), "resolution applies to software drawing only"
         assert st.perf_preset.buttons["custom"].isHidden()
+        perf_rows = st.perf_preset.parentWidget()
+        assert not perf_rows.isAncestorOf(st.perf_drawing), "drawing method belongs to Diagnostics"
+        assert "much slower" in st.perf_drawing_note.text()
         st.perf_drawing.buttons["software"].click()
         assert win.perf.drawing == "software" and PerformanceSettings.load().drawing == "software"
         assert not st.perf_render.isHidden()
+        st.perf_fps.buttons[30].click()
         assert st.perf_preset.value() == "custom" and not st.perf_preset.buttons["custom"].isHidden()
-        assert "software" in st.perf_drawing.hint_label.text().lower()
         st.perf_preset.buttons["saver"].click()
         p = win.perf
-        assert (p.drawing, p.antialias, p.fps, p.graph_fps) == ("gpu", False, 30, 15)
-        assert st.perf_preset.value() == "saver" and st.perf_render.isHidden()
+        assert (p.drawing, p.antialias, p.fps, p.graph_fps) == ("software", False, 30, 15)
+        assert st.perf_preset.value() == "saver" and st.perf_preset.buttons["custom"].isHidden()
         assert win.timer.interval() == 33
+        st.perf_drawing.buttons["gpu"].click()
+        assert st.perf_render.isHidden()
     finally:
         win.apply_performance(PerformanceSettings())
         PerformanceSettings().save()
@@ -440,19 +458,128 @@ def test_slow_but_steady_frames_still_step_the_graphs(win, app):
         win.navigate("simulate")
 
 
-def test_no_widget_flashes_as_a_window_while_screens_are_built(app):
-    """A parentless widget made visible becomes a top-level window (a stray slider on Android)."""
+class _WindowShows:
+    """Records every widget that is shown as a window of its own (a ``Show`` event while
+    ``isWindow()``): on Android each one is a surface that flashes over the app."""
+
+    ALLOWED = ("QMenu", "QDialog", "QMessageBox", "ReportDialog", "QTipLabel", "QComboBoxPrivateContainer",
+               "QFileDialog")
+
+    def __init__(self, app, expected=()):
+        from PySide6.QtCore import QEvent, QObject
+
+        outer = self
+        self.expected = list(expected)
+        self.seen: list[str] = []
+
+        class Filter(QObject):
+            def eventFilter(self, obj, event):  # noqa: N802
+                if event.type() == QEvent.Type.Show and isinstance(obj, QWidget) and obj.isWindow():
+                    if obj not in outer.expected and not any(
+                            c.__name__ in outer.ALLOWED for c in type(obj).__mro__):
+                        text = obj.text() if hasattr(obj, "text") and callable(obj.text) else ""
+                        outer.seen.append(f"{type(obj).__name__}({obj.objectName() or text!s:.20})")
+                return False
+
+        self.filter = Filter()
+        app.installEventFilter(self.filter)
+        self.app = app
+
+    def close(self):
+        self.app.removeEventFilter(self.filter)
+
+
+def test_no_widget_flashes_as_a_window(app):
+    """No widget may become a window of its own: not while the screens are built (the
+    rail's icons flashed over the loading screen) and not on any screen afterwards."""
     from pendulum_sim.mobile.controls import NumberRow
 
-    before = {id(w) for w in QApplication.topLevelWidgets() if w.isVisible()}
-    row = NumberRow("Gain", 0.0, 10.0, 1.0)
-    w = MobileWindow(scenario("double_cart_lqr"))
-    app.processEvents()
-    stray = [type(t).__name__ for t in QApplication.topLevelWidgets() if t.isVisible() and id(t) not in before]
-    assert stray == [], stray
+    shows = _WindowShows(app)
+    try:
+        row = NumberRow("Gain", 0.0, 10.0, 1.0)
+        w = MobileWindow(scenario("double_cart_lqr"))
+        app.processEvents()
+        assert shows.seen == [], f"shown as windows while building: {shows.seen}"
+        shows.expected.append(w)
+        w.resize(1280, 800)
+        w.show()
+        for size in ((1280, 800), (412, 915), (915, 412)):
+            w.resize(*size)
+            for key in w.pages:
+                w.navigate(key)
+                frames(w, app, 2)
+        w.resize(1280, 800)
+        w.system_page.segments.setValue(1)
+        w.system_page._emit_plant()
+        w.load(scenario("triple_cart_lqr"))
+        frames(w, app, 3)
+        assert shows.seen == [], f"shown as windows on the screens: {shows.seen}"
+    finally:
+        shows.close()
     w.close()
     w.deleteLater()
     row.deleteLater()
+    app.processEvents()
+
+
+def test_typed_numbers_ignore_the_device_language(app):
+    """Russian keyboards/locales use a decimal comma; '30.408' must still be accepted."""
+    from PySide6.QtCore import QLocale
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QVBoxLayout
+
+    from pendulum_sim.mobile.controls import NumberRow, parse_number
+
+    assert parse_number("30,5") == 30.5 and parse_number("30.408") == 30.408 and parse_number("-1e-3") == -0.001
+    assert parse_number("") is None and parse_number("-") is None and parse_number("nan") is None
+    old = QLocale()
+    QLocale.setDefault(QLocale(QLocale.Language.Russian, QLocale.Country.Russia))
+    try:
+        holder = QWidget()
+        lay = QVBoxLayout(holder)
+        row = NumberRow("Kd", 0.0, 100.0, 30.4, 3, "", "symlog")
+        other = NumberRow("Kp", 0.0, 100.0, 6.0, 3)
+        lay.addWidget(row)
+        lay.addWidget(other)
+        holder.resize(600, 300)
+        holder.show()
+        got = []
+        row.valueChanged.connect(got.append)
+        # 1. typed with a dot, finished with Enter (keyboard "Done")
+        row.value_btn.click()
+        assert row.editing
+        row.edit.selectAll()
+        QTest.keyClicks(row.edit, "30.4.08")              # the second separator is refused
+        assert row.edit.text() == "30.408"
+        QTest.keyClick(row.edit, Qt.Key.Key_Return)
+        assert not row.editing and row.value() == 30.408 and got[-1] == 30.408
+        # 2. typed with a comma, finished by touching the slider (takes no focus)
+        row.value_btn.click()
+        row.edit.selectAll()
+        QTest.keyClicks(row.edit, "12,5")
+        QTest.mousePress(row.slider, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier,
+                         row.slider.rect().center())
+        QTest.mouseRelease(row.slider, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier,
+                           row.slider.rect().center())
+        app.processEvents()
+        assert not row.editing and any(abs(g - 12.5) < 1e-9 for g in got), got   # then the slider acts
+        # 3. not a number: the old value stays, the field closes when another row is tapped
+        before = row.value()
+        row.value_btn.click()
+        row.edit.setText("-")
+        QTest.mouseClick(other.plus, Qt.MouseButton.LeftButton)
+        app.processEvents()
+        assert not row.editing and row.value() == before
+        # 4. the slider works again after typing
+        row.value_btn.click()
+        QTest.keyClick(row.edit, Qt.Key.Key_Return)
+        row.slider.triggerAction(row.slider.SliderAction.SliderPageStepAdd)
+        app.processEvents()
+        assert row.value() > before
+        holder.close()
+        holder.deleteLater()
+    finally:
+        QLocale.setDefault(old)
     app.processEvents()
 
 
