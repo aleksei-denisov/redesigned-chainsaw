@@ -21,7 +21,10 @@ except ImportError:  # pragma: no cover - QtSvg is part of PySide6-Essentials
     QSvgRenderer = None
 
 ICON_DIR = Path(__file__).with_name("icons")
-SIZES = (16, 20, 24, 32, 40, 48, 64)
+# Rendered sizes (logical px, at the screen's pixel ratio); Qt scales the nearest one for
+# other sizes. Two sizes and only the needed states keep start-up short (each is an SVG
+# render: 30 icons × 7 sizes × 4 states used to cost ~0.4 s on a desktop CPU).
+SIZES = (24, 32)
 
 
 def names() -> list[str]:
@@ -57,10 +60,13 @@ def pixmap(name: str, size: int, color: str | QColor, dpr: float | None = None) 
 def icon(name: str, color: str = "#E8EAED", disabled: str = "#5F6368", checked: str | None = None) -> QIcon:
     ic = QIcon()
     for s in SIZES:
-        ic.addPixmap(pixmap(name, s, color), QIcon.Mode.Normal, QIcon.State.Off)
-        ic.addPixmap(pixmap(name, s, disabled), QIcon.Mode.Disabled, QIcon.State.Off)
-        ic.addPixmap(pixmap(name, s, checked or color), QIcon.Mode.Normal, QIcon.State.On)
-        ic.addPixmap(pixmap(name, s, disabled), QIcon.Mode.Disabled, QIcon.State.On)
+        normal = pixmap(name, s, color)
+        off = pixmap(name, s, disabled)
+        ic.addPixmap(normal, QIcon.Mode.Normal, QIcon.State.Off)
+        ic.addPixmap(off, QIcon.Mode.Disabled, QIcon.State.Off)
+        ic.addPixmap(normal if checked in (None, color) else pixmap(name, s, checked),
+                     QIcon.Mode.Normal, QIcon.State.On)
+        ic.addPixmap(off, QIcon.Mode.Disabled, QIcon.State.On)
     return ic
 
 
