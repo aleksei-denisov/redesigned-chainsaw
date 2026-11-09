@@ -167,8 +167,13 @@ class MiniPlot(QWidget):
         p.fillRect(self.rect(), pal.base().color())
         fg = pal.text().color()
         fm = QFontMetricsF(self.font())
-        finite = [(x[np.isfinite(y)], y[np.isfinite(y)]) for x, y, *_ in self.series]
-        extra = [] if self.points is None else [(self.points[0], self.points[1])]
+        finite = [(x[np.isfinite(y) & np.isfinite(x)], y[np.isfinite(y) & np.isfinite(x)])
+                  for x, y, *_ in ((np.asarray(a, float), np.asarray(b, float), *r) for a, b, *r in self.series)]
+        extra = []
+        if self.points is not None:
+            px, py = np.asarray(self.points[0], float), np.asarray(self.points[1], float)
+            ok = np.isfinite(px) & np.isfinite(py)
+            extra = [(px[ok], py[ok])]
         xs = np.concatenate([x for x, _ in finite + extra]) if finite + extra else np.array([])
         ys = np.concatenate([y for _, y in finite + extra]) if finite + extra else np.array([])
         if xs.size < 2:
