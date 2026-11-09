@@ -19,6 +19,11 @@ from ..control import wrap_angle
 from ..physics import Kinematics
 from .widgets import SEGMENT_COLORS
 
+try:  # zero-copy NumPy view of a QPolygonF's points
+    from shiboken6 import VoidPtr as _VoidPtr
+except ImportError:  # pragma: no cover
+    _VoidPtr = None
+
 
 @dataclass
 class ViewSettings:
@@ -244,6 +249,25 @@ class PendulumView(QWidget):
             y += length
             p.drawEllipse(self.to_screen((base[0], y)), 3, 3)
 
+    def _screen_polygon(self, pts) -> QPolygonF:
+        """World points (sequence of (x, y)) → screen ``QPolygonF``, computed with NumPy.
+
+        Same mapping as :meth:`to_screen`, without a Python call per point (trails hold
+        hundreds of points and are redrawn every frame).
+        """
+        arr = np.asarray(pts, dtype=np.float64).reshape(-1, 2)
+        n = arr.shape[0]
+        cx, cy = self.width() / 2.0, self.height() * 0.55
+        poly = QPolygonF()
+        if hasattr(poly, "resize") and _VoidPtr is not None and n:
+            poly.resize(n)
+            ptr = poly.data()
+            buf = np.frombuffer(_VoidPtr(0 if ptr is None else ptr, 16 * n, True), np.float64).reshape(n, 2)
+            buf[:, 0] = cx + (arr[:, 0] - self.camera[0]) * self.scale
+            buf[:, 1] = cy - (arr[:, 1] - self.camera[1]) * self.scale
+            return poly
+        return QPolygonF([self.to_screen(pt) for pt in arr])
+
     def _draw_trails(self, p: QPainter) -> None:
         indices = range(1, len(self.trails)) if self.settings.trail_all_joints else [len(self.trails) - 1]
         for k in indices:
@@ -251,16 +275,17 @@ class PendulumView(QWidget):
             if len(pts) < 2:
                 continue
             color = QColor(SEGMENT_COLORS[(k - 1) % len(SEGMENT_COLORS)])
-            pts_list = list(pts)
+            poly = self._screen_polygon(pts)
+            n = poly.size()
             chunks = 8
-            size = max(2, len(pts_list) // chunks + 1)
-            for c in range(0, len(pts_list) - 1, size - 1):
-                part = pts_list[c : c + size]
-                if len(part) < 2:
+            size = max(2, n // chunks + 1)
+            for c in range(0, n - 1, size - 1):
+                length = min(size, n - c)
+                if length < 2:
                     continue
-                color.setAlpha(int(25 + 200 * (c + len(part)) / len(pts_list)))
+                color.setAlpha(int(25 + 200 * (c + length) / n))
                 p.setPen(QPen(color, 1.6))
-                p.drawPolyline(QPolygonF([self.to_screen(pt) for pt in part]))
+                p.drawPolyline(poly.mid(c, length))
 
     def _draw_links(self, p: QPainter, f: FrameData, fg: QColor, dark: bool) -> None:
         width = self.settings.link_width_px

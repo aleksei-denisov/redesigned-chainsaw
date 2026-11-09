@@ -66,6 +66,7 @@ if TYPE_CHECKING:
 DRAG_GAIN = 2.0          # drag force = DRAG_GAIN · push force · (offset / total length)
 DRAG_LIMIT = 4.0         # … clamped to ±DRAG_LIMIT · push force
 TIME_UPDATES = sys.version_info >= (3, 11)
+HITCH_FRAMES = 3.0       # a frame gap this many intervals long skips the graph step
 
 
 class _NoExperiments:
@@ -689,9 +690,10 @@ class MobileWindow(MainWindow):
             self.sim.apply_disturbance(self.drag_force(), duration)
         super()._on_frame()
         # Graphs: per-frame scroll (only new samples are drawn), at the chosen animation rate;
-        # skipped for a frame that overran so the pendulum and the physics keep their pace
-        # (the next step catches up – the charts are time-based).
-        overran = gap > 1.5 * self.perf.frame_interval_ms / 1000.0
+        # skipped only after a real hitch (≥ 3 frame intervals) so the pendulum and the physics
+        # recover first (the next step catches up – the charts are time-based). A device that
+        # simply runs below the target rate (e.g. 40 fps) still steps the graphs every frame.
+        overran = gap > HITCH_FRAMES * self.perf.frame_interval_ms / 1000.0
         if self.current == "graphs" and not overran:
             self._graph_frame += 1
             if self._graph_frame >= max(1, round(self.perf.fps / max(self.perf.graph_fps, 1))):

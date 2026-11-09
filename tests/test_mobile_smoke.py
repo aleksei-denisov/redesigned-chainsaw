@@ -373,7 +373,7 @@ def test_overrun_frames_skip_the_graph_step(win, app):
     original = g.advance
     g.advance = lambda tel: calls.append(1) or original(tel)
     try:
-        win._last_frame -= 0.2                              # a 200 ms frame: skip the graphs
+        win._last_frame -= 0.2                              # a 200 ms hitch: skip the graphs
         win._on_frame()
         assert calls == []
         win._last_frame -= 0.016
@@ -383,6 +383,39 @@ def test_overrun_frames_skip_the_graph_step(win, app):
         g.advance = original
         win.pause()
         win.navigate("simulate")
+
+
+def test_slow_but_steady_frames_still_step_the_graphs(win, app):
+    """At 40 fps (25 ms gaps, as measured on the Pad 6) the graphs must still scroll every frame."""
+    g = win.telemetry
+    win.navigate("graphs")
+    win.start()
+    frames(win, app, 3)
+    calls = []
+    original = g.advance
+    g.advance = lambda tel: calls.append(1) or original(tel)
+    try:
+        for _ in range(5):
+            win._last_frame = time.perf_counter() - 0.025
+            win._on_frame()
+        assert len(calls) == 5
+    finally:
+        g.advance = original
+        win.pause()
+        win.navigate("simulate")
+
+
+def test_trail_polygon_matches_to_screen(win, app):
+    win.start()
+    frames(win, app, 30)
+    v = win.view
+    pts = v.trails[-1]
+    poly = v._screen_polygon(pts)
+    assert poly.size() == len(pts) > 10
+    for i in (0, len(pts) // 2, len(pts) - 1):
+        a, b = poly.at(i), v.to_screen(pts[i])
+        assert abs(a.x() - b.x()) < 1e-6 and abs(a.y() - b.y()) < 1e-6
+    win.pause()
 
 
 def test_performance_test_reports_every_phase(win, app, monkeypatch):
