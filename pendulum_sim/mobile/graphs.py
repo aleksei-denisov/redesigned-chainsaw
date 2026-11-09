@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
     QLabel,
+    QPushButton,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
@@ -335,6 +336,13 @@ class GraphsPanel(QWidget):
         self.window_row.hide()
         row_holder = QWidget()
         row = FlowLayout(row_holder, spacing=10)
+        self.choose_btn = QPushButton("Choose graphs")
+        self.choose_btn.setCheckable(True)
+        self.choose_btn.setProperty("chip", True)
+        self.choose_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.choose_btn.toggled.connect(self.chips.setVisible)
+        self.choose_btn.hide()
+        row.addWidget(self.choose_btn)
         row.addWidget(self.count_label)
         row.addWidget(loop_box)
         row.addWidget(QLabel("Window"))
@@ -350,6 +358,14 @@ class GraphsPanel(QWidget):
         outer.addLayout(bar)
         outer.addLayout(self.stack, 1)
         self._rebuild_charts()
+
+    def set_compact(self, compact: bool) -> None:
+        """Low screens (phone landscape): graph chips folded behind a 'Choose graphs' chip."""
+        self.choose_btn.setVisible(compact)
+        if compact:
+            self.chips.setVisible(self.choose_btn.isChecked())
+        else:
+            self.chips.show()
 
     # ------------------------------------------ desktop TelemetryPanel API
     def configure(self, n_segments: int, has_cart: bool, loop_labels: list[str]) -> None:

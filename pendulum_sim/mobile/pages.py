@@ -221,7 +221,8 @@ class ControllerPage(ScrollPage):
         self.autotune_btn = push_button("Auto-tune for robustness", "autotune", primary=True)
         self.autotune_btn.clicked.connect(self.autotuneRequested)
         tl.addWidget(self.autotune_btn)
-        row = QHBoxLayout()
+        row = QBoxLayout(QBoxLayout.Direction.LeftToRight)
+        self.tools_row = row
         self.lqr_btn = push_button("Seed from LQR", "lqr")
         self.restore_btn = push_button("Restore gains", "reset")
         self.reset_i_btn = push_button("Reset integrators", "reset")
@@ -266,6 +267,12 @@ class ControllerPage(ScrollPage):
         self.loops_layout.setSpacing(12)
         self.add(self.loops_holder)
         self.finish()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        narrow = self.viewport().width() < 520             # phones: tuning buttons stacked
+        self.tools_row.setDirection(QBoxLayout.Direction.TopToBottom if narrow
+                                    else QBoxLayout.Direction.LeftToRight)
 
     def weights(self) -> LQRWeights:
         return LQRWeights(**{k: row.value() for k, row in self.q.items()})

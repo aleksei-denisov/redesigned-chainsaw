@@ -12,7 +12,7 @@ pytest.importorskip("PySide6")
 pytest.importorskip("pyqtgraph")
 
 from PySide6.QtCore import QPointF, QSettings, Qt  # noqa: E402
-from PySide6.QtWidgets import QAbstractButton, QApplication, QScrollArea  # noqa: E402
+from PySide6.QtWidgets import QAbstractButton, QApplication, QScrollArea, QWidget  # noqa: E402
 
 from pendulum_sim.mobile import icons, theme  # noqa: E402
 from pendulum_sim.mobile.performance import PerformanceSettings  # noqa: E402
@@ -67,6 +67,18 @@ def frames(w, app, n=10):
         w._last_frame -= 0.016
         w._on_frame()
         app.processEvents()
+
+
+def widest(root, limit):
+    """Visible widgets under ``root`` whose minimum width exceeds ``limit`` (diagnostics)."""
+    out = []
+    for w in root.findChildren(QWidget):
+        if w.isVisibleTo(root):
+            m = max(w.minimumWidth(), w.minimumSizeHint().width())
+            if m > limit:
+                text = getattr(w, "text", lambda: "")()
+                out.append((m, type(w).__name__, w.objectName(), str(text)[:40]))
+    return sorted(out, reverse=True)[:8]
 
 
 def wait(app, cond, timeout=120.0):
@@ -329,7 +341,8 @@ def test_phone_layout_fits_and_targets_are_large(win, app, size):
         app.processEvents()
     too_big = {k: (p.minimumSizeHint().width(), p.minimumSizeHint().height()) for k, p in win.pages.items()
                if p.minimumSizeHint().width() > size[0] or p.minimumSizeHint().height() > size[1] - 60}
-    assert (win.width(), win.height()) == size, (win.minimumSizeHint(), too_big)
+    assert (win.width(), win.height()) == size, (win.minimumSizeHint(), too_big,
+                                                 {k: widest(win.pages[k], size[0] - 40) for k in too_big})
     for key in ("simulate", "graphs", "controller", "system", "settings", "autotune"):
         win.navigate(key)
         app.processEvents()
@@ -341,7 +354,8 @@ def test_phone_layout_fits_and_targets_are_large(win, app, size):
             inner = area.widget()
             if inner is not None and area.isVisibleTo(win):          # nothing clipped at the right
                 need = inner.layout().minimumSize().width() if inner.layout() else 0
-                assert need <= area.viewport().width() + 1, (key, need, area.viewport().width())
+                assert need <= area.viewport().width() + 1, (key, need, area.viewport().width(),
+                                                             widest(inner, area.viewport().width() - 40))
     win.navigate("simulate")
     win.telemetry.set_selection(["angle", "control"])
     win.resize(1280, 800)

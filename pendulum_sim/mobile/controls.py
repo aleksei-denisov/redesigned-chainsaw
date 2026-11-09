@@ -237,7 +237,7 @@ class NumberRow(QWidget):
         self.value_stack.addWidget(self.edit)
         vw = QWidget()
         vw.setLayout(self.value_stack)
-        vw.setMinimumWidth(120)
+        vw.setMinimumWidth(88)
         head.addWidget(vw)
         outer.addLayout(head)
         row = QHBoxLayout()
