@@ -507,7 +507,8 @@ class ExperimentsPage(QWidget):
 
         # ------------------------------------------------------ action bar
         self.progress = ProgressBar(1000, show_text=True, height=30)
-        self.run_btn = push_button("Run experiment", "play", primary=True)
+        # short texts: the bar must fit a 360 dp phone
+        self.run_btn = push_button("Run", "play", primary=True)
         self.cancel_btn = push_button("Cancel", "close")
         self.cancel_btn.setEnabled(False)
         self.bar = ActionBar([(self.progress, 2), (self.cancel_btn, 1), (self.run_btn, 2)])
@@ -750,6 +751,8 @@ class ExperimentsPage(QWidget):
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
         self.set_wide(self.width() >= WIDE_MIN_WIDTH)
+        # the pendulum of a replay gets about half of the screen's height
+        self.replay.view.setMinimumHeight(max(240, int(0.5 * self.area.viewport().height())))
 
     # -------------------------------------------------------------- files
     def _file_io(self):

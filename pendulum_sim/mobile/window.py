@@ -675,6 +675,8 @@ class MobileWindow(MainWindow):
         bar = {"simulate": self.simulate_page.bar, "graphs": self.graphs_page.bar}.get(self.current)
         if self.current == "autotune" and self._autotune is not None:
             bar = getattr(self._autotune.pages.currentWidget(), "bar", None)
+        if self.current == "experiments" and self._experiments is not None:
+            bar = self._experiments.bar
         if bar is not None and bar.isVisible():
             return bar.mapTo(self, QPoint(0, 0)).y()
         return self.stack.mapTo(self, QPoint(0, self.stack.height())).y()
