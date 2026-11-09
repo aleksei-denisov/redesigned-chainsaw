@@ -58,6 +58,7 @@ QLabel[role="title"] {{ font-size: {TITLE_PX}px; font-weight: 600; }}
 QLabel[role="value"] {{ font-weight: 600; }}
 QFrame#card {{ background: {SURFACE}; border: 1px solid {OUTLINE}; border-radius: 12px; }}
 QWidget#navbar {{ background: {SURFACE}; }}
+QWidget#actionbar {{ background: {SURFACE}; border-top: 1px solid {OUTLINE}; }}
 QToolButton[nav="true"] {{ border: none; border-radius: 14px; padding: 4px 6px; color: {TEXT_2};
     font-size: 13px; }}
 QToolButton[nav="true"]:checked {{ background: {ACCENT_DARK}; color: {TEXT}; }}

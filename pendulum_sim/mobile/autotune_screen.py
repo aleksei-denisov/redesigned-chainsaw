@@ -31,13 +31,13 @@ import numpy as np
 from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetricsF, QPainter, QPen
 from PySide6.QtWidgets import (
+    QBoxLayout,
     QButtonGroup,
     QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
     QPushButton,
-    QScrollArea,
     QSizePolicy,
     QStackedWidget,
     QVBoxLayout,
@@ -57,6 +57,7 @@ from ..simulation.tuning import (
     estimate_seconds,
     robust_tune,
 )
+from .controls import ActionBar, scroll_area
 from .plot_math import format_tick, nice_ticks
 
 PRESETS = [("quick", "Quick", "Fewest candidates · fastest"),
@@ -465,14 +466,20 @@ class AutotuneScreen(QWidget):
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
         self._layout_presets(3 if self.width() >= self.PRESETS_SIDE_BY_SIDE_MIN_WIDTH else 1)
+        self._layout_result()
 
-    def _scroll(self, inner: QWidget) -> QScrollArea:
-        area = QScrollArea()
-        area.setWidget(inner)
-        area.setWidgetResizable(True)
-        area.setFrameShape(QFrame.Shape.NoFrame)
-        area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        return area
+    def _page(self, inner: QWidget, buttons: list[tuple[QWidget, int]]) -> QWidget:
+        """Kinetic scrolling content above a fixed action bar (buttons always reachable)."""
+        page = QWidget()
+        v = QVBoxLayout(page)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(0)
+        area = scroll_area(inner)
+        v.addWidget(area, 1)
+        bar = ActionBar(buttons)
+        v.addWidget(bar)
+        page.area, page.bar = area, bar
+        return page
 
     def _build_setup(self) -> QWidget:
         page = QWidget()
@@ -510,15 +517,11 @@ class AutotuneScreen(QWidget):
         self.cores_label.setWordWrap(True)
         v.addWidget(self.cores_label)
         v.addStretch(1)
-        row = QHBoxLayout()
         self.close_btn = _big_button("Close")
         self.start_btn = _big_button("Start auto-tune", primary=True)
-        row.addWidget(self.close_btn, 1)
-        row.addWidget(self.start_btn, 2)
-        v.addLayout(row)
         self.close_btn.clicked.connect(self.close_screen)
         self.start_btn.clicked.connect(self.start)
-        return self._scroll(page)
+        return self._page(page, [(self.close_btn, 1), (self.start_btn, 2)])
 
     def _build_running(self) -> QWidget:
         page = QWidget()
@@ -554,8 +557,7 @@ class AutotuneScreen(QWidget):
         v.addWidget(card, 1)
         self.cancel_btn = _big_button("Cancel")
         self.cancel_btn.clicked.connect(self.cancel)
-        v.addWidget(self.cancel_btn)
-        return self._scroll(page)
+        return self._page(page, [(self.cancel_btn, 1)])
 
     def _build_result(self) -> QWidget:
         page = QWidget()
@@ -569,7 +571,14 @@ class AutotuneScreen(QWidget):
         self.result_note = QLabel()
         self.result_note.setWordWrap(True)
         v.addWidget(self.result_note)
-        row = QHBoxLayout()
+        # wide landscape: gains (stacked) on the left, response on the right;
+        # otherwise gains side by side above the response
+        self.result_body = QBoxLayout(QBoxLayout.Direction.TopToBottom)
+        self.result_body.setSpacing(12)
+        gains = QWidget()
+        self.gains_box = QBoxLayout(QBoxLayout.Direction.LeftToRight, gains)
+        self.gains_box.setContentsMargins(0, 0, 0, 0)
+        self.gains_box.setSpacing(12)
         old_card, ol = _card("Current gains")
         new_card, nl = _card("Tuned gains")
         mono = QFont("monospace")
@@ -580,27 +589,36 @@ class AutotuneScreen(QWidget):
             lab.setFont(mono)
             lab.setWordWrap(True)
             lay.addWidget(lab)
-        row.addWidget(old_card)
-        row.addWidget(new_card)
-        v.addLayout(row)
+        self.gains_box.addWidget(old_card)
+        self.gains_box.addWidget(new_card)
+        self.result_body.addWidget(gains)
         metrics_card, ml = _card("Response to the same push (before → after)")
         self.metrics_grid = QGridLayout()
         self.metrics_grid.setHorizontalSpacing(18)
         ml.addLayout(self.metrics_grid)
         self.preview = MiniPlot("θ1 [deg]", 180)
         ml.addWidget(self.preview)
-        v.addWidget(metrics_card, 1)
-        buttons = QHBoxLayout()
+        self.result_body.addWidget(metrics_card, 1)
+        v.addLayout(self.result_body, 1)
         self.discard_btn = _big_button("Discard")
         self.rerun_btn = _big_button("Rerun")
         self.apply_btn = _big_button("Apply", primary=True)
-        for b, stretch in ((self.discard_btn, 1), (self.rerun_btn, 1), (self.apply_btn, 2)):
-            buttons.addWidget(b, stretch)
-        v.addLayout(buttons)
         self.discard_btn.clicked.connect(self.close_screen)
         self.rerun_btn.clicked.connect(self.show_setup)
         self.apply_btn.clicked.connect(self._apply)
-        return self._scroll(page)
+        return self._page(page, [(self.discard_btn, 1), (self.rerun_btn, 1), (self.apply_btn, 2)])
+
+    WIDE_RESULT_MIN_WIDTH = 900
+
+    def _layout_result(self) -> None:
+        if not hasattr(self, "result_body"):
+            return
+        wide = self.width() >= self.WIDE_RESULT_MIN_WIDTH and self.width() > self.height()
+        D = QBoxLayout.Direction
+        self.result_body.setDirection(D.LeftToRight if wide else D.TopToBottom)
+        self.gains_box.setDirection(D.TopToBottom if wide else D.LeftToRight)
+        self.result_body.setStretch(0, 2 if wide else 0)
+        self.result_body.setStretch(1, 3 if wide else 1)
 
     # ------------------------------------------------------------ flow
     @property

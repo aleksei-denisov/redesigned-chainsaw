@@ -144,8 +144,9 @@ def main(out_dir: str) -> int:
         app.processEvents()
         time.sleep(0.02)
     shot("tablet_landscape_autotune_result")
-    win.resize(*SIZES["phone_portrait"])
-    shot("phone_portrait_autotune_result")
+    for size in ("tablet_portrait", "phone_portrait", "phone_landscape"):
+        win.resize(*SIZES[size])
+        shot(f"{size}_autotune_result")
     screen.discard_btn.click()
     win.navigate("simulate", remember=False)
     win._history.clear()

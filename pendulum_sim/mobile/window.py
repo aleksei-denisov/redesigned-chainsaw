@@ -28,17 +28,15 @@ import numpy as np
 from PySide6.QtCore import QPoint, QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QGuiApplication
 from PySide6.QtWidgets import (
-    QAbstractItemView,
+    QAbstractScrollArea,
     QDialog,
     QDialogButtonBox,
-    QFrame,
+    QGraphicsView,
     QHBoxLayout,
     QLabel,
     QMenu,
     QMessageBox,
     QPushButton,
-    QScrollArea,
-    QScroller,
     QSplitter,
     QStackedWidget,
     QToolButton,
@@ -52,7 +50,7 @@ from ..ui.experiment_panel import ExperimentPanel
 from ..ui.main_window import SPEEDS, MainWindow
 from . import cpu, theme
 from .autotune_screen import AutotuneScreen
-from .controls import NumberRow, tool_button
+from .controls import NumberRow, make_kinetic, scroll_area, tool_button
 from .graphs import GraphsPanel
 from .icons import icon
 from .pages import ControllerPage, GraphsPage, NavBar, SettingsPage, SimulatePage, SystemPage
@@ -159,11 +157,7 @@ class MobileWindow(MainWindow):
         el = QVBoxLayout(inner)
         el.setContentsMargins(8, 8, 8, 8)
         el.addWidget(self.experiments)
-        experiments_page = QScrollArea()       # scrolls only when the screen is too low (phone landscape)
-        experiments_page.setWidgetResizable(True)
-        experiments_page.setFrameShape(QFrame.Shape.NoFrame)
-        experiments_page.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        experiments_page.setWidget(inner)
+        experiments_page = scroll_area(inner)  # scrolls only when the screen is too low (phone landscape)
         self.pages: dict[str, QWidget] = {
             "simulate": self.simulate_page, "graphs": self.graphs_page, "controller": self.controller_page,
             "system": self.system_page, "autotune": self.autotune, "experiments": experiments_page,
@@ -190,9 +184,11 @@ class MobileWindow(MainWindow):
         self._arrange(rail=False)
         self.current = "simulate"
         self.nav.set_current("simulate")
-        # kinetic scrolling for the experiment page's lists and table
-        for view in self.experiments.findChildren(QAbstractItemView):
-            QScroller.grabGesture(view.viewport(), QScroller.ScrollerGestureType.TouchGesture)
+        # finger scrolling for the experiment page's settings column, lists and table
+        # (not for the plots: QGraphicsView is a scroll area too, but pans/zooms itself)
+        for area in self.experiments.findChildren(QAbstractScrollArea):
+            if not isinstance(area, QGraphicsView):
+                make_kinetic(area)
 
     def _arrange(self, rail: bool) -> None:
         """Navigation rail at the left (tablet landscape) or bar at the bottom."""

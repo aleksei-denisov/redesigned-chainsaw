@@ -19,6 +19,7 @@ from PySide6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, QRect, QSiz
 from PySide6.QtGui import QColor, QDoubleValidator, QPainter
 from PySide6.QtWidgets import (
     QAbstractButton,
+    QAbstractScrollArea,
     QButtonGroup,
     QFrame,
     QHBoxLayout,
@@ -623,6 +624,46 @@ class Section(QWidget):
         return self.title_label.text()
 
 
+def make_kinetic(area: QAbstractScrollArea) -> QAbstractScrollArea:
+    """Finger scrolling with a little overshoot for any scroll area (idempotent)."""
+    vp = area.viewport()
+    if vp.property("kinetic"):
+        return area
+    vp.setProperty("kinetic", True)
+    QScroller.grabGesture(vp, QScroller.ScrollerGestureType.TouchGesture)
+    props = QScroller.scroller(vp).scrollerProperties()
+    props.setScrollMetric(QScrollerProperties.ScrollMetric.OvershootDragResistanceFactor, 0.3)
+    props.setScrollMetric(QScrollerProperties.ScrollMetric.OvershootScrollDistanceFactor, 0.1)
+    props.setScrollMetric(QScrollerProperties.ScrollMetric.DragStartDistance, 0.004)
+    QScroller.scroller(vp).setScrollerProperties(props)
+    return area
+
+
+def scroll_area(inner: QWidget) -> QScrollArea:
+    """Vertical, kinetic, never horizontal: content squeezed to the viewport width."""
+    area = QScrollArea()
+    inner.setSizePolicy(QSizePolicy.Policy.Ignored, inner.sizePolicy().verticalPolicy())
+    area.setWidget(inner)
+    area.setWidgetResizable(True)
+    area.setFrameShape(QFrame.Shape.NoFrame)
+    area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    return make_kinetic(area)
+
+
+class ActionBar(QWidget):
+    """Fixed bar at the bottom of a screen: its buttons never scroll out of reach."""
+
+    def __init__(self, buttons: list[tuple[QWidget, int]]) -> None:
+        super().__init__()
+        self.setObjectName("actionbar")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        row = QHBoxLayout(self)
+        row.setContentsMargins(16, 10, 16, 10)
+        row.setSpacing(10)
+        for b, stretch in buttons:
+            row.addWidget(b, stretch)
+
+
 class ScrollPage(QScrollArea):
     """Vertical page with kinetic touch scrolling, no horizontal scrolling."""
 
@@ -638,12 +679,7 @@ class ScrollPage(QScrollArea):
         self.layout_.setContentsMargins(16, 12, 16, 24)
         self.layout_.setSpacing(12)
         self.setWidget(self.content)
-        QScroller.grabGesture(self.viewport(), QScroller.ScrollerGestureType.TouchGesture)
-        props = QScroller.scroller(self.viewport()).scrollerProperties()
-        props.setScrollMetric(QScrollerProperties.ScrollMetric.OvershootDragResistanceFactor, 0.3)
-        props.setScrollMetric(QScrollerProperties.ScrollMetric.OvershootScrollDistanceFactor, 0.1)
-        props.setScrollMetric(QScrollerProperties.ScrollMetric.DragStartDistance, 0.004)
-        QScroller.scroller(self.viewport()).setScrollerProperties(props)
+        make_kinetic(self)
 
     def add(self, widget: QWidget, stretch: int = 0) -> QWidget:
         self.layout_.addWidget(widget, stretch)

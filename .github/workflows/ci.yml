@@ -155,10 +155,10 @@ jobs:
           name: mobile-preview
           path: build/mobile-preview/*.*
       - name: Publish to the mobile-preview pre-release
-        if: github.event_name == 'push' && (github.ref == 'refs/heads/android-apk' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/mobile-ux')
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/android-apk' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/mobile-ux' || github.ref == 'refs/heads/mobile-polish')
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref == 'refs/heads/mobile-ux' && 'mobile-ux-preview' || 'mobile-preview' }}
+          TAG: ${{ github.ref == 'refs/heads/mobile-ux' && 'mobile-ux-preview' || github.ref == 'refs/heads/mobile-polish' && 'mobile-polish-preview' || 'mobile-preview' }}
         run: |
           gh release delete "$TAG" --yes --cleanup-tag || true
           gh release create "$TAG" build/mobile-preview/*.png build/mobile-preview/benchmark.txt \

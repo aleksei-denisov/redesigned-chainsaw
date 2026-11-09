@@ -100,11 +100,11 @@ jobs:
       # A direct download link for phones/tablets (artifacts are zipped and need a GitHub login):
       # https://github.com/<owner>/<repo>/releases/download/android-latest/InvertedPendulumSimulator-debug.apk
       - name: Publish rolling pre-release
-        if: github.event_name == 'push' && (github.ref == 'refs/heads/android-apk' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/mobile-ux')
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/android-apk' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/mobile-ux' || github.ref == 'refs/heads/mobile-polish')
         env:
           GH_TOKEN: ${{ github.token }}
-          # mobile-ux (work in progress) gets its own link so android-latest stays stable
-          TAG: ${{ github.ref == 'refs/heads/mobile-ux' && 'android-mobile-ux' || 'android-latest' }}
+          # work-in-progress branches get their own link so android-latest stays stable
+          TAG: ${{ github.ref == 'refs/heads/mobile-ux' && 'android-mobile-ux' || github.ref == 'refs/heads/mobile-polish' && 'android-mobile-polish' || 'android-latest' }}
         run: |
           cp dist/*.apk InvertedPendulumSimulator-debug.apk
           gh release delete "$TAG" --yes --cleanup-tag || true

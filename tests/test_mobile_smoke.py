@@ -12,7 +12,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6")
 pytest.importorskip("pyqtgraph")
 
-from PySide6.QtCore import QPointF, QSettings, Qt  # noqa: E402
+from PySide6.QtCore import QPoint, QPointF, QSettings, Qt  # noqa: E402
 from PySide6.QtWidgets import QAbstractButton, QApplication, QScrollArea, QWidget  # noqa: E402
 
 from pendulum_sim.mobile import icons, theme  # noqa: E402
@@ -363,6 +363,41 @@ def test_phone_layout_fits_and_targets_are_large(win, app, size):
                                                              widest(inner, area.viewport().width() - 80))
     win.navigate("simulate")
     win.telemetry.set_selection(["angle", "control"])
+    win.resize(1280, 800)
+
+
+SIZES = {"tablet_landscape": (1280, 800), "tablet_portrait": (800, 1280),
+         "phone_landscape": (915, 412), "phone_portrait": (412, 915)}
+
+
+@pytest.mark.parametrize("size", list(SIZES), ids=list(SIZES))
+def test_every_screen_scrolls_by_touch_and_keeps_actions_reachable(win, app, size):
+    from PySide6.QtWidgets import QAbstractScrollArea, QGraphicsView
+
+    for _ in range(2):
+        win.resize(*SIZES[size])
+        app.processEvents()
+    win.autotune.open(win.config)
+    screens = [(k, None) for k in win.pages if k != "autotune"] + [("autotune", i) for i in range(3)]
+    window_rect = win.rect()
+    for key, sub in screens:
+        win.navigate(key)
+        if sub is not None:
+            win.autotune.pages.setCurrentIndex(sub)
+        app.processEvents()
+        page = win.pages[key]
+        for area in page.findChildren(QAbstractScrollArea):
+            if area.isVisibleTo(win) and not isinstance(area, QGraphicsView):
+                assert area.viewport().property("kinetic"), (size, key, sub, type(area).__name__)
+        if sub is not None:                       # action bar fully inside the window
+            bar = win.autotune.pages.currentWidget().bar
+            for b in bar.findChildren(QAbstractButton):
+                if b.isVisibleTo(win):
+                    r = b.rect().translated(b.mapTo(win, QPoint(0, 0)))
+                    assert window_rect.contains(r), (size, sub, b.text(), r, window_rect)
+                    assert b.height() >= 40
+    win.autotune.pages.setCurrentIndex(0)
+    win.navigate("simulate")
     win.resize(1280, 800)
 
 
