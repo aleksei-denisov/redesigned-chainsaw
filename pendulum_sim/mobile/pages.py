@@ -624,7 +624,7 @@ class NavBar(QWidget):
         if self.layout_ is not None and self.vertical == vertical and visible_keys is None:
             return
         self.vertical = vertical
-        old = self.layout_
+        old, self.layout_ = self.layout_, None
         if old is not None:
             while old.count():
                 old.takeAt(0)

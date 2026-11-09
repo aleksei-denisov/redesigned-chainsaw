@@ -483,6 +483,15 @@ class MobileWindow(MainWindow):
         self._apply_orientation()
 
     def _apply_orientation(self) -> None:
+        if getattr(self, "_orienting", False):     # re-arranging can resize the window again
+            return
+        self._orienting = True
+        try:
+            self._apply_orientation_now()
+        finally:
+            self._orienting = False
+
+    def _apply_orientation_now(self) -> None:
         landscape = self.width() > self.height()
         rail = landscape and self.width() >= RAIL_MIN_WIDTH
         if rail != self._rail:
