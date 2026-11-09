@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import math
 import os
+import sys
 import time
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
@@ -220,8 +221,18 @@ def evaluate_candidate(config_dict: dict, log_weights: list[float], settings: Tu
 
 
 # ---------------------------------------------------------------- search
-def _default_workers() -> int:
+def multiprocessing_supported() -> bool:
+    """Worker processes are unavailable inside an Android app (no fork/sem_open there)."""
+    return not (hasattr(sys, "getandroidapilevel") or sys.platform == "android")
+
+
+def default_workers() -> int:
+    if not multiprocessing_supported():
+        return 1
     return max(1, min(8, (os.cpu_count() or 2) - 1))
+
+
+_default_workers = default_workers  # backwards-compatible name
 
 
 def robust_tune(
@@ -254,7 +265,7 @@ def robust_tune(
     lo, hi = WEIGHT_BOUNDS[:, 0], WEIGHT_BOUNDS[:, 1]
     stage1 = [z0] + [np.clip(z0 + rng.normal(0.0, 1.2, 5), lo, hi) for _ in range(s.samples)]
 
-    workers = s.workers or _default_workers()
+    workers = (s.workers or default_workers()) if multiprocessing_supported() else 1
     executor = None
     if workers > 1:
         try:

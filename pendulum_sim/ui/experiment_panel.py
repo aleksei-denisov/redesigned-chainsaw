@@ -10,7 +10,6 @@ from PySide6.QtCore import QThread, Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QComboBox,
-    QFileDialog,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -35,6 +34,7 @@ from ..simulation import (
     run_experiment,
     save_experiments,
 )
+from . import file_io
 from .controller_panel import ControllerPanel
 from .widgets import EXPERIMENT_COLORS, check, group, hint, scrollable, spin
 
@@ -335,20 +335,21 @@ class ExperimentPanel(QWidget):
     def save(self) -> None:
         if not self.results:
             return
-        path, _ = QFileDialog.getSaveFileName(self, "Save experiment results", "experiments.json", "JSON (*.json)")
+        path = file_io.save_file_name(self, "Save experiment results", "experiments.json", "JSON (*.json)")
         if path:
             try:
-                save_experiments(self.results, path)
-                self.statusMessage.emit(f"Saved {len(self.results)} experiments to {Path(path).name}")
+                file_io.write_with(path, lambda local: save_experiments(self.results, local))
+                self.statusMessage.emit(f"Saved {len(self.results)} experiments to "
+                                        f"{Path(file_io.display_name(path)).name}")
             except OSError as exc:
                 QMessageBox.critical(self, "Save failed", str(exc))
 
     def load(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "Load experiment results", "", "JSON (*.json)")
+        path = file_io.open_file_name(self, "Load experiment results", "", "JSON (*.json)")
         if not path:
             return
         try:
-            loaded = load_experiments(path)
+            loaded = file_io.read_with(path, load_experiments)
         except (OSError, ValueError) as exc:
             QMessageBox.critical(self, "Load failed", str(exc))
             return
@@ -363,10 +364,10 @@ class ExperimentPanel(QWidget):
             QMessageBox.information(self, "Export CSV", "Select an experiment in the table first.")
             return
         r = self.results[rows[0]]
-        path, _ = QFileDialog.getSaveFileName(self, "Export time series", f"{r.name}.csv", "CSV (*.csv)")
+        path = file_io.save_file_name(self, "Export time series", f"{r.name}.csv", "CSV (*.csv)")
         if path:
             try:
-                export_csv(r, path)
+                file_io.write_with(path, lambda local: export_csv(r, local))
             except OSError as exc:
                 QMessageBox.critical(self, "Export failed", str(exc))
 

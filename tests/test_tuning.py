@@ -76,3 +76,13 @@ def test_round_nice():
     assert round_nice(3.88) == 3.8
     assert np.isclose(round_nice(0.0612), 0.061)
     assert round_nice(0.0) == 0.0
+
+
+def test_no_worker_processes_on_android(monkeypatch):
+    import sys
+
+    from pendulum_sim.simulation import tuning
+
+    monkeypatch.setattr(sys, "getandroidapilevel", lambda: 34, raising=False)
+    assert not tuning.multiprocessing_supported()
+    assert tuning.default_workers() == 1

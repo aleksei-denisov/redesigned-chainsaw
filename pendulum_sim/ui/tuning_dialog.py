@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import os
-
 from PySide6.QtCore import QThread, Signal
 from PySide6.QtWidgets import (
     QComboBox,
@@ -18,7 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..simulation import AppConfig
-from ..simulation.tuning import TuningResult, TuningSettings, robust_tune
+from ..simulation.tuning import TuningResult, TuningSettings, default_workers, robust_tune
 from .widgets import hint
 
 
@@ -73,7 +71,7 @@ class RobustTuneDialog(QDialog):
         self.effort.addItem("Thorough", "thorough")
         self.effort.setCurrentIndex(1)
         form.addRow("Search effort", self.effort)
-        cores = max(1, min(8, (os.cpu_count() or 2) - 1))
+        cores = default_workers()
         form.addRow("Parallel workers", QLabel(f"{cores} CPU core(s)"))
         layout.addLayout(form)
 

@@ -57,6 +57,7 @@ class PendulumView(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.settings = ViewSettings()
+        self.antialias = True            # the mobile app can turn this off on slow devices
         self.scale = 220.0               # pixels per metre
         self.camera = np.array([0.0, 0.35])
         self.frame: FrameData | None = None
@@ -143,7 +144,12 @@ class PendulumView(QWidget):
     # --------------------------------------------------------------- paint
     def paintEvent(self, event) -> None:  # noqa: N802
         p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        self.paint(p)
+        p.end()
+
+    def paint(self, p: QPainter) -> None:
+        """Draw the whole scene with ``p`` (widget-sized logical coordinates)."""
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, self.antialias)
         pal = self.palette()
         bg = pal.base().color()
         fg = pal.text().color()
@@ -167,7 +173,6 @@ class PendulumView(QWidget):
         if self.settings.show_hud:
             self._draw_hud(p, f, fg)
         self._draw_scale_bar(p, fg)
-        p.end()
 
     def _draw_grid(self, p: QPainter, dark: bool) -> None:
         spacing = 0.1 if self.scale > 150 else 0.5 if self.scale > 40 else 1.0

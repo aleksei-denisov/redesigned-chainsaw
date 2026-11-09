@@ -28,7 +28,7 @@ import time
 
 import numpy as np
 from PySide6.QtCore import QEvent, QPointF, Qt, Signal
-from PySide6.QtGui import QColor, QPainter, QPen
+from PySide6.QtGui import QColor, QImage, QPainter, QPen
 
 from ..ui.pendulum_view import PendulumView
 
@@ -47,6 +47,9 @@ class TouchPendulumView(PendulumView):
         self._one: dict | None = None        # single-finger gesture state
         self._two: dict | None = None        # two-finger gesture state
         self._drag_point: QPointF | None = None
+        self.render_scale: float | None = None     # None = native resolution
+        self._buffer: QImage | None = None
+        self.stats = None                            # performance.FrameStats, optional
 
     # ------------------------------------------------------------ geometry
     def tip_world(self) -> np.ndarray | None:
@@ -173,20 +176,52 @@ class TouchPendulumView(PendulumView):
         pass  # a double tap must not trigger the base class's "fit"
 
     # ---------------------------------------------------------------- paint
+    def set_render_scale(self, scale: float | None) -> None:
+        """Paint at ``scale`` device pixels per logical pixel (``None`` = native resolution)."""
+        self.render_scale = scale
+        self._buffer = None
+        self.update()
+
+    def effective_scale(self) -> float:
+        native = self.devicePixelRatioF()
+        return native if self.render_scale is None else min(self.render_scale, native)
+
     def paintEvent(self, event) -> None:  # noqa: N802
-        super().paintEvent(event)
+        started = time.perf_counter()
+        native = self.devicePixelRatioF()
+        scale = self.effective_scale()
+        if scale >= native - 1e-3:
+            p = QPainter(self)
+            self.paint(p)
+            self._paint_drag(p)
+            p.end()
+        else:
+            # Software rendering cost grows with the pixel count: draw at a reduced pixel
+            # ratio into an off-screen image and let one smooth scaled blit fill the widget.
+            w, h = max(1, int(self.width() * scale)), max(1, int(self.height() * scale))
+            if self._buffer is None or self._buffer.width() != w or self._buffer.height() != h:
+                self._buffer = QImage(w, h, QImage.Format.Format_RGB32)
+                self._buffer.setDevicePixelRatio(scale)
+            ip = QPainter(self._buffer)
+            self.paint(ip)
+            self._paint_drag(ip)
+            ip.end()
+            p = QPainter(self)
+            p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+            p.drawImage(self.rect(), self._buffer)
+            p.end()
+        if self.stats is not None:
+            self.stats.add_view((time.perf_counter() - started) * 1000.0)
+
+    def _paint_drag(self, p: QPainter) -> None:
         tip = self.tip_world()
         if self._drag_point is None or tip is None:
             return
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        pen = QPen(DRAG_COLOR, 3, Qt.PenStyle.DashLine)
-        p.setPen(pen)
-        a = self.to_screen(tip)
-        p.drawLine(a, self._drag_point)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        p.setPen(QPen(DRAG_COLOR, 3, Qt.PenStyle.DashLine))
+        p.drawLine(self.to_screen(tip), self._drag_point)
         p.setBrush(DRAG_COLOR)
         p.drawEllipse(self._drag_point, 10, 10)
-        p.end()
 
 
 def _dist(a: QPointF, b: QPointF) -> float:

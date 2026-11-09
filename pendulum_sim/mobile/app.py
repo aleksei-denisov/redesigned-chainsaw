@@ -5,6 +5,7 @@ On Android this is started by ``android/main.py`` (packaged as the APK's
 
     python -m pendulum_sim.mobile                 # phone-sized window
     python -m pendulum_sim.mobile --landscape
+    python -m pendulum_sim.mobile --tablet --landscape   # 1280×800 tablet
     python -m pendulum_sim.mobile --smoke-test 2  # CI: run briefly and exit
 
 If start-up fails, the traceback is shown on screen (and printed, which ends up
@@ -15,6 +16,7 @@ diagnostic for a first run on a new device.
 from __future__ import annotations
 
 import argparse
+import gc
 import os
 import sys
 import time
@@ -28,6 +30,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                                      description="Inverted Pendulum Simulator – mobile interface")
     parser.add_argument("--scenario", default=None, help="built-in scenario to start with")
     parser.add_argument("--landscape", action="store_true", help="desktop preview in landscape")
+    parser.add_argument("--tablet", action="store_true", help="desktop preview at tablet size")
     parser.add_argument("--smoke-test", type=float, metavar="SECONDS", default=None,
                         help="run the simulation for SECONDS, then exit (CI)")
     args, _unknown = parser.parse_known_args(argv)  # Android may pass launcher arguments
@@ -56,7 +59,9 @@ def main(argv: list[str] | None = None) -> int:
     app = QApplication.instance() or QApplication(sys.argv[:1])
     app.setApplicationName("Inverted Pendulum Simulator")
     app.setOrganizationName("pendulum-sim")
-    app.setStyle("Fusion")
+    from .touch_style import apply_touch_style
+
+    apply_touch_style(app)
 
     try:
         import pyqtgraph as pg
@@ -68,6 +73,10 @@ def main(argv: list[str] | None = None) -> int:
         pg.setConfigOptions(antialias=True, background=pal.base().color(), foreground=pal.text().color())
         key = args.scenario if args.scenario in SCENARIOS else DEFAULT_SCENARIO
         window = MobileWindow(scenario(key))
+        # Move everything created so far (Qt wrappers, pyqtgraph items, scenarios) out of the
+        # garbage collector's view so full collections stay short while the app runs.
+        gc.collect()
+        gc.freeze()
     except Exception:  # noqa: BLE001 - show any start-up failure on screen
         text = traceback.format_exc()
         print(text, file=sys.stderr, flush=True)
@@ -78,7 +87,11 @@ def main(argv: list[str] | None = None) -> int:
     if IS_ANDROID:
         window.showMaximized()
     else:
-        window.resize(820, 420) if args.landscape else window.resize(420, 820)
+        long_edge, short_edge = (1280, 800) if args.tablet else (860, 400)
+        if args.landscape:
+            window.resize(long_edge, short_edge)
+        else:
+            window.resize(short_edge, long_edge)
         window.show()
 
     if args.smoke_test is not None:
@@ -104,6 +117,7 @@ def _shutdown(app, window) -> None:
 
 
 def _smoke_test(app, window, seconds: float) -> int:
+    """Seed LQR gains, run the live simulation for ``seconds`` and one experiment, then quit."""
     from PySide6.QtCore import QTimer
 
     window.seed_lqr()
@@ -111,15 +125,29 @@ def _smoke_test(app, window, seconds: float) -> int:
     started = time.perf_counter()
     result = {"code": 1}
 
-    def finish() -> None:
-        ok = window.sim.time > 0
-        print(f"mobile smoke test: t={window.sim.time:.2f}s after {time.perf_counter() - started:.1f}s wall, "
-              f"angles={[round(float(a), 4) for a in window.sim.angles]}", flush=True)
-        result["code"] = 0 if ok else 1
-        app.quit()
+    def start_experiment() -> None:
+        window.experiments.duration.setValue(1.0)
+        window.experiments.run()
 
-    QTimer.singleShot(int(seconds * 1000), finish)
+    def check() -> None:
+        if window.experiments.results:
+            res = window.experiments.results[-1]
+            print(f"mobile smoke test: live t={window.sim.time:.2f}s after "
+                  f"{time.perf_counter() - started:.1f}s wall, angles="
+                  f"{[round(float(a), 4) for a in window.sim.angles]}, experiment '{res.name}' "
+                  f"rmse={res.metrics.rmse:.3f} deg, {window.stats.fps:.0f} fps", flush=True)
+            result["code"] = 0 if window.sim.time > 0 else 1
+            app.quit()
+        elif time.perf_counter() - started > seconds + 120:
+            print("mobile smoke test: timeout waiting for experiment", file=sys.stderr, flush=True)
+            app.quit()
+
+    QTimer.singleShot(int(seconds * 1000), start_experiment)
+    poll = QTimer()
+    poll.timeout.connect(check)
+    poll.start(200)
     app.exec()
+    poll.stop()
     return result["code"]
 
 

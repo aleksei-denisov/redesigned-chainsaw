@@ -1,4 +1,10 @@
-"""Main application window: wires the simulator to the view, panels and graphs."""
+"""Main application window: wires the simulator to the view, panels and graphs.
+
+The window is assembled by small builder methods (``_create_view``, ``_create_widgets``,
+``_build_layout``, ``_create_actions``, ``_build_toolbar_and_menu``, ``_build_status_bar``)
+so that the touch interface (:mod:`pendulum_sim.mobile.window`) can subclass it and
+replace only the layout and input handling while reusing every handler below.
+"""
 
 from __future__ import annotations
 
@@ -13,7 +19,6 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QDockWidget,
-    QFileDialog,
     QLabel,
     QMainWindow,
     QMessageBox,
@@ -34,6 +39,8 @@ from ..simulation import (
     save_config,
     scenario,
 )
+from ..simulation.realtime import RealtimeStepper
+from . import file_io
 from .controller_panel import ControllerPanel
 from .experiment_panel import ExperimentPanel
 from .pendulum_view import FrameData, PendulumView
@@ -55,33 +62,54 @@ class MainWindow(QMainWindow):
     def __init__(self, config: AppConfig) -> None:
         super().__init__()
         self.resize(1500, 920)           # adjusted to the screen in fit_to_screen()
-        self.config_path: Path | None = None
+        self.config_path: Path | str | None = None   # str: Android content:// URI
         self.running = False
-        self._accum = 0.0
+        self.stepper = RealtimeStepper(budget_s=PHYSICS_BUDGET_S)   # fixed-step pacing (Qt-free)
         self._last_frame = time.perf_counter()
         self._last_plot = 0.0
+        self.plot_interval_min = PLOT_INTERVAL_S     # graph refresh limits (adaptive in between)
+        self.plot_interval_max = MAX_PLOT_INTERVAL_S
+        self.target_frame_s = TARGET_FRAME_S
         self._plot_interval = PLOT_INTERVAL_S
         self._frame_period = FRAME_INTERVAL_MS / 1000.0
-        self._physics_ms = 0.0
-        self._rtf = 0.0
         self.speed = 1.0
 
-        # ------------------------------------------------------- widgets
-        self.view = PendulumView()
+        self._create_widgets()
+        self._build_layout()
+        self._create_actions()
+        self._build_toolbar_and_menu()
+        self._build_status_bar()
+        self._connect_signals()
+
+        self.load(config)
+        self.timer = QTimer(self)
+        self.timer.setTimerType(Qt.TimerType.PreciseTimer)
+        self.timer.timeout.connect(self._on_frame)
+        self.timer.start(FRAME_INTERVAL_MS)
+
+    # ------------------------------------------------------------- builders
+    def _create_view(self) -> PendulumView:
+        return PendulumView()
+
+    def _create_widgets(self) -> None:
+        """Create the view, graphs, experiment page and configuration panels (no layout)."""
+        self.view = self._create_view()
         self.telemetry = TelemetryPanel()
+        self.experiments = ExperimentPanel(lambda: self.config)
+        self.plant_panel = PlantPanel()
+        self.controller_panel = ControllerPanel()
+        self.settings_panel = SettingsPanel()
+
+    def _build_layout(self) -> None:
         live = QSplitter(Qt.Orientation.Vertical)
         live.addWidget(self.view)
         live.addWidget(self.telemetry)
         live.setSizes([520, 400])
-        self.experiments = ExperimentPanel(lambda: self.config)
         self.tabs = QTabWidget()
         self.tabs.addTab(live, "Live simulation")
         self.tabs.addTab(self.experiments, "Experiments && comparison")
         self.setCentralWidget(self.tabs)
 
-        self.plant_panel = PlantPanel()
-        self.controller_panel = ControllerPanel()
-        self.settings_panel = SettingsPanel()
         side = QTabWidget()
         side.addTab(scrollable(self.plant_panel), "Pendulum")
         side.addTab(scrollable(self.controller_panel), "PID controller")
@@ -94,10 +122,7 @@ class MainWindow(QMainWindow):
         dock.setMinimumWidth(330)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
 
-        self._build_actions()
-        self._build_status_bar()
-
-        # -------------------------------------------------------- signals
+    def _connect_signals(self) -> None:
         self.plant_panel.changed.connect(self._on_plant_changed)
         self.controller_panel.changed.connect(self._on_controller_changed)
         self.controller_panel.autoTuneRequested.connect(self._on_auto_tune)
@@ -113,12 +138,6 @@ class MainWindow(QMainWindow):
         self.experiments.statusMessage.connect(self.show_message)
         self.experiments.apply_btn.clicked.connect(self._apply_experiment_gains)
 
-        self.load(config)
-        self.timer = QTimer(self)
-        self.timer.setTimerType(Qt.TimerType.PreciseTimer)
-        self.timer.timeout.connect(self._on_frame)
-        self.timer.start(FRAME_INTERVAL_MS)
-
     # ------------------------------------------------------------- actions
     def _action(self, text: str, slot, shortcut: str | None = None, tip: str = "") -> QAction:
         act = QAction(text, self)
@@ -130,7 +149,8 @@ class MainWindow(QMainWindow):
         self.addAction(act)
         return act
 
-    def _build_actions(self) -> None:
+    def _create_actions(self) -> None:
+        """Actions and the speed / push-force / scenario controls (placed by the toolbar builder)."""
         self.act_start = self._action("▶ Start", self.start, "F5", "Start / resume the simulation")
         self.act_pause = self._action("⏸ Pause", self.pause, "F6", "Pause the simulation")
         self.act_toggle = self._action("Start/Pause", self.toggle_run, "Space")
@@ -145,7 +165,24 @@ class MainWindow(QMainWindow):
         self.act_save_as = self._action("Save configuration as…", self.save_config_as, "Ctrl+Shift+S")
         self.act_quit = self._action("Quit", self.close, "Ctrl+Q")
         self.act_fit = self._action("Fit view", self.view.fit, "Ctrl+0")
+        self.act_about = QAction("About", self)
+        self.act_about.triggered.connect(self._about)
 
+        self.speed_combo = QComboBox()
+        for s in SPEEDS:
+            self.speed_combo.addItem(f"{s:g}×", s)
+        self.speed_combo.setCurrentIndex(SPEEDS.index(1.0))
+        self.speed_combo.currentIndexChanged.connect(lambda _: setattr(self, "speed", self.speed_combo.currentData()))
+        self.push_force = spin(0.01, 1000.0, 1.0, 2, 0.5, "N", "Tip push force (0.1 s pulse)")
+        self.push_force.setMinimumWidth(90)
+        self.push_force.valueChanged.connect(self._on_push_force_changed)
+        self.scenario_combo = QComboBox()
+        self.scenario_combo.addItem("— choose a demonstration —", None)
+        for key, factory in SCENARIOS.items():
+            self.scenario_combo.addItem(factory().name, key)
+        self.scenario_combo.activated.connect(self._on_scenario_chosen)
+
+    def _build_toolbar_and_menu(self) -> None:
         tb = QToolBar("Simulation")
         tb.setObjectName("simulation_toolbar")
         tb.setMovable(False)
@@ -154,26 +191,13 @@ class MainWindow(QMainWindow):
             tb.addAction(a)
         tb.addSeparator()
         tb.addWidget(QLabel(" Speed "))
-        self.speed_combo = QComboBox()
-        for s in SPEEDS:
-            self.speed_combo.addItem(f"{s:g}×", s)
-        self.speed_combo.setCurrentIndex(SPEEDS.index(1.0))
-        self.speed_combo.currentIndexChanged.connect(lambda _: setattr(self, "speed", self.speed_combo.currentData()))
         tb.addWidget(self.speed_combo)
         tb.addSeparator()
         tb.addAction(self.act_push_left)
-        self.push_force = spin(0.01, 1000.0, 1.0, 2, 0.5, "N", "Tip push force (0.1 s pulse)")
-        self.push_force.setMinimumWidth(90)
-        self.push_force.valueChanged.connect(self._on_push_force_changed)
         tb.addWidget(self.push_force)
         tb.addAction(self.act_push_right)
         tb.addSeparator()
         tb.addWidget(QLabel(" Scenario "))
-        self.scenario_combo = QComboBox()
-        self.scenario_combo.addItem("— choose a demonstration —", None)
-        for key, factory in SCENARIOS.items():
-            self.scenario_combo.addItem(factory().name, key)
-        self.scenario_combo.activated.connect(self._on_scenario_chosen)
         tb.addWidget(self.scenario_combo)
 
         menu = self.menuBar()
@@ -194,9 +218,7 @@ class MainWindow(QMainWindow):
         view_menu = menu.addMenu("&View")
         view_menu.addAction(self.act_fit)
         help_menu = menu.addMenu("&Help")
-        about = QAction("About", self)
-        about.triggered.connect(self._about)
-        help_menu.addAction(about)
+        help_menu.addAction(self.act_about)
 
     def _build_status_bar(self) -> None:
         self.status_state = QLabel()
@@ -259,16 +281,16 @@ class MainWindow(QMainWindow):
 
     def open_config(self) -> None:
         start = str(Path.cwd() / "configs")
-        path, _ = QFileDialog.getOpenFileName(self, "Open configuration", start, "Configuration (*.json)")
+        path = file_io.open_file_name(self, "Open configuration", start, "Configuration (*.json)")
         if not path:
             return
         try:
-            cfg = load_config(path)
+            cfg = file_io.read_with(path, load_config)
         except (OSError, ValueError) as exc:
             QMessageBox.critical(self, "Could not open configuration", str(exc))
             return
         self.load(cfg)
-        self.config_path = Path(path)
+        self.config_path = path
 
     def save_config(self) -> None:
         if self.config_path is None:
@@ -277,27 +299,25 @@ class MainWindow(QMainWindow):
         self._write_config(self.config_path)
 
     def save_config_as(self) -> None:
-        path, _ = QFileDialog.getSaveFileName(self, "Save configuration", "my_configuration.json",
-                                              "Configuration (*.json)")
+        path = file_io.save_file_name(self, "Save configuration", "my_configuration.json",
+                                      "Configuration (*.json)", ".json")
         if path:
-            if not path.lower().endswith(".json"):
-                path += ".json"
-            self._write_config(Path(path))
+            self._write_config(path)
 
-    def _write_config(self, path: Path) -> None:
+    def _write_config(self, path) -> None:
         self.config.experiment = self.experiments.settings()
         try:
-            save_config(self.config, path)
+            file_io.write_with(path, lambda local: save_config(self.config, local))
         except OSError as exc:
             QMessageBox.critical(self, "Could not save configuration", str(exc))
             return
         self.config_path = path
-        self.show_message(f"Configuration saved to {path}")
+        self.show_message(f"Configuration saved to {file_io.display_name(path)}")
 
     # ---------------------------------------------------- run control
     def start(self) -> None:
         self.running = True
-        self._accum = 0.0
+        self.stepper.reset_clock()
         self._last_frame = time.perf_counter()
         self._update_actions()
 
@@ -476,36 +496,32 @@ class MainWindow(QMainWindow):
                 if deadline is not None and time.perf_counter() > deadline:
                     break
         except SimulationDiverged as exc:
-            self.pause()
-            QMessageBox.warning(self, "Simulation diverged", f"{exc}\n\nThe simulation was paused. "
-                                "Reset it, or reduce the time step / gains.")
+            self._on_diverged(exc)
         return done
+
+    def _on_diverged(self, exc: SimulationDiverged) -> None:
+        self.pause()
+        QMessageBox.warning(self, "Simulation diverged", f"{exc}\n\nThe simulation was paused. "
+                            "Reset it, or reduce the time step / gains.")
 
     def _on_frame(self) -> None:
         now = time.perf_counter()
         elapsed = now - self._last_frame
-        wall = min(elapsed, 0.1)
         self._last_frame = now
         self._frame_period = 0.9 * self._frame_period + 0.1 * elapsed
-        if self.running and wall > 0:
-            dt = self.config.simulation.dt
-            self._accum += wall * self.speed
-            wanted = int(self._accum / dt)
-            done = self._run_steps(wanted, deadline=now + PHYSICS_BUDGET_S)
-            if done < wanted:
-                self._accum = 0.0           # cannot keep up: drop the backlog (slower than real time)
-            else:
-                self._accum -= done * dt
-            rtf = done * dt / wall
-            self._rtf = 0.9 * self._rtf + 0.1 * rtf
-            self._physics_ms = 0.9 * self._physics_ms + 0.1 * (time.perf_counter() - now) * 1000.0
+        if self.running:
+            # Whole fixed-dt steps for the elapsed wall time; backlog dropped beyond the budget.
+            try:
+                self.stepper.tick(self.sim, elapsed, self.speed)
+            except SimulationDiverged as exc:
+                self._on_diverged(exc)
         self._update_view()
         # Graphs are the most expensive thing to paint; refresh them less often when frames are slow
         # so the pendulum animation and the physics stay smooth.
-        if self._frame_period > TARGET_FRAME_S:
-            self._plot_interval = min(MAX_PLOT_INTERVAL_S, self._plot_interval * 1.05)
+        if self._frame_period > self.target_frame_s:
+            self._plot_interval = min(self.plot_interval_max, self._plot_interval * 1.05)
         else:
-            self._plot_interval = max(PLOT_INTERVAL_S, self._plot_interval * 0.98)
+            self._plot_interval = max(self.plot_interval_min, self._plot_interval * 0.98)
         if now - self._last_plot > self._plot_interval:
             self._last_plot = now
             self.telemetry.refresh(self.sim.telemetry)
@@ -532,13 +548,14 @@ class MainWindow(QMainWindow):
     def _update_status(self) -> None:
         self.status_time.setText(f"t = {self.sim.time:.2f} s")
         if self.running:
-            lag = " (slower than real time)" if self._rtf < 0.95 * self.speed else ""
-            self.status_rtf.setText(f"speed {self._rtf:.2f}×{lag}")
+            rtf = self.stepper.realtime_factor
+            lag = " (slower than real time)" if rtf < 0.95 * self.speed else ""
+            self.status_rtf.setText(f"speed {rtf:.2f}×{lag}")
         else:
             self.status_rtf.setText("")
         self.status_energy.setText(f"E = {self.sim.energy():.4f} J")
         fps = 1.0 / max(self._frame_period, 1e-3)
-        self.status_perf.setText(f"{fps:.0f} fps · physics {self._physics_ms:.1f} ms")
+        self.status_perf.setText(f"{fps:.0f} fps · physics {self.stepper.physics_ms:.1f} ms")
         self._update_actions()
 
     def fit_to_screen(self) -> None:
