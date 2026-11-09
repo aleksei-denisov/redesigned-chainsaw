@@ -137,15 +137,23 @@ axes and labels are cached in an image and rebuilt only when the range or size c
 hidden graphs (another screen shown) are not updated at all. Axes keep a minimum span per
 quantity, so a signal at rest never shows `×1e-15` noise.
 
+On the Xiaomi Pad 6 the phase-2 build showed 11 fps with graphs (35 ms per frame in the graphs,
+217 ms worst frame) and 30 fps without. On the CI runner pyqtgraph and the strip charts cost about
+the same per refresh; the gains on the device come from refreshing at 10 Hz instead of with every
+frame, not touching hidden graphs, the zero-copy downsampled polylines, the cached grid of the
+pendulum view and running the simulation thread on the fast cores. Check the *Performance overlay*
+on the device for the real numbers.
+
 Measured offscreen at the Xiaomi Pad 6 geometry (1440×900 logical, pixel ratio 2) on a CI runner
 (`scripts/mobile_preview.py`; a tablet is slower, the ratios hold):
 
 | Per frame | phase 2 | now |
 |---|---|---|
 | pendulum view, native + antialiasing | 25.5 ms | **3.8 ms** – background grid cached as an image |
-| graphs, one refresh (data + paint), 2 / 4 graphs | 4.5 / 5.0 ms (pyqtgraph) | **1.1 / 1.4 ms** (strip charts) |
+| graphs, one refresh incl. window flush, 2 / 4 graphs | 2.3 / 2.9 ms (pyqtgraph) | 2.5 / 3.1 ms, of which the charts' own work (data + paint) **1.1 / 1.7 ms** |
+| graph refreshes | every frame-rate-limited timer tick, rendered by pyqtgraph | 10 Hz by default, decoupled from the 60 fps animation |
 | graphs while another screen is shown | refreshed | not touched |
-| whole frame at 60 fps, Simulate / Graphs with 3 graphs | – | 7.9 / 6.5 ms mean |
+| whole frame at 60 fps, Simulate / Graphs with 3 graphs | – | 7.9 / 6.4 ms mean, ≤ 10.7 ms max |
 | auto-tune *Quick*, single cart, 1 → 2 workers | 22.1 s | 11.7 s → **6.2 s** |
 
 If the animation still stutters, switch on the performance overlay: a large *graphs* value → fewer

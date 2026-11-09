@@ -170,12 +170,18 @@ class StripChart(QWidget):
     def _metrics(self) -> QFontMetricsF:
         return QFontMetricsF(self.font())
 
+    def _y_tick_target(self) -> int:
+        """Up to 4 y ticks, fewer on short charts so the labels never overlap."""
+        fm = self._metrics()
+        plot_h = self.height() - fm.height() * 3.1
+        return max(2, min(4, int(plot_h / (fm.height() * 1.5))))
+
     def _layout_rect(self, lo: float | None = None, hi: float | None = None) -> QRectF:
         fm = self._metrics()
         if lo is None or math.isnan(self.axis.lo):
             label_w = fm.horizontalAdvance("-000.0")
         else:
-            ticks, step = nice_ticks(lo, hi, 4)
+            ticks, step = nice_ticks(lo, hi, self._y_tick_target())
             label_w = max(fm.horizontalAdvance(format_tick(v, step)) for v in ticks) if ticks else 20
         left = label_w + 12
         top = fm.height() * 1.6
@@ -228,7 +234,10 @@ class StripChart(QWidget):
         grid.setAlpha(40)
         axis = QColor(fg)
         axis.setAlpha(110)
-        ticks, step = nice_ticks(lo, hi, 4)
+        ticks, step = nice_ticks(lo, hi, self._y_tick_target())
+        min_gap = fm.height() * 1.05
+        while len(ticks) > 2 and r.height() / max(len(ticks) - 1, 1) < min_gap:
+            ticks = ticks[::2]                       # thin out labels that would overlap
         sy = r.height() / (hi - lo)
         for v in ticks:
             y = r.bottom() - (v - lo) * sy

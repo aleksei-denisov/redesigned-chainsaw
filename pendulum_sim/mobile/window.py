@@ -61,7 +61,8 @@ from .touch_view import TouchPendulumView
 
 DRAG_GAIN = 2.0          # drag force = DRAG_GAIN · push force · (offset / total length)
 DRAG_LIMIT = 4.0         # … clamped to ±DRAG_LIMIT · push force
-RAIL_MIN_WIDTH = 900     # navigation rail from this window width on (landscape)
+RAIL_MIN_WIDTH = 900     # navigation rail from this window width on (landscape) …
+RAIL_MIN_HEIGHT = 560    # … when its seven items fit vertically
 PRIMARY = ["simulate", "graphs", "controller", "system"]
 SECONDARY = ["autotune", "experiments", "settings"]
 NAV_ITEMS = [("simulate", "Simulate", "simulate"), ("graphs", "Graphs", "graphs"),
@@ -493,12 +494,12 @@ class MobileWindow(MainWindow):
 
     def _apply_orientation_now(self) -> None:
         landscape = self.width() > self.height()
-        rail = landscape and self.width() >= RAIL_MIN_WIDTH
+        rail = landscape and self.width() >= RAIL_MIN_WIDTH and self.height() >= RAIL_MIN_HEIGHT
         if rail != self._rail:
             self._arrange(rail)
             self.nav.set_current(self._nav_key(self.current))
         self.graphs_page.set_landscape(landscape)
-        self.telemetry.set_compact(self.height() < 600)
+        self.telemetry.set_compact(self.height() < 600 or self.width() < 600)
         self.nav.set_compact(not rail and self.height() < 500)
         compact = self.width() < 600                     # phones: icon-only secondary buttons
         for b in (getattr(self, n, None) for n in ("reset_btn", "restart_btn", "scenario_btn")):
