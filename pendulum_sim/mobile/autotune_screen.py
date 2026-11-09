@@ -67,6 +67,18 @@ ACCENT = QColor("#4FA3FF")
 MUTED = QColor("#9AA0A6")
 
 
+def scaled_font(font: QFont, factor: float, bold: bool = False) -> QFont:
+    """Font ``factor`` × larger, for fonts set in pixels (mobile theme) or points (desktop)."""
+    f = QFont(font)
+    if f.pixelSize() > 0:
+        f.setPixelSize(max(1, round(f.pixelSize() * factor)))
+    else:
+        f.setPointSizeF(max(1.0, f.pointSizeF() * factor))
+    if bold:
+        f.setBold(True)
+    return f
+
+
 def fmt_duration(seconds: float | None) -> str:
     if seconds is None or not math.isfinite(seconds):
         return "–"
@@ -244,11 +256,12 @@ def _card(title: str) -> tuple[QFrame, QVBoxLayout]:
 def _big_button(text: str, primary: bool = False) -> QPushButton:
     b = QPushButton(text)
     b.setMinimumHeight(52)
+    b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
     if primary:
+        b.setProperty("primary", True)
         f = b.font()
         f.setBold(True)
         b.setFont(f)
-        b.setDefault(True)
     return b
 
 
@@ -312,11 +325,16 @@ class TuneWorker(QThread):
 
 # ------------------------------------------------------------------- screen
 class AutotuneScreen(QWidget):
+    """The auto-tune flow; ``embedded=True`` makes it a normal screen of the app
+    (the window locks navigation while ``runningChanged(True)``)."""
+
     applyRequested = Signal(object)     # TuningResult
     closed = Signal()
+    runningChanged = Signal(bool)
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, parent: QWidget | None = None, embedded: bool = False) -> None:
         super().__init__(parent)
+        self.embedded = embedded
         self.setAutoFillBackground(True)
         self.config: AppConfig | None = None
         self.worker: TuneWorker | None = None
@@ -335,16 +353,14 @@ class AutotuneScreen(QWidget):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         title = QLabel("Auto-tune for robustness")
-        f = title.font()
-        f.setPointSizeF(f.pointSizeF() * 1.35)
-        f.setBold(True)
-        title.setFont(f)
+        title.setFont(scaled_font(title.font(), 1.35, bold=True))
         title.setContentsMargins(16, 12, 16, 4)
         outer.addWidget(title)
         outer.addWidget(self.pages, 1)
         self._ticker = QTimer(self)
         self._ticker.timeout.connect(self._poll)
-        self.hide()
+        if not embedded:
+            self.hide()
 
     # ------------------------------------------------------------ pages
     def _scroll(self, inner: QWidget) -> QScrollArea:
@@ -374,6 +390,9 @@ class AutotuneScreen(QWidget):
         for col, (key, name, desc) in enumerate(PRESETS):
             b = QPushButton(f"{name}\n{desc}\nestimating…")
             b.setCheckable(True)
+            b.setProperty("chip", True)
+            b.setStyleSheet("QPushButton { border-radius: 14px; padding: 10px; }")
+            b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             b.setMinimumHeight(110)
             b.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             b.setChecked(key == self.preset)
@@ -406,9 +425,7 @@ class AutotuneScreen(QWidget):
         head.addWidget(self.spinner)
         self.phase_label = QLabel("Starting…")
         self.phase_label.setWordWrap(True)
-        f = self.phase_label.font()
-        f.setPointSizeF(f.pointSizeF() * 1.15)
-        self.phase_label.setFont(f)
+        self.phase_label.setFont(scaled_font(self.phase_label.font(), 1.15))
         head.addWidget(self.phase_label, 1)
         v.addLayout(head)
         self.bar = QProgressBar()
@@ -445,10 +462,7 @@ class AutotuneScreen(QWidget):
         v.setSpacing(12)
         self.headline = QLabel()
         self.headline.setWordWrap(True)
-        f = self.headline.font()
-        f.setPointSizeF(f.pointSizeF() * 1.2)
-        f.setBold(True)
-        self.headline.setFont(f)
+        self.headline.setFont(scaled_font(self.headline.font(), 1.2, bold=True))
         v.addWidget(self.headline)
         self.result_note = QLabel()
         self.result_note.setWordWrap(True)
@@ -494,10 +508,11 @@ class AutotuneScreen(QWidget):
     def open(self, config: AppConfig) -> None:
         self.config = config.copy()
         self.show_setup()
-        if self.parent() is not None:
-            self.setGeometry(self.parent().rect())
-        self.show()
-        self.raise_()
+        if not self.embedded:
+            if self.parent() is not None:
+                self.setGeometry(self.parent().rect())
+            self.show()
+            self.raise_()
 
     def show_setup(self) -> None:
         self.pages.setCurrentIndex(0)
@@ -552,6 +567,7 @@ class AutotuneScreen(QWidget):
         self.spinner.start()
         self._ticker.start(100)
         self.worker.start()
+        self.runningChanged.emit(True)
 
     def cancel(self) -> None:
         """Stop the search now (workers are killed); the best result so far is offered."""
@@ -687,6 +703,7 @@ class AutotuneScreen(QWidget):
             self._on_failed(worker.error or "Auto-tune stopped.")
         self.apply_btn.setEnabled(self.result is not None)
         worker.deleteLater()
+        self.runningChanged.emit(False)
 
     def _apply(self) -> None:
         if self.result is not None:
@@ -697,7 +714,8 @@ class AutotuneScreen(QWidget):
         if self.worker is not None:
             self.cancel()
             self.worker.wait(10000)
-        self.hide()
+        if not self.embedded:
+            self.hide()
         self.closed.emit()
 
     def handle_back(self) -> bool:

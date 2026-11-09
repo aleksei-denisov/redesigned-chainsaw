@@ -26,14 +26,12 @@ import time
 
 import numpy as np
 from PySide6.QtCore import QPointF, QRectF, QSettings, Qt
-from PySide6.QtGui import QAction, QColor, QFont, QFontMetricsF, QImage, QPainter, QPen, QPolygonF
+from PySide6.QtGui import QColor, QFont, QFontMetricsF, QImage, QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
     QLabel,
-    QMenu,
     QSizePolicy,
-    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -100,6 +98,10 @@ class StripChart(QWidget):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setMinimumHeight(110)
         self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
+        f = QFont(self.font())
+        if f.pixelSize() > 0:
+            f.setPixelSize(14)          # axis text: 14 dp on the mobile theme
+            self.setFont(f)
 
     # ----------------------------------------------------------- data
     def set_series(self, series: list[Series]) -> None:
@@ -304,36 +306,31 @@ class GraphsPanel(QWidget):
             window = 10
         self.window_s = window if window in WINDOWS_S else 10
 
-        bar = QHBoxLayout()
-        bar.setContentsMargins(0, 0, 0, 0)
-        self.choose_btn = QToolButton()
-        self.choose_btn.setText("Choose graphs")
-        self.choose_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        self.menu = QMenu(self)
-        self.actions: dict[str, QAction] = {}
-        for key, g in GRAPHS.items():
-            act = self.menu.addAction(g.title)
-            act.setCheckable(True)
-            act.setChecked(key in self.selected)
-            act.toggled.connect(lambda on, k=key: self._toggle(k, on))
-            self.actions[key] = act
-        self.choose_btn.setMenu(self.menu)
+        from .controls import ChoiceRow, ToggleChips
+
+        self.chips = ToggleChips([(k, g.title) for k, g in GRAPHS.items()])
+        for key, b in self.chips.buttons.items():
+            b.setChecked(key in self.selected)
+        self.chips.changed.connect(self._toggle)
         self.count_label = QLabel()
-        self.window_combo = QComboBox()
-        for w in WINDOWS_S:
-            self.window_combo.addItem(f"{w} s", w)
-        self.window_combo.setCurrentIndex(WINDOWS_S.index(self.window_s))
-        self.window_combo.currentIndexChanged.connect(self._on_window)
+        self.count_label.setProperty("role", "secondary")
+        self.window_row = ChoiceRow("", [(w, f"{w} s") for w in WINDOWS_S], self.window_s)
+        self.window_row.changed.connect(self._on_window)
         self.loop_label = QLabel("PID loop")
         self.loop_combo = QComboBox()
         self.loop_combo.currentIndexChanged.connect(lambda _: self._rebuild_series())
-        bar.addWidget(self.choose_btn)
-        bar.addWidget(self.count_label)
-        bar.addStretch(1)
-        bar.addWidget(self.loop_label)
-        bar.addWidget(self.loop_combo)
-        bar.addWidget(QLabel("Window"))
-        bar.addWidget(self.window_combo)
+        bar = QVBoxLayout()
+        bar.setContentsMargins(0, 0, 0, 0)
+        bar.setSpacing(6)
+        bar.addWidget(self.chips)
+        row = QHBoxLayout()
+        row.addWidget(self.count_label)
+        row.addStretch(1)
+        row.addWidget(self.loop_label)
+        row.addWidget(self.loop_combo)
+        row.addWidget(QLabel("Window"))
+        row.addWidget(self.window_row)
+        bar.addLayout(row)
         self.stack = QVBoxLayout()
         self.stack.setContentsMargins(0, 0, 0, 0)
         self.stack.setSpacing(6)
@@ -354,8 +351,8 @@ class GraphsPanel(QWidget):
             self.loop_combo.addItem("Cart x" if label == "cart" else label)
         self.loop_combo.setCurrentIndex(max(0, min(current, len(loop_labels) - 1)))
         self.loop_combo.blockSignals(False)
-        for key, act in self.actions.items():
-            act.setEnabled(graph_available(key, n_segments, has_cart))
+        for key, b in self.chips.buttons.items():
+            b.setEnabled(graph_available(key, n_segments, has_cart))
         self._rebuild_charts()
         self._version = -1
 
@@ -401,9 +398,7 @@ class GraphsPanel(QWidget):
         if on and key not in self.selected:
             if len(self.selected) >= MAX_VISIBLE:
                 oldest = self.selected.pop(0)
-                self.actions[oldest].blockSignals(True)
-                self.actions[oldest].setChecked(False)
-                self.actions[oldest].blockSignals(False)
+                self.chips.set_checked(oldest, False)
             self.selected.append(key)
         elif not on and key in self.selected:
             self.selected.remove(key)
@@ -413,16 +408,14 @@ class GraphsPanel(QWidget):
 
     def set_selection(self, keys: list[str]) -> None:
         self.selected = [k for k in keys if k in GRAPHS][:MAX_VISIBLE]
-        for key, act in self.actions.items():
-            act.blockSignals(True)
-            act.setChecked(key in self.selected)
-            act.blockSignals(False)
+        for key in self.chips.buttons:
+            self.chips.set_checked(key, key in self.selected)
         QSettings().setValue("graphs/selected", ",".join(self.selected))
         self._rebuild_charts()
         self._version = -1
 
-    def _on_window(self, _index: int) -> None:
-        self.window_s = self.window_combo.currentData()
+    def _on_window(self, value: int) -> None:
+        self.window_s = int(value)
         QSettings().setValue("graphs/window_s", self.window_s)
         for chart in self.charts.values():
             chart.window_s = self.window_s
@@ -441,7 +434,7 @@ class GraphsPanel(QWidget):
             chart.window_s = self.window_s
             self.stack.addWidget(chart, 1)
             chart.show()
-        self.count_label.setText(f"{len(self.shown_keys())} of max {MAX_VISIBLE}")
+        self.count_label.setText(f"{len(self.shown_keys())} of up to {MAX_VISIBLE} graphs")
         has_pid = "pid" in self.shown_keys()
         self.loop_label.setVisible(has_pid)
         self.loop_combo.setVisible(has_pid)

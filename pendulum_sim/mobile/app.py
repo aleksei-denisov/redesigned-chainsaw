@@ -59,9 +59,10 @@ def main(argv: list[str] | None = None) -> int:
     app = QApplication.instance() or QApplication(sys.argv[:1])
     app.setApplicationName("Inverted Pendulum Simulator")
     app.setOrganizationName("pendulum-sim")
-    from .touch_style import apply_touch_style
+    app.setStyle("Fusion")
+    from . import theme
 
-    apply_touch_style(app)
+    theme.apply(app)        # dark palette, 16 dp text, 48 dp touch targets (no Python style hooks)
 
     try:
         import pyqtgraph as pg

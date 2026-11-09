@@ -1,22 +1,23 @@
-"""Touch-first main window – the desktop :class:`~pendulum_sim.ui.main_window.MainWindow`
-with a different layout and touch input.
+"""Touch-first main window: the desktop :class:`~pendulum_sim.ui.main_window.MainWindow`
+with screens, navigation and touch editors.
 
-Everything the desktop window *does* is inherited: run control, scenarios,
-configuration files, the Pendulum / PID controller / Simulation & view panels,
-LQR seeding, robust auto-tuning, integrator reset, restoring gains, experiments
-and their comparison plots, CSV/JSON export, divergence handling and graph-rate
-adaptation. This class only overrides the *builders* and adds what a touch
-device needs:
+All behaviour is inherited from the desktop window – run control, scenarios,
+configuration files, parameter changes, LQR seeding, restoring gains, experiments,
+divergence handling, graph-rate adaptation. This class replaces the *builders* and
+the four UI ↔ configuration hooks (``_show_config``, ``_ui_controller``,
+``_show_controller``, ``_show_controller_output``) and adds:
 
-* layout – the live view and graphs (tab *Live*) and the experiment page (tab
-  *Experiments*) share the screen with a collapsible configuration panel that sits
-  to the right in landscape and below in portrait (``⚙`` toggles it);
-* a touch control bar with large buttons instead of the tool bar, and a ``☰`` menu
-  instead of the menu bar (open/save configuration, fit view, about…);
-* tap / drag / pinch on the pendulum view (:mod:`.touch_view`);
-* pausing in the background and resuming without a time jump;
-* rendering-performance settings with an on-screen timing read-out
-  (:mod:`.performance`).
+* screens – **Simulate** (large view, essential controls), **Graphs**, **Controller**,
+  **System** (pendulum + simulation), **Auto-tune**, **Experiments**, **Settings** –
+  behind a navigation rail (tablet landscape) or a bottom bar (portrait / phones,
+  where the last three sit behind *More*);
+* the Android back button: back through visited screens, cancel a running
+  auto-tune, and on *Simulate* ask before leaving the app;
+* touch gestures on the pendulum (:mod:`.touch_view`), toasts instead of a status
+  bar, pausing in the background, and the rendering-performance settings.
+
+The simulation keeps running while other screens are shown; only what is visible
+is drawn.
 """
 
 from __future__ import annotations
@@ -24,65 +25,73 @@ from __future__ import annotations
 import time
 
 import numpy as np
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QAction, QActionGroup, QGuiApplication
+from PySide6.QtCore import QPoint, QSize, Qt, QTimer
+from PySide6.QtGui import QAction, QGuiApplication
 from PySide6.QtWidgets import (
-    QCheckBox,
-    QComboBox,
-    QFormLayout,
-    QGridLayout,
-    QGroupBox,
+    QAbstractItemView,
+    QDialog,
+    QDialogButtonBox,
+    QHBoxLayout,
     QLabel,
     QMenu,
-    QSizePolicy,
+    QMessageBox,
+    QPushButton,
+    QScroller,
     QSplitter,
-    QTabWidget,
+    QStackedWidget,
     QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
-from ..control import LQRWeights
+from ..control import ControllerConfig, LQRWeights
 from ..simulation import AppConfig
-from ..ui.main_window import MainWindow
-from ..ui.widgets import hint, scrollable
-from . import cpu
+from ..ui.experiment_panel import ExperimentPanel
+from ..ui.main_window import SPEEDS, MainWindow
+from . import cpu, theme
 from .autotune_screen import AutotuneScreen
+from .controls import NumberRow, tool_button
 from .graphs import GraphsPanel
-from .performance import FRAME_RATES, GRAPH_RATES_HZ, FrameStats, PerformanceSettings, instrument_graphs
+from .icons import icon
+from .pages import ControllerPage, GraphsPage, NavBar, SettingsPage, SimulatePage, SystemPage
+from .performance import FrameStats, PerformanceSettings, instrument_graphs
 from .touch_view import TouchPendulumView
 
 DRAG_GAIN = 2.0          # drag force = DRAG_GAIN · push force · (offset / total length)
 DRAG_LIMIT = 4.0         # … clamped to ±DRAG_LIMIT · push force
-WIDE_BAR_PX = 900        # control bar in one row from this width on
-VIEW_SHARE = 0.6         # share of the live page height (portrait: width too) for the pendulum view
-EXPERIMENT_CONTROLS_PX = 440
-SIDE_PANEL_MIN_SHORT_EDGE = 600   # show the configuration panel at start on tablets
-
-RENDER_LABELS = {"native": "Native (sharpest)", "high": "High (1.5×)",
-                 "balanced": "Balanced (1.25×)", "fast": "Fast (1×)"}
-
-
-def _tool_button(text: str = "", action: QAction | None = None, tip: str = "") -> QToolButton:
-    b = QToolButton()
-    if action is not None:
-        b.setDefaultAction(action)
-    else:
-        b.setText(text)
-    b.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
-    b.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
-    b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-    if tip:
-        b.setToolTip(tip)
-    return b
+RAIL_MIN_WIDTH = 900     # navigation rail from this window width on (landscape)
+PRIMARY = ["simulate", "graphs", "controller", "system"]
+SECONDARY = ["autotune", "experiments", "settings"]
+NAV_ITEMS = [("simulate", "Simulate", "simulate"), ("graphs", "Graphs", "graphs"),
+             ("controller", "Controller", "controller"), ("system", "System", "system"),
+             ("autotune", "Auto-tune", "autotune"), ("experiments", "Experiments", "experiments"),
+             ("settings", "Settings", "settings"), ("more", "More", "more")]
 
 
-def _shrinkable(widget: QWidget) -> QWidget:
-    """Ignore the widget's width hint so it can never force the window wider than a phone."""
-    policy = widget.sizePolicy()
-    policy.setHorizontalPolicy(QSizePolicy.Policy.Ignored)
-    widget.setSizePolicy(policy)
-    return widget
+class Toast(QLabel):
+    """Short message near the bottom of the window (replaces the desktop status bar)."""
+
+    def __init__(self, parent: QWidget) -> None:
+        super().__init__(parent)
+        self.setWordWrap(True)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setStyleSheet(f"QLabel {{ background: {theme.SURFACE_2}; color: {theme.TEXT}; border: 1px solid "
+                           f"{theme.OUTLINE}; border-radius: 12px; padding: 10px 16px; }}")
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.timeout.connect(self.hide)
+        self.hide()
+
+    def show_text(self, text: str, ms: int) -> None:
+        self.setText(text)
+        parent = self.parentWidget()
+        self.setFixedWidth(max(min(parent.width() - 32, 640), 120))
+        self.adjustSize()
+        self.move((parent.width() - self.width()) // 2, parent.height() - self.height() - 96)
+        self.show()
+        self.raise_()
+        self._timer.start(max(ms, 1500))
 
 
 class MobileWindow(MainWindow):
@@ -107,6 +116,16 @@ class MobileWindow(MainWindow):
     def _create_telemetry(self) -> GraphsPanel:
         return GraphsPanel()
 
+    def _create_widgets(self) -> None:
+        """Touch editors instead of the desktop panels (no desktop panel is created)."""
+        self.view = self._create_view()
+        self.telemetry = self._create_telemetry()
+        self.experiments = ExperimentPanel(lambda: self.config)
+        self.controller_page = ControllerPage()
+        self.system_page = SystemPage()
+        self.settings_page = SettingsPage()
+        self.autotune = AutotuneScreen(embedded=True)
+
     def _build_layout(self) -> None:
         self.perf = PerformanceSettings.load()
         self.stats = FrameStats()
@@ -117,194 +136,306 @@ class MobileWindow(MainWindow):
         self._last_drawn = None
         self._cpu_text = ""
         self._pinned: set[int] = set()
-
-        self.live = QSplitter(Qt.Orientation.Vertical)
-        self.live.setChildrenCollapsible(False)
-        self.live.addWidget(self.view)
-        self.live.addWidget(self.telemetry)
-        self.live.setStretchFactor(0, 3)
-        self.live.setStretchFactor(1, 2)
-        self.tabs = QTabWidget()
-        self.tabs.setDocumentMode(True)
-        self.tabs.addTab(self.live, "Live")
-        self.tabs.addTab(self.experiments, "Experiments")
-        self.tabs.currentChanged.connect(lambda _: QTimer.singleShot(0, self._size_pages))
-
-        simulation_page = QWidget()
-        sv = QVBoxLayout(simulation_page)
-        sv.setContentsMargins(0, 0, 0, 0)
-        sv.addWidget(self.settings_panel)
-        sv.addWidget(self._build_performance_box())
-        self.side = QTabWidget()
-        self.side.setDocumentMode(True)
-        self.side.addTab(scrollable(self.plant_panel), "Pendulum")
-        self.side.addTab(scrollable(self.controller_panel), "PID")
-        self.side.addTab(scrollable(simulation_page), "Simulation")
-        self.side.setMinimumWidth(0)
-        _shrinkable(self.side)
-
-        self.body = QSplitter(Qt.Orientation.Horizontal)
-        self.body.setChildrenCollapsible(False)
-        self.body.addWidget(self.tabs)
-        self.body.addWidget(self.side)
-        _shrinkable(self.tabs)
-
-        central = QWidget()
-        outer = QVBoxLayout(central)
-        outer.setContentsMargins(4, 4, 4, 0)
-        outer.setSpacing(4)
-        outer.addWidget(self.body, 1)
-        self.bar = QGridLayout()
-        self.bar.setSpacing(4)
-        outer.addLayout(self.bar)
-        self.setCentralWidget(central)
-
-        screen = QGuiApplication.primaryScreen()
-        short_edge = min(screen.availableGeometry().width(), screen.availableGeometry().height()) \
-            if screen is not None else 0
-        self.side.setVisible(short_edge >= SIDE_PANEL_MIN_SHORT_EDGE)
-        self._orientation: bool | None = None
-
-        # Full-window auto-tune flow (locks the rest of the app while open)
-        self.autotune = AutotuneScreen(self)
-        self.autotune.applyRequested.connect(self._apply_tuning_result)
-        self.autotune.closed.connect(self._on_autotune_closed)
+        self._history: list[str] = []
         self._tune_was_running = False
 
-    def _build_toolbar_and_menu(self) -> None:
-        """Touch control bar plus a ☰ menu (no menu bar / tool bar on mobile)."""
-        self.run_btn = _tool_button("▶ Start")
-        self.run_btn.clicked.connect(self.toggle_run)
-        self.reset_btn = _tool_button(action=self.act_reset)
-        self.restart_btn = _tool_button(action=self.act_restart)
-        self.step_btn = _tool_button(action=self.act_step)
-        self.push_left_btn = _tool_button(action=self.act_push_left)
-        self.push_right_btn = _tool_button(action=self.act_push_right)
-        self.panel_btn = _tool_button("⚙", tip="Show / hide the configuration panel")
-        self.panel_btn.setCheckable(True)
-        self.panel_btn.setChecked(self.side.isVisible())
-        self.panel_btn.toggled.connect(self.set_panel_visible)
+        self.simulate_page = SimulatePage(self.view)
+        # compact run controls on the Graphs screen (connected in _build_toolbar_and_menu)
+        self.g_run_btn = tool_button("play", tip="Start / pause")
+        self.g_reset_btn = tool_button("reset", tip="Back to the initial state (stopped)")
+        self.g_push_left_btn = tool_button("push_left", tip="Push the tip to the left")
+        self.g_push_right_btn = tool_button("push_right", tip="Push the tip to the right")
+        self.graphs_page = GraphsPage(self.view, self.telemetry, [self.g_run_btn, self.g_reset_btn,
+                                                                  self.g_push_left_btn, self.g_push_right_btn])
+        experiments_page = QWidget()
+        el = QVBoxLayout(experiments_page)
+        el.setContentsMargins(8, 8, 8, 8)
+        el.addWidget(self.experiments)
+        self.pages: dict[str, QWidget] = {
+            "simulate": self.simulate_page, "graphs": self.graphs_page, "controller": self.controller_page,
+            "system": self.system_page, "autotune": self.autotune, "experiments": experiments_page,
+            "settings": self.settings_page,
+        }
+        self.stack = QStackedWidget()
+        for page in self.pages.values():
+            self.stack.addWidget(page)
+        self.nav = NavBar(NAV_ITEMS)
+        self.nav.selected.connect(self._on_nav)
+        self.more_menu = QMenu(self)
+        for key in SECONDARY:
+            text = next(t for k, t, _ in NAV_ITEMS if k == key)
+            act = self.more_menu.addAction(icon(key), text)
+            act.triggered.connect(lambda _=False, k=key: self.navigate(k))
 
+        central = QWidget()
+        self.body = QVBoxLayout(central)
+        self.body.setContentsMargins(0, 0, 0, 0)
+        self.body.setSpacing(0)
+        self.setCentralWidget(central)
+        self.toast = Toast(self)
+        self._rail: bool | None = None
+        self._arrange(rail=False)
+        self.current = "simulate"
+        self.nav.set_current("simulate")
+        # kinetic scrolling for the experiment page's lists and table
+        for view in self.experiments.findChildren(QAbstractItemView):
+            QScroller.grabGesture(view.viewport(), QScroller.ScrollerGestureType.TouchGesture)
+
+    def _arrange(self, rail: bool) -> None:
+        """Navigation rail at the left (tablet landscape) or bar at the bottom."""
+        if rail == self._rail:
+            return
+        self._rail = rail
+        while self.body.count():
+            item = self.body.takeAt(0)
+            lay = item.layout()
+            if lay is not None:
+                while lay.count():
+                    lay.takeAt(0)
+                lay.deleteLater()
+        if rail:
+            row = QHBoxLayout()
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(0)
+            row.addWidget(self.nav)
+            row.addWidget(self.stack, 1)
+            self.body.addLayout(row)
+            self.nav.set_vertical(True, [k for k, _, _ in NAV_ITEMS if k != "more"])
+        else:
+            self.body.addWidget(self.stack, 1)
+            self.body.addWidget(self.nav)
+            self.nav.set_vertical(False, PRIMARY + ["more"])
+
+    def _build_toolbar_and_menu(self) -> None:
+        """Run controls on the Simulate screen (no menu bar / tool bar on mobile)."""
+        self.run_btn = QPushButton()
+        self.run_btn.setProperty("primary", True)
+        self.run_btn.setIconSize(QSize(26, 26))
+        self.run_btn.setMinimumSize(132, 52)
+        self.run_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.run_btn.clicked.connect(self.toggle_run)
+        self.reset_btn = tool_button("reset", "Reset", "Back to the initial state (stopped)")
+        self.restart_btn = tool_button("restart", "Restart", "Back to the initial state and run")
+        self.step_btn = tool_button("step", tip="One controller period")
+        self.push_left_btn = tool_button("push_left", tip="Push the tip to the left")
+        self.push_right_btn = tool_button("push_right", tip="Push the tip to the right")
+        self.force_btn = QToolButton()
+        self.force_btn.setMinimumSize(76, theme.TOUCH_PX)
+        self.force_btn.setToolTip("Push force – tap to change")
+        self.force_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.speed_btn = tool_button("speed", "1×", "Simulation speed")
+        self.speed_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        speed_menu = QMenu(self)
+        for s in SPEEDS:
+            act = speed_menu.addAction(f"{s:g}×")
+            act.triggered.connect(lambda _=False, v=s: self.set_speed(v))
+        self.speed_btn.setMenu(speed_menu)
+        self.scenario_btn = tool_button("scenarios", "Scenario", "Load a demonstration scenario")
+        self.scenario_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        scen_menu = QMenu(self)
+        for i in range(1, self.scenario_combo.count()):
+            act = scen_menu.addAction(self.scenario_combo.itemText(i))
+            act.triggered.connect(lambda _=False, idx=i: self._on_scenario_chosen(idx))
+        self.scenario_btn.setMenu(scen_menu)
+        self.fit_btn = tool_button("fit", tip="Fit the pendulum into the view")
+        self.reset_btn.clicked.connect(self.reset)
+        self.restart_btn.clicked.connect(self.restart)
+        self.step_btn.clicked.connect(self.single_step)
+        self.push_left_btn.clicked.connect(lambda: self.push(-1))
+        self.push_right_btn.clicked.connect(lambda: self.push(+1))
+        self.g_run_btn.clicked.connect(self.toggle_run)
+        self.g_reset_btn.clicked.connect(self.reset)
+        self.g_push_left_btn.clicked.connect(lambda: self.push(-1))
+        self.g_push_right_btn.clicked.connect(lambda: self.push(+1))
+        self.force_btn.clicked.connect(self._edit_push_force)
+        self.fit_btn.clicked.connect(self.view.fit)
+        self.simulate_page.add_controls([self.run_btn, self.reset_btn, self.restart_btn, self.step_btn,
+                                         self.push_left_btn, self.force_btn, self.push_right_btn,
+                                         self.speed_btn, self.scenario_btn, self.fit_btn])
+        self.push_force.valueChanged.connect(lambda v: self.force_btn.setText(f"{v:g} N"))
         self.act_clear_trails = QAction("Clear trajectories", self)
         self.act_clear_trails.triggered.connect(self.view.clear_trails)
-        self.act_stats = QAction("Debug: performance overlay", self)
-        self.act_stats.setCheckable(True)
-        self.act_stats.toggled.connect(self._on_stats_toggled)
-        menu = QMenu(self)
-        for a in (self.act_open, self.act_save, self.act_save_as):
-            menu.addAction(a)
-        menu.addSeparator()
-        scen = menu.addMenu("New from scenario")
-        for i in range(1, self.scenario_combo.count()):
-            act = scen.addAction(self.scenario_combo.itemText(i))
-            act.triggered.connect(lambda _=False, idx=i: self._on_scenario_chosen(idx))
-        menu.addSeparator()
-        for a in (self.act_fit, self.act_clear_trails, self.act_stats):
-            menu.addAction(a)
-        menu.addSeparator()
-        menu.addAction(self.act_about)
-        self.menu_btn = _tool_button("☰", tip="Menu")
-        self.menu_btn.setMenu(menu)
-        self.menu_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-
-        self.scenario_combo.setItemText(0, "Scenario…")
-        for combo, chars in ((self.scenario_combo, 8), (self.speed_combo, 4)):
-            combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
-            combo.setMinimumContentsLength(chars)
-            _shrinkable(combo)
-        _shrinkable(self.push_force)
-        self.push_force.setMinimumWidth(0)
-        self.speed_combo.setToolTip("Simulation speed")
-        self._bar_wide: bool | None = None
-        self._arrange_bar(wide=True)
-
-    def _arrange_bar(self, wide: bool) -> None:
-        if wide == self._bar_wide:
-            return
-        self._bar_wide = wide
-        while self.bar.count():
-            self.bar.takeAt(0)
-        cells = [  # widget, wide (row, col, colspan), narrow (row, col, colspan)
-            (self.run_btn, (0, 0, 2), (0, 0, 2)),
-            (self.reset_btn, (0, 2, 1), (0, 2, 1)),
-            (self.restart_btn, (0, 3, 1), (0, 3, 1)),
-            (self.step_btn, (0, 4, 1), (0, 4, 1)),
-            (self.push_left_btn, (0, 5, 1), (1, 0, 1)),
-            (self.push_force, (0, 6, 2), (1, 1, 2)),
-            (self.push_right_btn, (0, 8, 1), (1, 3, 1)),
-            (self.speed_combo, (0, 9, 1), (1, 4, 1)),
-            (self.scenario_combo, (0, 10, 2), (2, 0, 3)),
-            (self.panel_btn, (0, 12, 1), (2, 3, 1)),
-            (self.menu_btn, (0, 13, 1), (2, 4, 1)),
-        ]
-        for col in range(14):
-            self.bar.setColumnStretch(col, 1 if (wide or col < 5) else 0)
-        for widget, w, n in cells:
-            row, col, span = w if wide else n
-            self.bar.addWidget(widget, row, col, 1, span)
 
     def _build_status_bar(self) -> None:
-        super()._build_status_bar()
-        sb = self.statusBar()
-        sb.setSizeGripEnabled(False)
-        for w in (self.status_state, self.status_time, self.status_rtf, self.status_energy, self.status_perf):
-            w.setMinimumWidth(1)           # may shrink on phones; Preferred keeps the text width otherwise
-        self.status_state.hide()           # shown on the Start/Pause button instead
-        self.status_energy.hide()          # the HUD on the view shows the state
-        self.status_perf.hide()            # the timing read-out is drawn on the view (see _update_status)
+        super()._build_status_bar()          # labels used by the inherited status updates
+        self.statusBar().hide()
 
-    def _build_performance_box(self) -> QGroupBox:
-        box = QGroupBox("Performance (this device)")
-        form = QFormLayout(box)
-        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
-        self.perf_render = QComboBox()
-        for key, label in RENDER_LABELS.items():
-            self.perf_render.addItem(label, key)
-        self.perf_graph = QComboBox()
-        for hz in GRAPH_RATES_HZ:
-            self.perf_graph.addItem(f"up to {hz} Hz", hz)
-        self.perf_fps = QComboBox()
-        for fps in FRAME_RATES:
-            self.perf_fps.addItem(f"{fps} fps", fps)
-        self.perf_aa = QCheckBox("Antialiased pendulum view")
-        self.perf_cores = QCheckBox("Use performance CPU cores")
-        self.perf_cores.setToolTip("Keeps the simulation on the fast cores of big.LITTLE processors")
-        self.perf_stats = QCheckBox("Debug: performance overlay on the view")
-        self.perf_log = QCheckBox("Debug: log timings (adb logcat)")
-        form.addRow("View resolution", self.perf_render)
-        form.addRow("Graph refresh", self.perf_graph)
-        form.addRow("Frame rate", self.perf_fps)
-        form.addRow("", self.perf_aa)
-        form.addRow("", self.perf_cores)
-        form.addRow("", self.perf_stats)
-        form.addRow("", self.perf_log)
-        form.addRow(hint("Drawing, not physics, limits the frame rate on high-resolution screens. "
-                         "If the animation stutters, show fewer graphs or lower the graph refresh first. "
-                         "Read-out: fps · longest frame gap · physics / view / graphs time per frame."))
-        for combo in (self.perf_render, self.perf_graph, self.perf_fps):
-            combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
-            combo.setMinimumContentsLength(6)
-            combo.currentIndexChanged.connect(self._on_performance_edited)
-        for toggle in (self.perf_aa, self.perf_cores, self.perf_stats, self.perf_log):
-            toggle.toggled.connect(self._on_performance_edited)
-        return box
+    def _connect_signals(self) -> None:
+        cp, sp, st = self.controller_page, self.system_page, self.settings_page
+        cp.changed.connect(self._on_controller_changed)
+        cp.seedLqr.connect(self._on_auto_tune)
+        cp.restoreRequested.connect(self._on_restore_gains)
+        cp.resetIntegratorsRequested.connect(self._on_reset_integrators)
+        cp.autotuneRequested.connect(self._on_robust_tune)
+        sp.plantChanged.connect(self._on_plant_changed)
+        sp.simulationChanged.connect(self._on_simulation_settings)
+        st.viewChanged.connect(self._on_view_settings)
+        st.performanceChanged.connect(self._on_performance_edited)
+        st.openRequested.connect(self.open_config)
+        st.saveRequested.connect(self.save_config)
+        st.saveAsRequested.connect(self.save_config_as)
+        st.clearTrailsRequested.connect(self.view.clear_trails)
+        self.experiments.statusMessage.connect(self.show_message)
+        self.experiments.apply_btn.clicked.connect(self._apply_experiment_gains)
+        self.autotune.applyRequested.connect(self._apply_tuning_result)
+        self.autotune.closed.connect(self._on_autotune_closed)
+        self.autotune.runningChanged.connect(self._on_autotune_running)
 
-    # ============================================================ performance
+    # ========================================== UI <-> configuration hooks
+    def _show_config(self, config: AppConfig) -> None:
+        self.push_force.blockSignals(True)
+        self.push_force.setValue(config.push_force)
+        self.push_force.blockSignals(False)
+        self.force_btn.setText(f"{config.push_force:g} N")
+        self.system_page.set_plant(config.plant)
+        self.system_page.set_simulation(config.simulation)
+        self.controller_page.set_config(config.controller)
+        self.experiments.set_settings(config.experiment)
+
+    def _ui_controller(self) -> ControllerConfig:
+        return self.controller_page.config()
+
+    def _show_controller(self, ctrl: ControllerConfig) -> None:
+        self.controller_page.set_config(ctrl)
+
+    def _show_controller_output(self, out) -> None:
+        self.controller_page.show_output(out)
+
+    def _on_plant_changed(self, plant, structural: bool) -> None:
+        super()._on_plant_changed(plant, structural)
+        if structural:                       # show the plant as accepted
+            self.system_page.set_plant(self.config.plant)
+
+    # ============================================================ navigation
+    def _on_nav(self, key: str) -> None:
+        if key == "more":
+            self.nav.set_current("more" if self.current in SECONDARY else self.current)
+            btn = self.nav.buttons["more"]
+            self.more_menu.popup(btn.mapToGlobal(QPoint(0, -self.more_menu.sizeHint().height())))
+            return
+        self.navigate(key)
+
+    def navigate(self, key: str, remember: bool = True) -> None:
+        if key not in self.pages or (self.autotune.busy and key != "autotune"):
+            self.nav.set_current(self._nav_key(self.current))
+            return
+        if remember and key != self.current:
+            self._history.append(self.current)
+            del self._history[:-20]
+        self.current = key
+        if key == "graphs":                  # one shared pendulum view
+            self.graphs_page.attach()
+        elif key == "simulate":
+            self.simulate_page.attach()
+        self.stack.setCurrentWidget(self.pages[key])
+        self.nav.set_current(self._nav_key(key))
+        if key == "autotune" and not self.autotune.busy and self.autotune.config is None:
+            self.config.controller = self._ui_controller()
+            self.autotune.open(self.config)
+
+    def _nav_key(self, key: str) -> str:
+        return key if (self._rail or key in PRIMARY) else "more"
+
+    def go_back(self) -> bool:
+        """Android back; returns False when the app should ask before exiting."""
+        if self.current == "autotune" and self.autotune.busy:
+            self.autotune.cancel()
+            return True
+        if self._history:
+            self.navigate(self._history.pop(), remember=False)
+            return True
+        if self.current != "simulate":
+            self.navigate("simulate", remember=False)
+            return True
+        return False
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802
+        if event.key() == Qt.Key.Key_Back:
+            event.accept()
+            if not self.go_back():
+                self.confirm_exit()
+            return
+        super().keyPressEvent(event)
+
+    def confirm_exit(self) -> None:
+        box = QMessageBox(QMessageBox.Icon.Question, "Leave the simulator?",
+                          "Close the Inverted Pendulum Simulator?", parent=self)
+        leave = box.addButton("Leave", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("Stay", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        if box.clickedButton() is leave:
+            app = QGuiApplication.instance()
+            if app is not None:
+                app.quit()
+
+    # ============================================================ auto-tune
+    def _on_robust_tune(self) -> None:
+        """Controller → 'Auto-tune': its own screen (the desktop opens a dialog)."""
+        self.config.controller = self._ui_controller()
+        if not self.autotune.busy:
+            self.autotune.open(self.config)
+        self.navigate("autotune")
+
+    def _on_autotune_running(self, running: bool) -> None:
+        if running:
+            self._tune_was_running = self.running
+            self.pause()                       # all CPU cores for the search
+        self.nav.setEnabled(not running)       # the rest of the app is locked meanwhile
+        self.simulate_page.bar.setEnabled(not running)
+        self.graphs_page.bar.setEnabled(not running)
+
+    def _on_autotune_closed(self) -> None:
+        self.autotune.config = None            # re-read the controller next time
+        if self._tune_was_running:
+            self._tune_was_running = False
+            self.start()
+        if self.current == "autotune" and not self.go_back():
+            self.navigate("controller", remember=False)
+
+    # ============================================================== controls
+    def set_speed(self, value: float) -> None:
+        self.speed = value
+        self.speed_combo.setCurrentIndex(SPEEDS.index(value))
+        self.speed_btn.setText(f"{value:g}×")
+
+    def _edit_push_force(self) -> None:
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Push force")
+        lay = QVBoxLayout(dlg)
+        row = NumberRow("Push force (0.1 s pulse at the tip)", 0.01, 1000.0, self.push_force.value(), 2, "N", "log")
+        lay.addWidget(row)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
+        buttons.accepted.connect(dlg.accept)
+        lay.addWidget(buttons)
+        row.valueChanged.connect(self.push_force.setValue)
+        dlg.resize(min(self.width() - 32, 560), dlg.sizeHint().height())
+        dlg.exec()
+
+    def _update_actions(self) -> None:
+        super()._update_actions()
+        paused = (not self.running) and self.sim.time > 0
+        self.run_btn.setIcon(icon("pause" if self.running else "play", theme.ON_ACCENT))
+        self.run_btn.setText(" Pause" if self.running else " Resume" if paused else " Start")
+        self.g_run_btn.setIcon(icon("pause" if self.running else "play"))
+
+    def _on_drag(self, offset: float) -> None:
+        self._drag_offset = offset
+
+    def drag_force(self) -> float:
+        f = DRAG_GAIN * self.config.push_force * self._drag_offset
+        limit = DRAG_LIMIT * self.config.push_force
+        return float(np.clip(f, -limit, limit))
+
+    def seed_lqr(self) -> None:
+        self._on_auto_tune(LQRWeights())
+
+    def show_message(self, text: str, timeout_ms: int = 4000) -> None:
+        self.toast.show_text(text, min(timeout_ms, 6000))
+
+    # =========================================================== performance
     def apply_performance(self, perf: PerformanceSettings) -> None:
         self.perf = perf
-        for combo, value in ((self.perf_render, perf.render), (self.perf_graph, perf.graph_hz),
-                             (self.perf_fps, perf.fps)):
-            combo.blockSignals(True)
-            combo.setCurrentIndex(max(0, combo.findData(value)))
-            combo.blockSignals(False)
-        for box, value in ((self.perf_aa, perf.antialias), (self.perf_stats, perf.debug_overlay),
-                           (self.perf_log, perf.log_stats), (self.perf_cores, perf.fast_cores)):
-            box.blockSignals(True)
-            box.setChecked(value)
-            box.blockSignals(False)
-        self.act_stats.blockSignals(True)
-        self.act_stats.setChecked(perf.debug_overlay)
-        self.act_stats.blockSignals(False)
+        self.settings_page.set_performance(perf)
         self.view.set_render_scale(perf.render_scale)
         self.view.antialias = perf.antialias
         self.plot_interval_min = perf.plot_interval_s
@@ -321,116 +452,31 @@ class MobileWindow(MainWindow):
             self.view.overlay_text = ""
         self.view.update()
 
-    def _on_performance_edited(self, *_args) -> None:
-        perf = PerformanceSettings(
-            render=self.perf_render.currentData(),
-            graph_hz=self.perf_graph.currentData(),
-            fps=self.perf_fps.currentData(),
-            antialias=self.perf_aa.isChecked(),
-            debug_overlay=self.perf_stats.isChecked(),
-            log_stats=self.perf_log.isChecked(),
-            fast_cores=self.perf_cores.isChecked(),
-        )
+    def _on_performance_edited(self, perf: PerformanceSettings) -> None:
         self.apply_performance(perf)
         perf.save()
 
-    def _on_stats_toggled(self, on: bool) -> None:
-        self.perf_stats.setChecked(on)   # → _on_performance_edited → saved
-
-    # =============================================================== layout
-    def set_panel_visible(self, visible: bool) -> None:
-        self.side.setVisible(visible)
-        if self.panel_btn.isChecked() != visible:
-            self.panel_btn.setChecked(visible)
-        if visible:
-            self._size_panel()
-        QTimer.singleShot(0, self._size_pages)
-        QTimer.singleShot(0, self.view.fit)
-
-    def _size_panel(self) -> None:
-        horizontal = self.body.orientation() == Qt.Orientation.Horizontal
-        total = self.body.width() if horizontal else self.body.height()
-        panel = int(total * (0.36 if horizontal else 0.45))
-        if horizontal:
-            panel = max(min(panel, 480), min(320, total // 2))
-        self.body.setSizes([max(total - panel, 1), panel])
-
+    # ================================================================ layout
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
-        if self.autotune.isVisible():
-            self.autotune.setGeometry(self.rect())
         self._apply_orientation()
-
-    # ============================================================ auto-tune
-    def _on_robust_tune(self) -> None:
-        """PID panel → 'Auto-tune for robustness': full-screen flow instead of a dialog."""
-        self._tune_was_running = self.running
-        self.pause()                          # all CPU cores for the search
-        self.config.controller = self.controller_panel.config()
-        self.autotune.open(self.config)
-
-    def _on_autotune_closed(self) -> None:
-        if self._tune_was_running:
-            self._tune_was_running = False
-            self.start()
-
-    def keyPressEvent(self, event) -> None:  # noqa: N802
-        if event.key() == Qt.Key.Key_Back and self.autotune.isVisible():
-            self.autotune.handle_back()
-            event.accept()
-            return
-        super().keyPressEvent(event)
 
     def _apply_orientation(self) -> None:
         landscape = self.width() > self.height()
-        self._arrange_bar(wide=self.width() >= WIDE_BAR_PX)
-        if landscape == self._orientation:
-            return
-        self._orientation = landscape
-        self.body.setOrientation(Qt.Orientation.Horizontal if landscape else Qt.Orientation.Vertical)
-        # Experiment page: controls beside the plots in landscape, above them in portrait.
+        rail = landscape and self.width() >= RAIL_MIN_WIDTH
+        if rail != self._rail:
+            self._arrange(rail)
+            self.nav.set_current(self._nav_key(self.current))
+        self.graphs_page.set_landscape(landscape)
         splitters = self.experiments.findChildren(QSplitter)
-        if splitters:
+        if splitters:      # experiment controls beside the plots in landscape, above them in portrait
             splitters[0].setOrientation(Qt.Orientation.Horizontal if landscape else Qt.Orientation.Vertical)
-        if self.side.isVisible():
-            self._size_panel()
-        QTimer.singleShot(0, self._size_pages)
         QTimer.singleShot(0, self.view.fit)
-
-    def _size_pages(self) -> None:
-        """Pendulum view gets most of the live page; experiment controls a usable width."""
-        total = self.live.height()
-        if total > 0:
-            view = int(total * VIEW_SHARE)
-            self.live.setSizes([view, total - view])
-        splitters = self.experiments.findChildren(QSplitter)
-        if splitters and splitters[0].orientation() == Qt.Orientation.Horizontal:
-            width = splitters[0].width()
-            controls = min(EXPERIMENT_CONTROLS_PX, int(width * 0.45))
-            splitters[0].setSizes([controls, max(width - controls, 1)])
 
     def fit_to_screen(self) -> None:
         self.showMaximized()
 
-    # ========================================================== run control
-    def _update_actions(self) -> None:
-        super()._update_actions()
-        paused = (not self.running) and self.sim.time > 0
-        self.run_btn.setText("⏸ Pause" if self.running else "▶ Resume" if paused else "▶ Start")
-
-    def _on_drag(self, offset: float) -> None:
-        self._drag_offset = offset
-
-    def drag_force(self) -> float:
-        f = DRAG_GAIN * self.config.push_force * self._drag_offset
-        limit = DRAG_LIMIT * self.config.push_force
-        return float(np.clip(f, -limit, limit))
-
-    def seed_lqr(self) -> None:
-        """LQR gains with the default weights (the PID panel's dialog offers custom weights)."""
-        self._on_auto_tune(LQRWeights())
-
-    # ============================================================== lifecycle
+    # ============================================================= lifecycle
     def on_application_state(self, state: Qt.ApplicationState) -> None:
         """Pause in the background (no physics, no timer); resume cleanly on return."""
         if state == Qt.ApplicationState.ApplicationActive:
@@ -450,6 +496,13 @@ class MobileWindow(MainWindow):
             self._drag_offset = 0.0
             self.timer.stop()
 
+    def closeEvent(self, event) -> None:  # noqa: N802
+        if self.autotune.busy:
+            self.autotune.cancel()
+            if self.autotune.worker is not None:
+                self.autotune.worker.wait(10000)
+        super().closeEvent(event)
+
     # ================================================================= frame
     def _on_frame(self) -> None:
         now = time.perf_counter()
@@ -461,7 +514,7 @@ class MobileWindow(MainWindow):
         self.stats.frame(gap)
 
     def _update_view(self) -> None:
-        # While paused the 60 Hz timer keeps running; redraw only when something changed
+        # While paused the timer keeps running; redraw only when something changed
         # (parameter edits, reset, step). Camera gestures repaint the view themselves.
         sim = self.sim
         key = (id(sim), sim.time, sim.state.tobytes(), sim.model.lengths.tobytes(), sim.applied,
@@ -477,11 +530,13 @@ class MobileWindow(MainWindow):
                 f"view {s.view_ms.value:.1f} · graphs {s.graph_ms:.1f} ms/frame │ {self._cpu_text}")
 
     def _on_stats_second(self, _stats: FrameStats) -> None:
-        if not (self.perf.debug_overlay or self.perf.log_stats):
+        if not (self.perf.debug_overlay or self.perf.log_stats or self.current == "settings"):
             return
-        self._cpu_text = cpu.describe()     # one small /proc read per second, only in debug mode
+        self._cpu_text = cpu.describe()     # one small /proc read per second, only when shown
+        self.settings_page.cpu_label.setText(f"Simulation thread: {self._cpu_text}")
         if self.perf.log_stats:
-            print(f"pendulum-perf: {self.timing_text()} · running={self.running}", flush=True)
+            print(f"pendulum-perf: {self.timing_text()} · page={self.current} · running={self.running}",
+                  flush=True)
 
     def _update_status(self) -> None:
         super()._update_status()
