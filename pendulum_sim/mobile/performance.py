@@ -42,6 +42,12 @@ class PerformanceSettings:
     debug_overlay: bool = False   # timing read-out on the pendulum view
     log_stats: bool = False       # one timing line per second on stdout (adb logcat)
     fast_cores: bool = True       # keep the simulation/UI thread on the performance cores
+    drawing: str = "software"     # "software" or "gpu" (pendulum view and graphs via OpenGL)
+
+    @property
+    def gpu_samples(self) -> int:
+        """Multisampling of the GPU surfaces (their antialiasing)."""
+        return 4 if self.antialias else 0
 
     @property
     def render_scale(self) -> float | None:
@@ -78,6 +84,7 @@ class PerformanceSettings:
         out.render = out.render if out.render in RENDER_SCALES else cls.render
         out.graph_fps = out.graph_fps if out.graph_fps in GRAPH_RATES_HZ else cls.graph_fps
         out.fps = out.fps if out.fps in FRAME_RATES else cls.fps
+        out.drawing = out.drawing if out.drawing in ("software", "gpu") else cls.drawing
         return out
 
     def save(self, settings: QSettings | None = None) -> None:

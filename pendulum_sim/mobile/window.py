@@ -598,7 +598,20 @@ class MobileWindow(MainWindow):
             self._pinned = set()
         if not perf.debug_overlay:
             self.view.overlay_text = ""
+        self.set_drawing(perf.drawing, perf.gpu_samples)
         self.view.update()
+
+    def set_drawing(self, mode: str, samples: int = 0) -> str:
+        """Software or GPU drawing for the pendulum view and the graphs; returns the mode in use."""
+        gpu = mode == "gpu"
+        self.view.gpu_fallback = self._gpu_unavailable
+        on = self.view.set_gpu(gpu, samples)
+        self.telemetry.set_gpu(on, samples)
+        return "gpu" if on else "software"
+
+    def _gpu_unavailable(self) -> None:
+        self.telemetry.set_gpu(False)
+        self.show_message("GPU drawing is not available on this device – using software drawing", 6000)
 
     def run_performance_test(self) -> None:
         """Settings → Debug: ~30 s scripted measurement, then a copyable report."""

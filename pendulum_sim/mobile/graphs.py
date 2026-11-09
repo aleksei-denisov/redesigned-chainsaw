@@ -38,6 +38,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..simulation.telemetry import TelemetryRecorder
+from .gpu import GPUHost
 from .plot_math import (
     DEFAULT_SELECTION,
     GRAPHS,
@@ -93,7 +94,7 @@ def _polygon(xs: np.ndarray, ys: np.ndarray) -> QPolygonF:
 FULL = -1          # StripChart.advance(): the trace must be redrawn from the history
 
 
-class StripChart(QWidget):
+class StripChart(GPUHost, QWidget):
     """One graph: title + legend, y axis with horizontal labels, time axis ``−window … 0``.
 
     The curves live in a *scrolling trace*: an image of the plot area in device pixels
@@ -152,6 +153,7 @@ class StripChart(QWidget):
         self.axis.reset()
         self._static_key = None
         self._trace = None
+        self._trace_range = None
         self._paths = []
         self.update()
 
@@ -179,7 +181,7 @@ class StripChart(QWidget):
 
     def check_range(self, t: np.ndarray, columns, now: float) -> None:
         """Rate-limited (≈10 Hz) y-range bookkeeping; redraws only if the range changed."""
-        if self._trace is None or not self.series:
+        if (self._trace is None and not self.gpu) or self._trace_range is None or not self.series:
             self.update_data(t, columns, now)
             return
         sl = window_slice(t, self.window_s)
@@ -238,6 +240,8 @@ class StripChart(QWidget):
 
     def advance(self, t: np.ndarray, columns) -> int:
         """Draw the samples newer than the last drawn one; returns their number or FULL."""
+        if self.gpu:
+            return self._advance_gpu(t, columns)
         if self._trace is None or self._t_last is None or not self.series or t.size == 0:
             return FULL
         t_new = float(t[-1])
@@ -286,6 +290,71 @@ class StripChart(QWidget):
         self.update(self._trace_rect.toAlignedRect())
         return drawn
 
+    # ------------------------------------------------------- GPU drawing
+    def _advance_gpu(self, t: np.ndarray, columns) -> int:
+        """GPU mode: no trace image; check the new samples' range and repaint the surface."""
+        if self._trace_range is None or self._t_last is None or not self.series or t.size == 0:
+            return FULL
+        t_new = float(t[-1])
+        if t_new < self._t_last:
+            return FULL
+        if t_new == self._t_last:
+            return 0
+        i0 = int(np.searchsorted(t, self._t_last, side="right"))
+        lo, hi = self._trace_range
+        for s in self.series:
+            ys = columns(s.column)[i0:] * s.scale
+            if s.wrap:
+                ys = wrap_degrees(ys)
+            with np.errstate(invalid="ignore"):
+                if np.any(ys < lo) or np.any(ys > hi):
+                    return FULL
+        self._t_last = t_new
+        n = int(t.size - i0)
+        self.points_drawn += n
+        self.gpu_surface.update()
+        return n
+
+    def paint_gpu(self, p: QPainter) -> None:
+        """The whole chart, drawn by the GPU every step: static layer + decimated curves."""
+        started = time.perf_counter()
+        if self._static is None or self._static_key is None:
+            lo, hi = (self.axis.lo, self.axis.hi) if not math.isnan(self.axis.lo) else \
+                (-0.5 * self.gdef.min_span, 0.5 * self.gdef.min_span)
+            self._ensure_static(lo, hi)
+        p.drawImage(0, 0, self._static)               # unchanged image: GL keeps its texture
+        if self.source is not None and self._trace_range is not None and self.series:
+            t, columns = self.source()
+            sl = window_slice(t, self.window_s)
+            tw = t[sl]
+            if tw.size > 1:
+                area = self._trace_rect
+                lo, hi = self._trace_range
+                t_now = float(tw[-1])
+                cols = max(2, self._plot_px[2])        # ≤ 2 points per device-pixel column
+                sx = area.width() / self.window_s
+                sy = area.height() / (hi - lo)
+                p.setClipRect(area)
+                for s in self.series:
+                    ys = columns(s.column)[sl] * s.scale
+                    if s.wrap:
+                        ys = wrap_degrees(ys)
+                    xs, yd = downsample_minmax(tw, ys, t_now - self.window_s, t_now, cols)
+                    px = area.right() - (t_now - xs) * sx
+                    py = area.bottom() - (yd - lo) * sy
+                    pen = QPen(QColor(s.color), 2.0 if self.gpu_surface.samples == 0 else 1.6)
+                    pen.setCosmetic(self.gpu_surface.samples == 0)
+                    if s.dashed:
+                        pen.setStyle(Qt.PenStyle.DashLine)
+                    p.setPen(pen)
+                    for run in finite_runs(py, wrap=False) if not s.wrap else finite_runs(yd, wrap=True):
+                        if run.stop - run.start >= 2:
+                            p.drawPolyline(_polygon(px[run], py[run]))
+                p.setClipping(False)
+        self.paint_ms = (time.perf_counter() - started) * 1000.0
+        if self.stats is not None:
+            self.stats.add_graph_paint(self.paint_ms)
+
     def _update_data(self, t: np.ndarray, columns, now: float) -> None:
         self.full_redraws += 1
         sl = window_slice(t, self.window_s)
@@ -305,6 +374,12 @@ class StripChart(QWidget):
         x, y, w, h = self._plot_px
         self._pps = w / self.window_s
         self._trace_range = (lo, hi)
+        if self.gpu:                                  # curves are drawn by paint_gpu
+            self._trace = None
+            self._paths = [(s.label, ys.size) for s, ys in zip(self.series, raw)]
+            self._t_last = t_now
+            self.update()
+            return
         # horizontal grid rows (same ticks as the static labels)
         ticks, _step = self._y_ticks(lo, hi)
         self._grid_rows = [(int(round((hi - v) * h / (hi - lo))), abs(v) < 1e-12) for v in ticks]
@@ -443,9 +518,12 @@ class StripChart(QWidget):
     # ---------------------------------------------------------- paint
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
+        self._resize_surface()
         self.invalidate()
 
     def paintEvent(self, event) -> None:  # noqa: N802
+        if self.gpu:
+            return                                    # covered by the GPU surface
         started = time.perf_counter()
         if self._static is None or self._static_key is None:
             lo, hi = (self.axis.lo, self.axis.hi) if not math.isnan(self.axis.lo) else \
@@ -479,6 +557,7 @@ class GraphsPanel(QWidget):
         self.stats = None                    # performance.FrameStats (optional)
         self.pen_mode = "fast"
         self._tel: TelemetryRecorder | None = None
+        self._gpu = (False, 0)
         self._advanced_version = -1
         self._signature: tuple[int, bool, list[str]] | None = None
         self._version = -1
@@ -618,9 +697,21 @@ class GraphsPanel(QWidget):
             self.stats.add_graph((time.perf_counter() - started) * 1000.0, points=drawn)
         return drawn
 
+    def set_gpu(self, on: bool, samples: int = 0) -> None:
+        """GPU drawing for every chart (current and future ones)."""
+        self._gpu = (bool(on), samples)
+        for chart in self.charts.values():
+            chart.set_gpu(on, samples)
+            chart.invalidate()
+
     def _attach(self, chart: StripChart) -> None:
         chart.pen_mode = self.pen_mode
         chart.stats = self.stats
+        on, samples = self._gpu
+        if chart.gpu_surface is None and on and not chart.gpu_failed:
+            chart.set_gpu(True, samples)
+        elif chart.gpu_surface is not None and not on:
+            chart.set_gpu(False)
         if chart.source is None:
             chart.source = self._source
 

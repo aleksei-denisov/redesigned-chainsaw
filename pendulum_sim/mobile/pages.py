@@ -36,6 +36,7 @@ from .controls import (
     push_button,
     tool_button,
 )
+from .gpu import DRAWING_MODES
 from .icons import icon
 from .performance import FRAME_RATES, GRAPH_RATES_HZ, PerformanceSettings
 
@@ -550,6 +551,9 @@ class SettingsPage(ScrollPage):
             row.valueChanged.connect(lambda *_: self.viewChanged.emit(self.view_settings()))
 
         perf = Section("Performance")
+        self.perf_drawing = perf.add(ChoiceRow("Drawing", DRAWING_MODES,
+                                               hint="GPU draws the pendulum and the graphs with OpenGL and skips "
+                                                    "copying the whole screen every frame; Software is the fallback"))
         self.perf_render = perf.add(ChoiceRow("Pendulum drawing resolution",
                                               list(RENDER_LABELS.items()),
                                               hint="Native is sharpest; lower only if the view stutters"))
@@ -575,7 +579,7 @@ class SettingsPage(ScrollPage):
         self.startup_label.setFont(mono)
         self.startup_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.add(debug)
-        for row in (self.perf_render, self.perf_graph, self.perf_fps):
+        for row in (self.perf_drawing, self.perf_render, self.perf_graph, self.perf_fps):
             row.changed.connect(lambda *_: self.performanceChanged.emit(self.performance()))
         for row in (self.perf_aa, self.perf_cores, self.perf_stats, self.perf_log):
             row.toggled.connect(lambda *_: self.performanceChanged.emit(self.performance()))
@@ -600,6 +604,8 @@ class SettingsPage(ScrollPage):
         self.startup_label.setText(TIMER.report())
 
     def set_performance(self, p: PerformanceSettings) -> None:
+        self.perf_drawing.setValue(p.drawing)
+        self.perf_render.setEnabled(p.drawing != "gpu")    # the GPU always draws at native resolution
         self.perf_render.setValue(p.render)
         self.perf_graph.setValue(p.graph_fps)
         self.perf_fps.setValue(p.fps)
@@ -611,7 +617,8 @@ class SettingsPage(ScrollPage):
         return PerformanceSettings(render=self.perf_render.value() or "native",
                                    graph_fps=self.perf_graph.value() or 60, fps=self.perf_fps.value() or 60,
                                    antialias=self.perf_aa.isChecked(), debug_overlay=self.perf_stats.isChecked(),
-                                   log_stats=self.perf_log.isChecked(), fast_cores=self.perf_cores.isChecked())
+                                   log_stats=self.perf_log.isChecked(), fast_cores=self.perf_cores.isChecked(),
+                                   drawing=self.perf_drawing.value() or "software")
 
 
 # =============================================================== navigation

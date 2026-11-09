@@ -349,7 +349,9 @@ def main(out_dir: str) -> int:
     # the on-device performance test, shortened (same report as Settings → Debug)
     from pendulum_sim.mobile import perftest
 
-    perftest.PHASES = [(lbl, scr, g, 2.0, prof) for lbl, scr, g, _s, prof in perftest.PHASES]
+    # software phases only: the offscreen platform has no OpenGL (GPU drawing is tested under Xvfb)
+    perftest.PHASES = [ph[:3] + (2.0,) + ph[4:5] + ("software",) for ph in perftest.PHASES
+                       if len(ph) < 6 or ph[5] != "gpu" or ph[4]]
     test = perftest.PerformanceTest(win)
     result = {}
     test.finished.connect(lambda text: result.setdefault("text", text))

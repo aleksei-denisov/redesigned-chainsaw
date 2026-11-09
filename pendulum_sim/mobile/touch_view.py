@@ -31,13 +31,14 @@ from PySide6.QtCore import QEvent, QPointF, Qt, Signal
 from PySide6.QtGui import QColor, QImage, QPainter, QPen
 
 from ..ui.pendulum_view import PendulumView
+from .gpu import GPUHost
 
 TAP_SLOP_PX = 12.0       # finger movement below this still counts as a tap
 TAP_MAX_S = 0.35         # longer presses are not taps
 DRAG_COLOR = QColor("#E74C3C")
 
 
-class TouchPendulumView(PendulumView):
+class TouchPendulumView(GPUHost, PendulumView):
     tapPush = Signal(int)          # −1 / +1
     dragOffset = Signal(float)     # (finger_x − tip_x) / total length; 0.0 on release
 
@@ -192,7 +193,22 @@ class TouchPendulumView(PendulumView):
         native = self.devicePixelRatioF()
         return native if self.render_scale is None else min(self.render_scale, native)
 
+    def paint_gpu(self, p: QPainter) -> None:
+        """Scene drawn by the GPU surface (native resolution; the render scale is ignored)."""
+        started = time.perf_counter()
+        self.paint(p)
+        self._paint_drag(p)
+        self._paint_overlay(p)
+        if self.stats is not None:
+            self.stats.add_view((time.perf_counter() - started) * 1000.0)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._resize_surface()
+
     def paintEvent(self, event) -> None:  # noqa: N802
+        if self.gpu:
+            return                               # covered by the GPU surface
         started = time.perf_counter()
         native = self.devicePixelRatioF()
         scale = self.effective_scale()
@@ -271,7 +287,8 @@ class TouchPendulumView(PendulumView):
         from ..ui.widgets import SEGMENT_COLORS
 
         indices = range(1, len(self.trails)) if self.settings.trail_all_joints else [len(self.trails) - 1]
-        offset = 1.0 / max(self.effective_scale(), 1.0)     # one device pixel in logical units
+        scale = self.devicePixelRatioF() if self.gpu else self.effective_scale()
+        offset = 1.0 / max(scale, 1.0)                       # one device pixel in logical units
         for k in indices:
             pts = self.trails[k]
             if len(pts) < 2:

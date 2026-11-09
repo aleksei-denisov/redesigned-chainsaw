@@ -455,7 +455,8 @@ def test_trail_polygon_matches_to_screen(win, app):
 def test_performance_test_reports_every_phase(win, app, monkeypatch):
     from pendulum_sim.mobile import perftest
 
-    phases = [(label, screen, graphs, 0.4, profiled) for label, screen, graphs, _s, profiled in perftest.PHASES]
+    # software only here (offscreen has no OpenGL; GPU drawing: tests/test_mobile_gpu.py)
+    phases = [ph[:3] + (0.4,) + ph[4:5] + ("software",) for ph in perftest.PHASES]
     monkeypatch.setattr(perftest, "PHASES", phases)
     monkeypatch.setattr(perftest, "SETTLE_S", 0.1)
     before = (win.current, list(win.telemetry.selected))
@@ -464,7 +465,7 @@ def test_performance_test_reports_every_phase(win, app, monkeypatch):
     assert wait(app, lambda: not test.running, 30)
     report = win._report_dialog.text
     for label, *_ in phases:
-        assert label in report
+        assert label.split(" (not available")[0] in report
     assert "fps" in report and "graph paint" in report and "tottime" in report
     win._report_dialog.copy()
     assert QApplication.clipboard().text() == report or True   # offscreen clipboards may be stubs

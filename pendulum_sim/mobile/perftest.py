@@ -27,14 +27,19 @@ import time
 
 from PySide6.QtCore import QObject, QTimer, Signal
 
-PHASES = [  # (label, screen, graphs or None, seconds, profiled)
-    ("Simulate screen (no graphs)", "simulate", None, 6.0, False),
-    ("Graphs screen, 2 graphs", "graphs", ["angle", "control"], 6.0, False),
-    ("Graphs screen, 3 graphs", "graphs", ["angle", "control", "cart_position"], 6.0, False),
-    ("Graphs screen, 4 graphs", "graphs", ["angle", "angular_velocity", "control", "cart_position"], 6.0, False),
-    ("Python profile, 3 graphs", "graphs", ["angle", "control", "cart_position"], 4.0, True),
+G2 = ["angle", "control"]
+G3 = ["angle", "control", "cart_position"]
+G4 = ["angle", "angular_velocity", "control", "cart_position"]
+PHASES = [  # (label, screen, graphs or None, seconds, profiled, drawing or None = keep)
+    ("Software · Simulate screen (no graphs)", "simulate", None, 5.0, False, "software"),
+    ("Software · Graphs screen, 3 graphs", "graphs", G3, 5.0, False, "software"),
+    ("GPU · Simulate screen (no graphs)", "simulate", None, 5.0, False, "gpu"),
+    ("GPU · Graphs screen, 2 graphs", "graphs", G2, 5.0, False, "gpu"),
+    ("GPU · Graphs screen, 3 graphs", "graphs", G3, 5.0, False, "gpu"),
+    ("GPU · Graphs screen, 4 graphs", "graphs", G4, 5.0, False, "gpu"),
+    ("Python profile, 3 graphs, GPU", "graphs", G3, 4.0, True, "gpu"),
 ]
-SETTLE_S = 1.0
+SETTLE_S = 1.5             # after switching screen / drawing mode, before recording
 
 
 def _pct(values: list[float], q: float) -> float:
@@ -117,7 +122,13 @@ class PerformanceTest(QObject):
         if self._phase >= len(PHASES):
             self._done()
             return
-        label, screen, graphs, seconds, profiled = PHASES[self._phase]
+        label, screen, graphs, seconds, profiled = PHASES[self._phase][:5]
+        drawing = PHASES[self._phase][5] if len(PHASES[self._phase]) > 5 else None
+        if drawing is not None:
+            used = w.set_drawing(drawing, w.perf.gpu_samples)
+            if used != drawing:
+                label += f" (not available: {used} drawing)"
+                PHASES[self._phase] = (label,) + tuple(PHASES[self._phase][1:])
         if graphs is not None:
             w.telemetry.set_selection(graphs)
         w.navigate(screen, remember=False)
@@ -129,7 +140,7 @@ class PerformanceTest(QObject):
     def _begin_recording(self) -> None:
         if not self.running:
             return
-        _label, _screen, _graphs, seconds, profiled = PHASES[self._phase]
+        _label, _screen, _graphs, seconds, profiled = PHASES[self._phase][:5]
         self.window.stats.recording = []
         self._started = time.perf_counter()
         if profiled:
@@ -145,7 +156,7 @@ class PerformanceTest(QObject):
         return frames
 
     def _finish_phase(self) -> None:
-        label, _screen, _graphs, _seconds, profiled = PHASES[self._phase]
+        label, _screen, _graphs, _seconds, profiled = PHASES[self._phase][:5]
         elapsed = time.perf_counter() - self._started
         frames = self._stop_recording()
         if profiled and self._profile is not None:
@@ -173,6 +184,7 @@ class PerformanceTest(QObject):
             return
         current, selection, running = self._saved
         w = self.window
+        w.set_drawing(w.perf.drawing, w.perf.gpu_samples)
         w.telemetry.set_selection(selection)
         w.navigate(current, remember=False)
         if not running:
@@ -194,7 +206,7 @@ class PerformanceTest(QObject):
             f"Python {platform.python_version()} on {sys.platform} {platform.machine()}; {geo}",
             f"scenario '{w.config.name}', dt {w.config.simulation.dt * 1000:g} ms, "
             f"telemetry {w.config.simulation.telemetry_rate_hz:g} Hz, graph window {w.telemetry.window_s} s",
-            f"settings: {p.fps} fps, graphs {p.graph_fps} Hz, view resolution {p.render}, "
+            f"settings: {p.drawing} drawing, {p.fps} fps, graphs {p.graph_fps} Hz, view resolution {p.render}, "
             f"antialias {'on' if p.antialias else 'off'}, fast cores {'on' if p.fast_cores else 'off'}; "
             f"{cpu.describe()}",
             f"start-up to main window {dict(TIMER.marks).get('main window shown', TIMER.total):.2f} s",
