@@ -106,6 +106,42 @@ def main(out_dir: str) -> int:
     settle(win, 0.3)
     win.grab().save(str(out / "phone_experiments.png"))
 
+    # Auto-tune screen: running and result pages (small search so CI stays quick)
+    from pendulum_sim.mobile import autotune_screen
+    from pendulum_sim.simulation.tuning import TuningSettings
+
+    small = TuningSettings(horizon=2.5, samples=6, refine_rounds=1, refine_samples=4, resolution=0.08)
+    autotune_screen.TuningSettings.preset = staticmethod(lambda name: TuningSettings(**small.__dict__))
+    win.tabs.setCurrentIndex(0)
+    win.load(scenario("single_cart_full"))
+    win.resize(*SIZES["tablet_landscape"])
+    win.controller_panel.robustTuneRequested.emit()
+    screen = win.autotune
+    deadline = time.perf_counter() + 60
+    while screen.push_test_s is None and time.perf_counter() < deadline:
+        app.processEvents()
+        time.sleep(0.02)
+    settle(win, 0.2)
+    win.grab().save(str(out / "tablet_autotune_setup.png"))
+    screen.start()
+    deadline = time.perf_counter() + 120
+    while (screen.last is None or screen.last.candidates_done < 3) and time.perf_counter() < deadline:
+        app.processEvents()
+        time.sleep(0.02)
+    settle(win, 0.3)
+    win.grab().save(str(out / "tablet_autotune_running.png"))
+    deadline = time.perf_counter() + 300
+    while screen.busy and time.perf_counter() < deadline:
+        app.processEvents()
+        time.sleep(0.02)
+    settle(win, 0.3)
+    win.grab().save(str(out / "tablet_autotune_result.png"))
+    win.resize(*SIZES["phone_portrait"])
+    settle(win, 0.3)
+    win.grab().save(str(out / "phone_autotune_result.png"))
+    screen.close_screen()
+    win.load(scenario("triple_cart_lqr"))
+
     # ------------------------------------------------------------ benchmark
     win.tabs.setCurrentIndex(0)
     win.resize(*SIZES["tablet_landscape"])

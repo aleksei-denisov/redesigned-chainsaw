@@ -47,6 +47,7 @@ from ..simulation import AppConfig
 from ..ui.main_window import MainWindow
 from ..ui.widgets import hint, scrollable
 from . import cpu
+from .autotune_screen import AutotuneScreen
 from .graphs import GraphsPanel
 from .performance import FRAME_RATES, GRAPH_RATES_HZ, FrameStats, PerformanceSettings, instrument_graphs
 from .touch_view import TouchPendulumView
@@ -163,6 +164,12 @@ class MobileWindow(MainWindow):
             if screen is not None else 0
         self.side.setVisible(short_edge >= SIDE_PANEL_MIN_SHORT_EDGE)
         self._orientation: bool | None = None
+
+        # Full-window auto-tune flow (locks the rest of the app while open)
+        self.autotune = AutotuneScreen(self)
+        self.autotune.applyRequested.connect(self._apply_tuning_result)
+        self.autotune.closed.connect(self._on_autotune_closed)
+        self._tune_was_running = False
 
     def _build_toolbar_and_menu(self) -> None:
         """Touch control bar plus a ☰ menu (no menu bar / tool bar on mobile)."""
@@ -351,7 +358,29 @@ class MobileWindow(MainWindow):
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
+        if self.autotune.isVisible():
+            self.autotune.setGeometry(self.rect())
         self._apply_orientation()
+
+    # ============================================================ auto-tune
+    def _on_robust_tune(self) -> None:
+        """PID panel → 'Auto-tune for robustness': full-screen flow instead of a dialog."""
+        self._tune_was_running = self.running
+        self.pause()                          # all CPU cores for the search
+        self.config.controller = self.controller_panel.config()
+        self.autotune.open(self.config)
+
+    def _on_autotune_closed(self) -> None:
+        if self._tune_was_running:
+            self._tune_was_running = False
+            self.start()
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802
+        if event.key() == Qt.Key.Key_Back and self.autotune.isVisible():
+            self.autotune.handle_back()
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     def _apply_orientation(self) -> None:
         landscape = self.width() > self.height()
@@ -414,6 +443,8 @@ class MobileWindow(MainWindow):
                 self._resume_on_activate = False
                 self.start()
         else:
+            if self.autotune.busy:
+                self.autotune.cancel()        # auto-tune is a foreground operation
             if self.running:
                 self._resume_on_activate = True
                 self.pause()

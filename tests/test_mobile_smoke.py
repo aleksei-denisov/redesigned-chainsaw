@@ -228,3 +228,63 @@ def test_graphs_follow_structure(win, app):
     assert len(g.charts["angle"].series) == 2
     assert [s.label for s in g.charts["pid"].series] == ["P", "I", "D"]
     g.set_selection(["angle", "control"])
+
+
+def _wait(app, cond, timeout=120.0):
+    import time as _t
+
+    end = _t.monotonic() + timeout
+    while not cond() and _t.monotonic() < end:
+        app.processEvents()
+        _t.sleep(0.02)
+    return cond()
+
+
+def test_autotune_screen_full_flow(win, app, monkeypatch):
+    from pendulum_sim.simulation import tuning
+
+    fast = tuning.TuningSettings(horizon=2.0, samples=3, refine_rounds=1, refine_samples=2, resolution=0.1)
+    monkeypatch.setattr(tuning.TuningSettings, "preset", staticmethod(lambda name: tuning.TuningSettings(**fast.__dict__)))
+    from pendulum_sim.mobile import autotune_screen
+
+    monkeypatch.setattr(autotune_screen.TuningSettings, "preset",
+                        staticmethod(lambda name: tuning.TuningSettings(**fast.__dict__)))
+    win.start()
+    win.controller_panel.robustTuneRequested.emit()
+    screen = win.autotune
+    assert screen.isVisible() and not win.running and screen.geometry() == win.rect()
+    assert _wait(app, lambda: screen.push_test_s is not None, 60)        # device calibration
+    assert "about" in screen.preset_buttons["normal"].text()
+    screen.workers = 2
+    screen.start()
+    assert screen.pages.currentIndex() == 1 and screen.busy
+    assert _wait(app, lambda: not screen.busy, 180)
+    assert screen.pages.currentIndex() == 2 and screen.result is not None
+    assert "→" in screen.headline.text() and screen.metrics_grid.count() > 0
+    screen.apply_btn.click()
+    app.processEvents()
+    assert not screen.isVisible() and win.running                       # resumed after closing
+    assert win.push_force.value() == pytest.approx(screen.result.recommended_push)
+    win.pause()
+
+
+def test_autotune_cancel_on_background(win, app, monkeypatch):
+    from pendulum_sim.mobile import autotune_screen
+    from pendulum_sim.simulation import tuning
+
+    slow = tuning.TuningSettings(horizon=4.0, samples=40, refine_rounds=3, refine_samples=8)
+    monkeypatch.setattr(autotune_screen.TuningSettings, "preset",
+                        staticmethod(lambda name: tuning.TuningSettings(**slow.__dict__)))
+    win.load(scenario("double_cart_lqr"))
+    win.controller_panel.robustTuneRequested.emit()
+    screen = win.autotune
+    screen.workers = 2
+    screen.start()
+    _wait(app, lambda: screen.last is not None and screen.last.candidates_done >= 1, 120)
+    win.on_application_state(Qt.ApplicationState.ApplicationSuspended)   # user leaves the app
+    assert _wait(app, lambda: not screen.busy, 30)
+    assert screen.pages.currentIndex() == 2
+    assert screen.result is None or screen.result.cancelled
+    win.on_application_state(Qt.ApplicationState.ApplicationActive)
+    screen.close_screen()
+    assert not screen.isVisible()
