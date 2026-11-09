@@ -214,7 +214,40 @@ def prepare_p4a(branch: str, commit: str) -> Path | None:
         log.warning("could not prepare python-for-android (%s); buildozer clones it, no native splash", exc)
         return None
     patch_splash(P4A_DIR)
+    patch_back_key(P4A_DIR)
     return P4A_DIR
+
+
+BACK_KEY_MARK = "Inverted Pendulum Simulator: keys go to Qt"
+BACK_KEY_LINE = (f"        // {BACK_KEY_MARK} (the app handles Back: previous screen, exit dialog)\n"
+                 "        if (true) return super.onKeyDown(keyCode, event);\n")
+
+
+def patch_back_key(p4a: Path) -> bool:
+    """Let Qt receive every key press, Back included (idempotent).
+
+    The Qt bootstrap's ``PythonActivity.onKeyDown`` swallows a key press – any key at the
+    pinned commit – with a "Click again to close the app" toast unless the previous one
+    was less than 2 s ago, so the app's own Back handling (previous screen, then an exit
+    dialog) only ran on every second press. A first statement returning
+    ``super.onKeyDown`` (Qt's activity, which forwards the key to the app) restores the
+    normal behaviour; the original body stays below it (``if (true)`` keeps it compilable).
+    """
+    java = (p4a / "pythonforandroid" / "bootstraps" / "qt" / "build" / "src" / "main" / "java" / "org"
+            / "kivy" / "android" / "PythonActivity.java")
+    if not java.exists():
+        log.warning("no Qt bootstrap activity at %s: Back key not patched", java)
+        return False
+    text = java.read_text(encoding="utf-8")
+    if BACK_KEY_MARK in text:
+        return True
+    head = re.search(r"public boolean onKeyDown\(int keyCode, KeyEvent event\)\s*\{\n", text)
+    if head is None:
+        log.warning("onKeyDown not found in %s: Back key not patched", java)
+        return False
+    java.write_text(text[:head.end()] + BACK_KEY_LINE + text[head.end():], encoding="utf-8")
+    log.info("Back key handed to Qt in %s", java)
+    return True
 
 
 def patch_splash(p4a: Path) -> bool:

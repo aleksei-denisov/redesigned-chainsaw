@@ -1,6 +1,6 @@
 """The native-splash patch of the python-for-android Qt bootstrap (scripts/build_android.py).
 
-``tests/data/p4a_qt_*.tmpl.xml`` are copies of python-for-android's Qt bootstrap
+``tests/data/p4a_qt_*`` are copies of python-for-android's Qt bootstrap
 templates (MIT licence, kivy/python-for-android); the activity's start tag contains
 Jinja conditions with ``>`` in them, which broke a first, regex-on-the-tag version.
 """
@@ -74,3 +74,21 @@ def test_splash_patch_on_the_real_templates(build_android, tmp_path):
 
 def test_splash_patch_is_skipped_safely_without_template(build_android, tmp_path):
     assert build_android.patch_splash(tmp_path) is False
+
+
+def test_back_key_patch_hands_keys_to_qt(build_android, tmp_path):
+    """``tests/data/p4a_qt_PythonActivity.java``: the bootstrap activity at the pinned commit."""
+    jdir = tmp_path / "pythonforandroid/bootstraps/qt/build/src/main/java/org/kivy/android"
+    jdir.mkdir(parents=True)
+    java = jdir / "PythonActivity.java"
+    shutil.copy(DATA / "p4a_qt_PythonActivity.java", java)
+    assert build_android.patch_back_key(tmp_path)
+    assert build_android.patch_back_key(tmp_path)          # idempotent
+    text = java.read_text(encoding="utf-8")
+    assert text.count(build_android.BACK_KEY_MARK) == 1
+    body = text[text.index("public boolean onKeyDown"):]
+    first = body.split("{", 1)[1].strip().splitlines()
+    statements = [ln.strip() for ln in first if ln.strip() and not ln.strip().startswith("//")]
+    assert statements[0] == "if (true) return super.onKeyDown(keyCode, event);"
+    assert "Click again to close the app" in body           # original code kept (not reached)
+    assert build_android.patch_back_key(tmp_path / "missing") is False
