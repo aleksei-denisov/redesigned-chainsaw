@@ -555,6 +555,15 @@ class StepperRow(QWidget):
         self._set(v, emit=False)
 
 
+class _ClickLabel(QLabel):
+    clicked = Signal()
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        if self.rect().contains(event.position().toPoint()):
+            self.clicked.emit()
+        super().mouseReleaseEvent(event)
+
+
 class Section(QWidget):
     """Collapsible group: a tappable header (title + chevron) and its content."""
 
@@ -564,19 +573,29 @@ class Section(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
         self.frame, inner = card()
+        # header: chevron button + a word-wrapped title (long titles wrap instead of
+        # forcing the page wider than a phone); tapping either toggles the section
         self.header = QToolButton()
-        self.header.setText(title if not subtitle else f"{title}   ·   {subtitle}")
         self.header.setCheckable(True)
         self.header.setChecked(expanded)
-        self.header.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.header.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
         self.header.setIconSize(QSize(22, 22))
         self.header.setProperty("flat", True)
-        self.header.setStyleSheet("QToolButton { background: transparent; border: none; font-weight: 600; "
-                                  f"font-size: {theme.BODY_PX + 1}px; text-align: left; padding: 0; }}")
-        self.header.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.header.setStyleSheet("QToolButton { background: transparent; border: none; padding: 0; }")
+        self.header.setFixedWidth(32)
         self.header.toggled.connect(self.set_expanded)
         self.header.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        inner.addWidget(self.header)
+        self.title_label = _ClickLabel(title if not subtitle else f"{title}   ·   {subtitle}")
+        self.title_label.setWordWrap(True)
+        self.title_label.setStyleSheet(f"QLabel {{ font-weight: 600; font-size: {theme.BODY_PX + 1}px; }}")
+        self.title_label.setMinimumHeight(theme.TOUCH_PX)
+        self.title_label.clicked.connect(self.header.toggle)
+        head = QHBoxLayout()
+        head.setContentsMargins(0, 0, 0, 0)
+        head.setSpacing(6)
+        head.addWidget(self.header)
+        head.addWidget(self.title_label, 1)
+        inner.addLayout(head)
         self.body = QWidget()
         self.body_layout = QVBoxLayout(self.body)
         self.body_layout.setContentsMargins(0, 4, 0, 4)
@@ -598,7 +617,10 @@ class Section(QWidget):
         return widget
 
     def set_title(self, title: str) -> None:
-        self.header.setText(title)
+        self.title_label.setText(title)
+
+    def title(self) -> str:
+        return self.title_label.text()
 
 
 class ScrollPage(QScrollArea):

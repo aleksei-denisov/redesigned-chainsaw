@@ -643,6 +643,16 @@ class NavBar(QWidget):
             lay.addStretch(1)
         self.layout_ = lay
 
+    def set_compact(self, compact: bool) -> None:
+        """Low screens (phone landscape): icons only, 48 px high bar."""
+        style = Qt.ToolButtonStyle.ToolButtonIconOnly if compact else Qt.ToolButtonStyle.ToolButtonTextUnderIcon
+        for b in self.buttons.values():
+            b.setToolButtonStyle(style)
+            if not self.vertical:
+                b.setMinimumSize(QSize(56, 48) if compact else QSize(56, 60))
+        if self.layout_ is not None:
+            self.layout_.setContentsMargins(6, 2 if compact else 6, 6, 2 if compact else 6)
+
     def set_current(self, key: str) -> None:
         for k, b in self.buttons.items():
             b.setChecked(k == key)

@@ -490,6 +490,7 @@ class MobileWindow(MainWindow):
             self.nav.set_current(self._nav_key(self.current))
         self.graphs_page.set_landscape(landscape)
         self.telemetry.set_compact(self.height() < 600)
+        self.nav.set_compact(not rail and self.height() < 500)
         compact = self.width() < 600                     # phones: icon-only secondary buttons
         for b in (getattr(self, n, None) for n in ("reset_btn", "restart_btn", "scenario_btn")):
             if b is not None:
