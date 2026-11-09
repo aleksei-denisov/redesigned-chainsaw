@@ -532,7 +532,8 @@ def test_autotune_cancelled_by_back_and_background(win, app, monkeypatch):
 @pytest.mark.parametrize("size", [(360, 760), (760, 360)])
 def test_phone_layout_fits_and_targets_are_large(win, app, size):
     win.telemetry.set_selection(["angle", "angular_velocity", "control"])
-    for _ in range(2):          # the first resize may be limited by the previous layout's minimum
+    for _ in range(3):          # the first resize may be limited by the previous layout's minimum
+        win.layout().activate()                # refresh the window's minimum from the layout
         win.resize(*size)
         app.processEvents()
     too_big = {k: (p.minimumSizeHint().width(), p.minimumSizeHint().height()) for k, p in win.pages.items()
