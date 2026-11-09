@@ -122,8 +122,18 @@ def main(out_dir: str) -> int:
             ms = timed(win.view.repaint, 40)
             report.append(f"view {render:9s} antialias={str(aa):5s}        {ms:8.2f}")
     win.apply_performance(PerformanceSettings())
-    graphs = timed(lambda: (win.telemetry.refresh(win.sim.telemetry, force=True), win.telemetry.repaint()), 20)
-    report.append(f"{'graphs (update + paint)':34s} {graphs:8.2f}")
+    toggles = win.telemetry.toggles
+    shown = {k for k, a in toggles.items() if a.isChecked()}
+    for label, keys in (("graphs: mobile default " + "+".join(sorted(shown)), shown),
+                        ("graphs: angles+error+control+energy", {"angles", "error", "control", "energy"})):
+        for k, a in toggles.items():
+            a.setChecked(k in keys)
+        settle(win, 0.3)
+        ms = timed(lambda: (win.telemetry.refresh(win.sim.telemetry, force=True), win.telemetry.repaint()), 20)
+        report.append(f"{label:34s} {ms:8.2f}  per refresh")
+    for k, a in toggles.items():
+        a.setChecked(k in shown)
+    settle(win, 0.3)
     whole = timed(win.repaint, 10)
     report.append(f"{'whole window repaint':34s} {whole:8.2f}")
     sim = win.sim

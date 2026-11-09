@@ -24,6 +24,7 @@ from dataclasses import asdict, dataclass, fields
 
 from PySide6.QtCore import QSettings
 
+# device pixels per logical pixel used to draw the pendulum view (None = the screen's own)
 RENDER_SCALES = {"native": None, "high": 1.5, "balanced": 1.25, "fast": 1.0}
 GRAPH_RATES_HZ = [15, 10, 5, 2]
 FRAME_RATES = [60, 30]

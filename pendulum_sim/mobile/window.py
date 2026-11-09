@@ -52,6 +52,9 @@ from .touch_view import TouchPendulumView
 DRAG_GAIN = 2.0          # drag force = DRAG_GAIN · push force · (offset / total length)
 DRAG_LIMIT = 4.0         # … clamped to ±DRAG_LIMIT · push force
 WIDE_BAR_PX = 900        # control bar in one row from this width on
+VIEW_SHARE = 0.6         # share of the live page height (portrait: width too) for the pendulum view
+EXPERIMENT_CONTROLS_PX = 440
+DEFAULT_GRAPHS = {"angles", "control"}   # more via the Graphs menu, as on the desktop
 SIDE_PANEL_MIN_SHORT_EDGE = 600   # show the configuration panel at start on tablets
 
 RENDER_LABELS = {"native": "Native (sharpest, slowest)", "high": "High (1.5×)",
@@ -104,6 +107,9 @@ class MobileWindow(MainWindow):
         self.stats = FrameStats()
         self.view.stats = self.stats
         instrument_graphs(self.stats)
+        for key, act in self.telemetry.toggles.items():
+            act.setChecked(key in DEFAULT_GRAPHS)
+        self._last_drawn = None
 
         self.live = QSplitter(Qt.Orientation.Vertical)
         self.live.setChildrenCollapsible(False)
@@ -115,6 +121,7 @@ class MobileWindow(MainWindow):
         self.tabs.setDocumentMode(True)
         self.tabs.addTab(self.live, "Live")
         self.tabs.addTab(self.experiments, "Experiments")
+        self.tabs.currentChanged.connect(lambda _: QTimer.singleShot(0, self._size_pages))
 
         simulation_page = QWidget()
         sv = QVBoxLayout(simulation_page)
@@ -228,10 +235,10 @@ class MobileWindow(MainWindow):
         sb = self.statusBar()
         sb.setSizeGripEnabled(False)
         for w in (self.status_state, self.status_time, self.status_rtf, self.status_energy, self.status_perf):
-            w.setMinimumWidth(0)
-            _shrinkable(w)
+            w.setMinimumWidth(1)           # may shrink on phones; Preferred keeps the text width otherwise
         self.status_state.hide()           # shown on the Start/Pause button instead
         self.status_energy.hide()          # the HUD on the view shows the state
+        self.status_perf.hide()            # the timing read-out is drawn on the view (see _update_status)
 
     def _build_performance_box(self) -> QGroupBox:
         box = QGroupBox("Performance (this device)")
@@ -286,7 +293,8 @@ class MobileWindow(MainWindow):
         self.target_frame_s = 1.25 * perf.frame_interval_ms / 1000.0
         self._plot_interval = perf.plot_interval_s
         self.timer.setInterval(perf.frame_interval_ms)
-        self.status_perf.setVisible(perf.show_stats)
+        if not perf.show_stats:
+            self.view.overlay_text = ""
         self.view.update()
 
     def _on_performance_edited(self, *_args) -> None:
@@ -310,6 +318,7 @@ class MobileWindow(MainWindow):
             self.panel_btn.setChecked(visible)
         if visible:
             self._size_panel()
+        QTimer.singleShot(0, self._size_pages)
         QTimer.singleShot(0, self.view.fit)
 
     def _size_panel(self) -> None:
@@ -337,7 +346,20 @@ class MobileWindow(MainWindow):
             splitters[0].setOrientation(Qt.Orientation.Horizontal if landscape else Qt.Orientation.Vertical)
         if self.side.isVisible():
             self._size_panel()
+        QTimer.singleShot(0, self._size_pages)
         QTimer.singleShot(0, self.view.fit)
+
+    def _size_pages(self) -> None:
+        """Pendulum view gets most of the live page; experiment controls a usable width."""
+        total = self.live.height()
+        if total > 0:
+            view = int(total * VIEW_SHARE)
+            self.live.setSizes([view, total - view])
+        splitters = self.experiments.findChildren(QSplitter)
+        if splitters and splitters[0].orientation() == Qt.Orientation.Horizontal:
+            width = splitters[0].width()
+            controls = min(EXPERIMENT_CONTROLS_PX, int(width * 0.45))
+            splitters[0].setSizes([controls, max(width - controls, 1)])
 
     def fit_to_screen(self) -> None:
         self.showMaximized()
@@ -388,10 +410,21 @@ class MobileWindow(MainWindow):
         super()._on_frame()
         self.stats.frame(gap)
 
+    def _update_view(self) -> None:
+        # While paused the 60 Hz timer keeps running; redraw only when something changed
+        # (parameter edits, reset, step). Camera gestures repaint the view themselves.
+        sim = self.sim
+        key = (id(sim), sim.time, sim.state.tobytes(), sim.model.lengths.tobytes(), sim.applied,
+               sim.tip_force, self.running)
+        if not self.running and key == self._last_drawn:
+            return
+        self._last_drawn = key
+        super()._update_view()
+
     def _update_status(self) -> None:
         super()._update_status()
         if self.perf.show_stats:
             s = self.stats
-            self.status_perf.setText(
-                f"{s.fps:.0f} fps · max {s.worst_gap_ms:.0f} ms · phys {self.stepper.physics_ms:.1f} · "
-                f"view {s.view_ms.value:.1f} · graphs {s.graph_ms:.1f} ms")
+            self.view.overlay_text = (
+                f"{s.fps:.0f} fps · max {s.worst_gap_ms:.0f} ms │ physics {self.stepper.physics_ms:.1f} · "
+                f"view {s.view_ms.value:.1f} · graphs {s.graph_ms:.1f} ms/frame")

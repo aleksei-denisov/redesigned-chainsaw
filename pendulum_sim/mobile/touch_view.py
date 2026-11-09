@@ -50,6 +50,7 @@ class TouchPendulumView(PendulumView):
         self.render_scale: float | None = None     # None = native resolution
         self._buffer: QImage | None = None
         self.stats = None                            # performance.FrameStats, optional
+        self.overlay_text = ""                       # timing read-out, drawn top-right
 
     # ------------------------------------------------------------ geometry
     def tip_world(self) -> np.ndarray | None:
@@ -194,6 +195,7 @@ class TouchPendulumView(PendulumView):
             p = QPainter(self)
             self.paint(p)
             self._paint_drag(p)
+            self._paint_overlay(p)
             p.end()
         else:
             # Software rendering cost grows with the pixel count: draw at a reduced pixel
@@ -207,11 +209,25 @@ class TouchPendulumView(PendulumView):
             self._paint_drag(ip)
             ip.end()
             p = QPainter(self)
-            p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+            # An integer up-scale (e.g. 1× → 2× pixels) is a cheap pixel copy; others need filtering.
+            ratio = native / scale
+            p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, abs(ratio - round(ratio)) > 1e-3)
             p.drawImage(self.rect(), self._buffer)
+            self._paint_overlay(p)
             p.end()
         if self.stats is not None:
             self.stats.add_view((time.perf_counter() - started) * 1000.0)
+
+    def _paint_overlay(self, p: QPainter) -> None:
+        if not self.overlay_text:
+            return
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        fm = p.fontMetrics()
+        r = fm.boundingRect(self.overlay_text).adjusted(-6, -3, 6, 3)
+        r.moveTopRight(self.rect().topRight() + QPointF(-6, 6).toPoint())
+        p.fillRect(r, QColor(0, 0, 0, 140))
+        p.setPen(QColor("#FFFFFF"))
+        p.drawText(r, Qt.AlignmentFlag.AlignCenter, self.overlay_text)
 
     def _paint_drag(self, p: QPainter) -> None:
         tip = self.tip_world()
