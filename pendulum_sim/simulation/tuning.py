@@ -340,6 +340,7 @@ class TuneProgress:
     best_weights: LQRWeights | None = None
     best_controller: ControllerConfig | None = None
     history: list[float] = field(default_factory=list)   # best push after each candidate
+    candidate_pushes: list[float] = field(default_factory=list)   # each candidate's own push (0 = rejected)
 
     @property
     def fraction(self) -> float:
@@ -431,6 +432,7 @@ def robust_tune(
                         set_best(cand)
                     history.append(best.max_push if best else 0.0)
                     state.history = list(history)
+                    state.candidate_pushes.append(push)
                 next_index += 1
             message = (f"{label}: tested {state.candidates_done} / {s.candidates} candidate controllers"
                        if state.candidates_done else "Measuring the current controller…")

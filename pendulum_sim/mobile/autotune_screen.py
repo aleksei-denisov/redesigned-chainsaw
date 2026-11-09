@@ -131,12 +131,16 @@ class MiniPlot(QWidget):
         super().__init__()
         self.unit = unit
         self.series: list[tuple[np.ndarray, np.ndarray, QColor, str]] = []
+        self.points = None
         self.x_label = ""
         self.setMinimumHeight(min_height)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
-    def set_series(self, series, x_label: str = "") -> None:
+    def set_series(self, series, x_label: str = "", points=None) -> None:
+        """Line ``series`` [(x, y, colour, legend)], optional ``points`` (x, y, colour, legend) as dots."""
         self.series = [(np.asarray(x, float), np.asarray(y, float), QColor(c), label) for x, y, c, label in series]
+        self.points = None if points is None else (np.asarray(points[0], float), np.asarray(points[1], float),
+                                                   QColor(points[2]), points[3])
         self.x_label = x_label
         self.update()
 
@@ -148,8 +152,9 @@ class MiniPlot(QWidget):
         fg = pal.text().color()
         fm = QFontMetricsF(self.font())
         finite = [(x[np.isfinite(y)], y[np.isfinite(y)]) for x, y, *_ in self.series]
-        xs = np.concatenate([x for x, _ in finite]) if finite else np.array([])
-        ys = np.concatenate([y for _, y in finite]) if finite else np.array([])
+        extra = [] if self.points is None else [(self.points[0], self.points[1])]
+        xs = np.concatenate([x for x, _ in finite + extra]) if finite + extra else np.array([])
+        ys = np.concatenate([y for _, y in finite + extra]) if finite + extra else np.array([])
         if xs.size < 2:
             p.setPen(MUTED)
             p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "waiting for data…")
@@ -171,8 +176,16 @@ class MiniPlot(QWidget):
         grid.setAlpha(40)
         # header: unit + legend
         p.setPen(fg)
-        p.drawText(QPointF(4, fm.ascent()), self.unit)
-        lx = 4 + fm.horizontalAdvance(self.unit) + 16
+        head = f"{self.unit}  vs  {self.x_label}" if self.x_label else self.unit
+        p.drawText(QPointF(4, fm.ascent()), head)
+        lx = 4 + fm.horizontalAdvance(head) + 16
+        if self.points is not None and self.points[3]:
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(self.points[2])
+            p.drawEllipse(QPointF(lx + 7, fm.ascent() * 0.65), 4, 4)
+            p.setPen(fg)
+            p.drawText(QPointF(lx + 18, fm.ascent()), self.points[3])
+            lx += 18 + fm.horizontalAdvance(self.points[3]) + 14
         for _x, _y, col, label in self.series:
             if not label:
                 continue
@@ -193,11 +206,16 @@ class MiniPlot(QWidget):
             x = r.left() + (v - x0) / (x1 - x0) * r.width()
             label = format_tick(v, xstep)
             p.drawText(QPointF(x - fm.horizontalAdvance(label) / 2, r.bottom() + fm.ascent() + 3), label)
-        if self.x_label:
-            p.setPen(MUTED)
-            p.drawText(QPointF(r.right() - fm.horizontalAdvance(self.x_label), r.bottom() + fm.ascent() + 3),
-                       self.x_label)
-        p.setClipRect(r)
+        p.setClipRect(r.adjusted(-6, -6, 6, 6))
+        if self.points is not None:
+            px_, py_, pcol, _ = self.points
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(pcol)
+            for a, b in zip(px_, py_):
+                if np.isfinite(b):
+                    p.drawEllipse(QPointF(r.left() + (a - x0) / (x1 - x0) * r.width(),
+                                          r.bottom() - (b - y0) / (y1 - y0) * r.height()), 3.5, 3.5)
+            p.setBrush(Qt.BrushStyle.NoBrush)
         for (x, y), (_x, _y, col, _label) in zip(finite, self.series):
             if x.size < 2:
                 continue
@@ -396,7 +414,7 @@ class AutotuneScreen(QWidget):
         self.best_gains.setFont(mono)
         cl.addWidget(self.best_label)
         cl.addWidget(self.best_gains)
-        self.history_plot = MiniPlot("best recoverable push [N]", 150)
+        self.history_plot = MiniPlot("recoverable push [N]", 150)
         cl.addWidget(self.history_plot)
         v.addWidget(card, 1)
         self.cancel_btn = _big_button("Cancel")
@@ -547,7 +565,10 @@ class AutotuneScreen(QWidget):
             self.best_label.setText(f"Current controller recovers from {u.baseline_push:.3g} N")
         if u.history:
             n = np.arange(1, len(u.history) + 1)
-            self.history_plot.set_series([(n, u.history, ACCENT, "")], "candidate")
+            pushes = np.array(u.candidate_pushes, float)
+            pushes[pushes <= 0] = np.nan                  # rejected candidates are not plotted
+            self.history_plot.set_series([(n, u.history, ACCENT, "best (ties → faster recovery)")],
+                                         "candidate", points=(n, pushes, MUTED, "each candidate"))
         self._tick()
 
     def _tick(self) -> None:
@@ -617,6 +638,7 @@ class AutotuneScreen(QWidget):
             (old.data["t"], old.data["theta1"] * deg, MUTED, "before"),
             (new.data["t"], new.data["theta1"] * deg, ACCENT, "after"),
         ], "time [s]")
+
 
     def _on_failed(self, message: str) -> None:
         self.result = None
