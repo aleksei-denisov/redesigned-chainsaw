@@ -86,8 +86,13 @@ class StripChart(QWidget):
         self.series: list[Series] = []
         self.axis = AxisRange(gdef.min_span)
         self.window_s = 10.0
-        self.antialias = True
+        # Curve pen: "fast" = 1-device-pixel cosmetic line drawn twice (1 px apart) on dense
+        # screens – Qt's fast line rasteriser, ≈2 px thick; "smooth" = antialiased 1.6 px
+        # stroke (Qt's general stroker, several times slower on a tablet).
+        self.pen_mode = "fast"
         self.paint_ms = 0.0
+        self.update_ms = 0.0
+        self.static_builds = 0
         self._paths: list[tuple[QPolygonF, QPen]] = []
         self._static: QImage | None = None
         self._static_key = None
@@ -106,6 +111,23 @@ class StripChart(QWidget):
 
     def update_data(self, t: np.ndarray, columns, now: float) -> None:
         """Recompute the curves from telemetry views ``t`` and ``columns(name)``."""
+        started = time.perf_counter()
+        try:
+            self._update_data(t, columns, now)
+        finally:
+            self.update_ms = (time.perf_counter() - started) * 1000.0
+
+    def _make_pen(self, s: Series) -> QPen:
+        if self.pen_mode == "smooth":
+            pen = QPen(QColor(s.color), 1.6)
+        else:
+            pen = QPen(QColor(s.color), 1)
+        pen.setCosmetic(True)
+        if s.dashed:
+            pen.setStyle(Qt.PenStyle.DashLine)
+        return pen
+
+    def _update_data(self, t: np.ndarray, columns, now: float) -> None:
         sl = window_slice(t, self.window_s)
         tw = t[sl]
         if tw.size == 0 or not self.series:
@@ -128,10 +150,7 @@ class StripChart(QWidget):
         sy = r.height() / (hi - lo)
         paths = []
         for s, (xs, ys) in zip(self.series, data):
-            pen = QPen(QColor(s.color), 1.6)
-            pen.setCosmetic(True)
-            if s.dashed:
-                pen.setStyle(Qt.PenStyle.DashLine)
+            pen = self._make_pen(s)
             keep = np.isfinite(ys)
             if not keep.all():
                 xs, ys = xs[keep], ys[keep]
@@ -168,6 +187,7 @@ class StripChart(QWidget):
         if key == self._static_key and self._static is not None:
             return
         self._static_key = key
+        self.static_builds += 1
         self._plot = self._layout_rect(lo, hi)
         img = QImage(max(1, round(self.width() * dpr)), max(1, round(self.height() * dpr)),
                      QImage.Format.Format_RGB32)
@@ -247,10 +267,17 @@ class StripChart(QWidget):
         p.drawImage(0, 0, self._static)
         if self._paths:
             p.setClipRect(self._plot.adjusted(1, 1, -1, -1))
-            p.setRenderHint(QPainter.RenderHint.Antialiasing, self.antialias)
+            smooth = self.pen_mode == "smooth"
+            p.setRenderHint(QPainter.RenderHint.Antialiasing, smooth)
+            thicken = (not smooth) and self.devicePixelRatioF() >= 1.5
+            offset = QPointF(0.0, 1.0 / self.devicePixelRatioF())
             for poly, pen in self._paths:
                 p.setPen(pen)
                 p.drawPolyline(poly)
+                if thicken:                       # second pass one device pixel lower
+                    p.translate(offset)
+                    p.drawPolyline(poly)
+                    p.translate(-offset)
         p.end()
         self.paint_ms = (time.perf_counter() - started) * 1000.0
 
@@ -261,7 +288,7 @@ class GraphsPanel(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.stats = None                    # performance.FrameStats (optional)
-        self.antialias = True
+        self.pen_mode = "fast"
         self._signature: tuple[int, bool, list[str]] | None = None
         self._version = -1
         self._pending: TelemetryRecorder | None = None
@@ -348,7 +375,7 @@ class GraphsPanel(QWidget):
         t = tel.column("t")
         now = time.monotonic()
         for chart in self.visible_charts():
-            chart.antialias = self.antialias
+            chart.pen_mode = self.pen_mode
             chart.update_data(t, tel.column, now)
         if self.stats is not None:
             self.stats.add_graph((time.perf_counter() - started) * 1000.0

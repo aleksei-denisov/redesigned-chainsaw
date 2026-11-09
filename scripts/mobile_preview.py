@@ -234,8 +234,17 @@ def main(out_dir: str) -> int:
             old.refresh(win.sim.telemetry, force=True)
             old.repaint()
 
-        report.append(f"  {n} graphs: pyqtgraph (before) {timed(old_refresh, 15):7.2f}   "
-                      f"strip charts (now) {timed(new_refresh, 30):7.2f}")
+        line = f"  {n} graphs: pyqtgraph (before) {timed(old_refresh, 15):7.2f}"
+        for mode in ("smooth", "fast"):
+            graphs.pen_mode = mode
+            builds0 = sum(c.static_builds for c in graphs.visible_charts())
+            ms = timed(new_refresh, 30)
+            charts = graphs.visible_charts()
+            builds = sum(c.static_builds for c in charts) - builds0
+            line += (f"   strip charts {mode}: {ms:6.2f} (data {sum(c.update_ms for c in charts):.2f} · "
+                     f"paint {sum(c.paint_ms for c in charts):.2f} · static rebuilds {builds}/31)")
+        graphs.pen_mode = "fast"
+        report.append(line)
         if n == 4:
             win.grab().save(str(out / "tablet_four_graphs.png"))
     old.close()

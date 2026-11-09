@@ -266,7 +266,7 @@ class MobileWindow(MainWindow):
         self.perf_fps = QComboBox()
         for fps in FRAME_RATES:
             self.perf_fps.addItem(f"{fps} fps", fps)
-        self.perf_aa = QCheckBox("Antialiasing (pendulum and graphs)")
+        self.perf_aa = QCheckBox("Antialiased pendulum view")
         self.perf_cores = QCheckBox("Use performance CPU cores")
         self.perf_cores.setToolTip("Keeps the simulation on the fast cores of big.LITTLE processors")
         self.perf_stats = QCheckBox("Debug: performance overlay on the view")
@@ -312,7 +312,6 @@ class MobileWindow(MainWindow):
         self.target_frame_s = 1.25 * perf.frame_interval_ms / 1000.0
         self._plot_interval = perf.plot_interval_s
         self.timer.setInterval(perf.frame_interval_ms)
-        self.telemetry.antialias = perf.antialias
         if perf.fast_cores and not self._pinned:
             self._pinned = cpu.pin_to_performance_cores()
         elif not perf.fast_cores and self._pinned:
