@@ -44,6 +44,7 @@ class TouchPendulumView(PendulumView):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setAttribute(Qt.WidgetAttribute.WA_AcceptTouchEvents, True)
+        self.setMinimumSize(140, 120)        # the desktop's 300×200 does not fit beside graphs on a phone
         self._one: dict | None = None        # single-finger gesture state
         self._two: dict | None = None        # two-finger gesture state
         self._drag_point: QPointF | None = None

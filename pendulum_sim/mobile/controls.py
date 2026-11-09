@@ -408,18 +408,27 @@ class FlowLayout(QLayout):
         self._layout(rect, dry=False)
 
     def sizeHint(self) -> QSize:  # noqa: N802
-        return self.minimumSize()
+        """Everything on one line (the preferred size); wraps when narrower."""
+        hints = [it.sizeHint() for it in self._items if not it.isEmpty()]
+        if not hints:
+            return QSize(0, 0)
+        w = sum(h.width() for h in hints) + self._spacing * (len(hints) - 1)
+        return QSize(w, max(h.height() for h in hints))
 
     def minimumSize(self) -> QSize:  # noqa: N802
         s = QSize()
         for it in self._items:
-            s = s.expandedTo(it.minimumSize())
+            if not it.isEmpty():
+                s = s.expandedTo(it.minimumSize())
         return s
 
     def _layout(self, rect: QRect, dry: bool) -> int:
         x, y, line_h = rect.x(), rect.y(), 0
         for it in self._items:
+            if it.isEmpty():                  # hidden widgets take no space
+                continue
             hint = it.sizeHint()
+            hint.setWidth(min(hint.width(), max(rect.width(), it.minimumSize().width())))
             if x + hint.width() > rect.right() + 1 and line_h > 0:
                 x = rect.x()
                 y += line_h + self._spacing

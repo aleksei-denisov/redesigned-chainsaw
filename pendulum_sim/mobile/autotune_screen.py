@@ -28,7 +28,7 @@ import threading
 import time
 
 import numpy as np
-from PySide6.QtCore import QPointF, QRectF, Qt, QThread, QTimer, Signal
+from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetricsF, QPainter, QPen
 from PySide6.QtWidgets import (
     QButtonGroup,
@@ -60,9 +60,9 @@ from ..simulation.tuning import (
 )
 from .plot_math import format_tick, nice_ticks
 
-PRESETS = [("quick", "Quick", "Fewer candidates – a good first improvement"),
+PRESETS = [("quick", "Quick", "Fewest candidates · fastest"),
            ("normal", "Balanced", "Recommended"),
-           ("thorough", "Thorough", "Most candidates – best result, takes longest")]
+           ("thorough", "Thorough", "Most candidates · best result")]
 ACCENT = QColor("#4FA3FF")
 MUTED = QColor("#9AA0A6")
 
@@ -266,17 +266,18 @@ def _big_button(text: str, primary: bool = False) -> QPushButton:
 
 
 # ------------------------------------------------------------------- worker
-class TuneWorker(QThread):
-    """Runs calibration or the search in a thread.
+class TuneWorker:
+    """Runs calibration or the search in a plain Python thread (no Qt in it).
 
-    No Python objects cross the thread boundary through Qt signals: the worker keeps its
-    latest progress snapshot and its outcome in attributes guarded by a lock, the UI
-    polls them on a timer and reacts to Qt's own ``finished`` signal. (Queued signals
-    carrying Python objects crashed PySide6 with Python 3.10 on Windows.)
+    Nothing crosses the thread boundary through Qt: the worker keeps its latest
+    progress snapshot and its outcome in attributes guarded by a lock, and the UI
+    polls them (and :meth:`done`) on a timer. Queued signals carrying Python objects,
+    and later a ``QThread`` running Python code next to a repainting progress bar,
+    crashed PySide6 with Python 3.10 on Windows.
     """
 
     def __init__(self, config: AppConfig, settings: TuningSettings | None, calibrate_only: bool = False) -> None:
-        super().__init__()
+        self._thread = threading.Thread(target=self.run, name="autotune", daemon=True)
         self.config = config.copy()
         self.settings = settings
         self.calibrate_only = calibrate_only
@@ -289,6 +290,17 @@ class TuneWorker(QThread):
 
     def cancel(self) -> None:
         self.token.cancel()
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def done(self) -> bool:
+        return self._thread.ident is not None and not self._thread.is_alive()
+
+    def wait(self, timeout_ms: int) -> bool:
+        if self._thread.ident is not None:
+            self._thread.join(timeout_ms / 1000.0)
+        return not self._thread.is_alive()
 
     def take_progress(self) -> TuneProgress | None:
         with self._lock:
@@ -357,12 +369,32 @@ class AutotuneScreen(QWidget):
         title.setContentsMargins(16, 12, 16, 4)
         outer.addWidget(title)
         outer.addWidget(self.pages, 1)
+        self._watch = QTimer(self)               # notices finished worker threads
+        self._watch.setInterval(100)
+        self._watch.timeout.connect(self._check_threads)
         self._ticker = QTimer(self)
         self._ticker.timeout.connect(self._poll)
         if not embedded:
             self.hide()
 
     # ------------------------------------------------------------ pages
+    PRESETS_SIDE_BY_SIDE_MIN_WIDTH = 860
+
+    def _layout_presets(self, columns: int) -> None:
+        """Presets side by side on wide screens, stacked on phones."""
+        if columns == self._preset_columns:
+            return
+        self._preset_columns = columns
+        for i, (key, _n, _d) in enumerate(PRESETS):
+            b = self.preset_buttons[key]
+            self.preset_grid.removeWidget(b)
+            self.preset_grid.addWidget(b, i // columns, i % columns)
+            b.setMinimumHeight(110 if columns > 1 else 84)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._layout_presets(3 if self.width() >= self.PRESETS_SIDE_BY_SIDE_MIN_WIDTH else 1)
+
     def _scroll(self, inner: QWidget) -> QScrollArea:
         area = QScrollArea()
         area.setWidget(inner)
@@ -387,6 +419,8 @@ class AutotuneScreen(QWidget):
         self.preset_buttons: dict[str, QPushButton] = {}
         grid = QGridLayout()
         grid.setSpacing(10)
+        self.preset_grid = grid
+        self._preset_columns = 0
         for col, (key, name, desc) in enumerate(PRESETS):
             b = QPushButton(f"{name}\n{desc}\nestimating…")
             b.setCheckable(True)
@@ -399,7 +433,7 @@ class AutotuneScreen(QWidget):
             self.preset_group.addButton(b)
             b.clicked.connect(lambda _=False, k=key: self._choose(k))
             self.preset_buttons[key] = b
-            grid.addWidget(b, 0, col)
+        self._layout_presets(3)
         v.addLayout(grid)
         self.cores_label = QLabel()
         self.cores_label.setWordWrap(True)
@@ -522,8 +556,16 @@ class AutotuneScreen(QWidget):
         self._update_estimates()
         if self.push_test_s is None and self.calibration is None and self.config is not None:
             self.calibration = TuneWorker(self.config, None, calibrate_only=True)
-            self.calibration.finished.connect(self._calibration_done)
             self.calibration.start()
+            self._watch.start()
+
+    def _check_threads(self) -> None:
+        if self.calibration is not None and self.calibration.done():
+            self._calibration_done()
+        if self.worker is not None and self.worker.done():
+            self._worker_done()
+        if self.calibration is None and self.worker is None:
+            self._watch.stop()
 
     def _calibration_done(self) -> None:
         worker, self.calibration = self.calibration, None
@@ -532,7 +574,6 @@ class AutotuneScreen(QWidget):
         if worker.calibration is not None:
             self.push_test_s = worker.calibration
             self._update_estimates()
-        worker.deleteLater()
 
     def _update_estimates(self) -> None:
         for key, name, desc in PRESETS:
@@ -563,10 +604,10 @@ class AutotuneScreen(QWidget):
         self.pages.setCurrentIndex(1)
         self._started = time.monotonic()
         self.worker = TuneWorker(self.config, settings)
-        self.worker.finished.connect(self._worker_done)
         self.spinner.start()
         self._ticker.start(100)
         self.worker.start()
+        self._watch.start()
         self.runningChanged.emit(True)
 
     def cancel(self) -> None:
@@ -702,7 +743,6 @@ class AutotuneScreen(QWidget):
         else:
             self._on_failed(worker.error or "Auto-tune stopped.")
         self.apply_btn.setEnabled(self.result is not None)
-        worker.deleteLater()
         self.runningChanged.emit(False)
 
     def _apply(self) -> None:
@@ -714,6 +754,7 @@ class AutotuneScreen(QWidget):
         if self.worker is not None:
             self.cancel()
             self.worker.wait(10000)
+            self._worker_done()
         if not self.embedded:
             self.hide()
         self.closed.emit()

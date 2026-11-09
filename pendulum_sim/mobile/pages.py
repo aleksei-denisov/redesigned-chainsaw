@@ -112,7 +112,11 @@ class GraphsPage(QWidget):
         if self.view.parentWidget() is not self.left:
             self.left.layout().insertWidget(0, self.view, 1)
 
+    SIDE_BY_SIDE_MIN_WIDTH = 720
+
     def set_landscape(self, landscape: bool) -> None:
+        """View beside the graphs on wide landscape screens, above them otherwise."""
+        landscape = landscape and self.window().width() >= self.SIDE_BY_SIDE_MIN_WIDTH
         self.box.setDirection(QBoxLayout.Direction.LeftToRight if landscape else QBoxLayout.Direction.TopToBottom)
         self.box.setStretch(0, 2 if landscape else 1)
         self.box.setStretch(1, 3 if landscape else 2)

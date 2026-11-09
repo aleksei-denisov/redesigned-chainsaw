@@ -12,7 +12,7 @@ pytest.importorskip("PySide6")
 pytest.importorskip("pyqtgraph")
 
 from PySide6.QtCore import QPointF, QSettings, Qt  # noqa: E402
-from PySide6.QtWidgets import QAbstractButton, QApplication  # noqa: E402
+from PySide6.QtWidgets import QAbstractButton, QApplication, QScrollArea  # noqa: E402
 
 from pendulum_sim.mobile import icons, theme  # noqa: E402
 from pendulum_sim.mobile.performance import PerformanceSettings  # noqa: E402
@@ -43,7 +43,11 @@ def mobile(app):
     w.show()
     app.processEvents()
     yield w
+    if w.autotune.worker is not None:
+        w.autotune.cancel()
+        w.autotune.worker.wait(20000)
     w.close()
+    w.deleteLater()
     app.processEvents()
 
 
@@ -237,7 +241,9 @@ def test_graphs_selection_limit_persistence_and_visibility(win, app):
     assert len(g.shown_keys()) == MAX_VISIBLE and "energy" not in g.selected
     g.chips.buttons["energy"].click()                         # replaces the oldest
     assert "energy" in g.selected and len(g.selected) == MAX_VISIBLE
-    assert GraphsPanel().selected == g.selected               # remembered
+    other = GraphsPanel()
+    assert other.selected == g.selected                       # remembered
+    other.deleteLater()
     win.start()
     frames(win, app, 30)
     g.refresh(win.sim.telemetry, force=True)
@@ -315,17 +321,28 @@ def test_autotune_cancelled_by_back_and_background(win, app, monkeypatch):
 
 
 # ------------------------------------------------------------ touch & layout
-def test_phone_layout_fits_and_targets_are_large(win, app):
-    win.resize(360, 760)
+@pytest.mark.parametrize("size", [(360, 760), (760, 360)])
+def test_phone_layout_fits_and_targets_are_large(win, app, size):
+    win.telemetry.set_selection(["angle", "angular_velocity", "control"])
+    win.resize(*size)
     app.processEvents()
-    assert win.minimumSizeHint().width() <= 360, win.minimumSizeHint()
-    for key in ("simulate", "controller", "system", "settings"):
+    too_big = {k: (p.minimumSizeHint().width(), p.minimumSizeHint().height()) for k, p in win.pages.items()
+               if p.minimumSizeHint().width() > size[0] or p.minimumSizeHint().height() > size[1] - 60}
+    assert (win.width(), win.height()) == size, (win.minimumSizeHint(), too_big)
+    for key in ("simulate", "graphs", "controller", "system", "settings", "autotune"):
         win.navigate(key)
         app.processEvents()
-        small = [(b.text() or b.toolTip(), b.height()) for b in win.pages[key].findChildren(QAbstractButton)
+        page = win.pages[key]
+        small = [(b.text() or b.toolTip(), b.height()) for b in page.findChildren(QAbstractButton)
                  if b.isVisibleTo(win) and b.height() < 40]
         assert not small, (key, small[:5])
+        for area in page.findChildren(QScrollArea) + ([page] if isinstance(page, QScrollArea) else []):
+            inner = area.widget()
+            if inner is not None and area.isVisibleTo(win):          # nothing clipped at the right
+                need = inner.layout().minimumSize().width() if inner.layout() else 0
+                assert need <= area.viewport().width() + 1, (key, need, area.viewport().width())
     win.navigate("simulate")
+    win.telemetry.set_selection(["angle", "control"])
     win.resize(1280, 800)
 
 

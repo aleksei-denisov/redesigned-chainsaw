@@ -96,7 +96,7 @@ class StripChart(QWidget):
         self._static_key = None
         self._plot = QRectF()
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.setMinimumHeight(110)
+        self.setMinimumHeight(72)
         self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
         f = QFont(self.font())
         if f.pixelSize() > 0:
@@ -306,7 +306,7 @@ class GraphsPanel(QWidget):
             window = 10
         self.window_s = window if window in WINDOWS_S else 10
 
-        from .controls import ChoiceRow, ToggleChips
+        from .controls import ChoiceRow, FlowLayout, ToggleChips
 
         self.chips = ToggleChips([(k, g.title) for k, g in GRAPHS.items()])
         for key, b in self.chips.buttons.items():
@@ -323,14 +323,28 @@ class GraphsPanel(QWidget):
         bar.setContentsMargins(0, 0, 0, 0)
         bar.setSpacing(6)
         bar.addWidget(self.chips)
-        row = QHBoxLayout()
+        loop_box = QWidget()
+        lb = QHBoxLayout(loop_box)
+        lb.setContentsMargins(0, 0, 0, 0)
+        lb.addWidget(self.loop_label)
+        lb.addWidget(self.loop_combo)
+        self.loop_box = loop_box
+        win_box = QWidget()
+        wb = QHBoxLayout(win_box)
+        wb.setContentsMargins(0, 0, 0, 0)
+        wb.addWidget(QLabel("Window"))
+        while self.window_row.flow.count():           # chips directly in the row
+            self.window_row.flow.takeAt(0)
+        for b in self.window_row.buttons.values():
+            wb.addWidget(b)
+        self.window_row.setParent(self)               # kept for its button group / signal
+        self.window_row.hide()
+        row_holder = QWidget()
+        row = FlowLayout(row_holder, spacing=12)
         row.addWidget(self.count_label)
-        row.addStretch(1)
-        row.addWidget(self.loop_label)
-        row.addWidget(self.loop_combo)
-        row.addWidget(QLabel("Window"))
-        row.addWidget(self.window_row)
-        bar.addLayout(row)
+        row.addWidget(loop_box)
+        row.addWidget(win_box)
+        bar.addWidget(row_holder)
         self.stack = QVBoxLayout()
         self.stack.setContentsMargins(0, 0, 0, 0)
         self.stack.setSpacing(6)
@@ -436,8 +450,7 @@ class GraphsPanel(QWidget):
             chart.show()
         self.count_label.setText(f"{len(self.shown_keys())} of up to {MAX_VISIBLE} graphs")
         has_pid = "pid" in self.shown_keys()
-        self.loop_label.setVisible(has_pid)
-        self.loop_combo.setVisible(has_pid)
+        self.loop_box.setVisible(has_pid)
         self._rebuild_series()
 
     def _rebuild_series(self) -> None:
