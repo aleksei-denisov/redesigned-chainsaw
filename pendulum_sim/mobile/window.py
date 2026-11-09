@@ -55,6 +55,7 @@ from . import cpu, startup, theme
 from .controls import NumberRow, make_kinetic, scroll_area, tool_button
 from .graphs import GraphsPanel
 from .icons import icon
+from .loading import BusyOverlay
 from .pages import ControllerPage, GraphsPage, NavBar, SettingsPage, SimulatePage, SystemPage
 from .performance import FrameStats, PerformanceSettings, instrument_graphs
 from .touch_view import TouchPendulumView
@@ -197,7 +198,7 @@ class MobileWindow(MainWindow):
         self.stats = FrameStats()
         self.stats.on_second = self._on_stats_second
         self.stats.physics_source = lambda: self.stepper.last_ms
-        self._graph_frame = 0
+        self._graph_due = 0.0
         self.view.stats = self.stats
         self.telemetry.stats = self.stats
         self._last_drawn = None
@@ -246,6 +247,7 @@ class MobileWindow(MainWindow):
         self.body.setSpacing(0)
         self.setCentralWidget(central)
         self.toast = Toast(self)
+        self.busy = BusyOverlay(self)          # "Loading …" cover for scenario / file loads
         self._rail: bool | None = None
         self._arrange(rail=False)
         self.current = "simulate"
@@ -421,7 +423,20 @@ class MobileWindow(MainWindow):
     def _show_controller_output(self, out) -> None:
         self.controller_page.show_output(out)
 
+    def load(self, config) -> None:
+        """Desktop ``load`` behind a "Loading …" cover (rebuilding the editors takes a moment)."""
+        if not self.isVisible() or not hasattr(self, "busy"):
+            super().load(config)
+            return
+        self.busy.run(f"Loading {config.name}…", lambda: MainWindow.load(self, config))
+
     def _on_plant_changed(self, plant, structural: bool) -> None:
+        if structural and self.isVisible():  # segments / base changed: editors are rebuilt
+            self.busy.run("Rebuilding the model…", lambda: self._apply_plant(plant, structural))
+        else:
+            self._apply_plant(plant, structural)
+
+    def _apply_plant(self, plant, structural: bool) -> None:
         super()._on_plant_changed(plant, structural)
         if structural:                       # show the plant as accepted
             self.system_page.set_plant(self.config.plant)
@@ -695,9 +710,11 @@ class MobileWindow(MainWindow):
         # simply runs below the target rate (e.g. 40 fps) still steps the graphs every frame.
         overran = gap > HITCH_FRAMES * self.perf.frame_interval_ms / 1000.0
         if self.current == "graphs" and not overran:
-            self._graph_frame += 1
-            if self._graph_frame >= max(1, round(self.perf.fps / max(self.perf.graph_fps, 1))):
-                self._graph_frame = 0
+            # time-based: at most graph_fps steps per second, but every frame when the device
+            # draws fewer frames than that (a frame-count divider halved the rate at 21 fps)
+            self._graph_due -= gap
+            if self._graph_due <= 0.25 * gap:          # tolerance against timer jitter
+                self._graph_due = max(self._graph_due + self.perf.graph_interval_s, 0.0)
                 self.telemetry.advance(self.sim.telemetry)
         self.stats.frame(gap)
 

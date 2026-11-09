@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QByteArray, QEasingCurve, QPropertyAnimation, QRectF, Qt
+from PySide6.QtCore import QByteArray, QEasingCurve, QPropertyAnimation, QRectF, Qt, QTimer
 from PySide6.QtGui import QColor, QFont, QPainter, QPixmap
 from PySide6.QtWidgets import QApplication, QGraphicsOpacityEffect, QLabel, QWidget
 
@@ -132,3 +132,71 @@ class LoadingScreen(QWidget):
         self.close()
         anim.start()
         window._loading_cover = cover     # keep alive until the animation ends
+
+
+class BusyOverlay(QWidget):
+    """In-window "Loading …" cover for slow, blocking work (loading a scenario or a file).
+
+    ``run(text, work)`` paints the cover *now* (the event loop is blocked while ``work``
+    runs), calls ``work`` and then fades the cover out once the new screen is drawn.
+    """
+
+    def __init__(self, parent: QWidget) -> None:
+        super().__init__(parent)
+        self.text = ""
+        self.hide()
+        self._logo = logo_pixmap(72, self.devicePixelRatioF())
+        self._font = QFont(self.font())
+        self._font.setPixelSize(theme.BODY_PX + 2)
+        self._font.setBold(True)
+        self._anim = None
+
+    def run(self, text: str, work) -> None:
+        parent = self.parentWidget()
+        self.text = text
+        self.setGraphicsEffect(None)
+        self.setGeometry(parent.rect())
+        self.show()
+        self.raise_()
+        self.repaint()                         # painted and shown before the work blocks
+        QApplication.processEvents(QApplication.ProcessEventsFlag.ExcludeUserInputEvents)
+        try:
+            work()
+        finally:
+            QTimer.singleShot(60, self._fade)
+
+    def _fade(self) -> None:
+        effect = QGraphicsOpacityEffect(self)
+        self.setGraphicsEffect(effect)
+        anim = QPropertyAnimation(effect, b"opacity", self)
+        anim.setDuration(220)
+        anim.setStartValue(1.0)
+        anim.setEndValue(0.0)
+        anim.finished.connect(self.hide)
+        anim.start()
+        self._anim = anim
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 - swallow taps while covering
+        event.accept()
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        p = QPainter(self)
+        bg = QColor(theme.BG)
+        bg.setAlpha(240)
+        p.fillRect(self.rect(), bg)
+        p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        top = self.height() / 2 - 72
+        p.drawPixmap(round((self.width() - 72) / 2), round(top), self._logo)
+        p.setFont(self._font)
+        p.setPen(QColor(theme.TEXT))
+        p.drawText(QRectF(16, top + 88, self.width() - 32, 32), Qt.AlignmentFlag.AlignCenter, self.text)
+        # static "busy" bar (nothing animates while the work blocks the event loop)
+        w = min(220, self.width() - 64)
+        r = QRectF((self.width() - w) / 2, top + 132, w, 6)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(theme.SURFACE_2))
+        p.drawRoundedRect(r, 3, 3)
+        p.setBrush(QColor(theme.ACCENT))
+        p.drawRoundedRect(QRectF(r.left(), r.top(), r.width() * 0.4, r.height()), 3, 3)
+        p.end()
+

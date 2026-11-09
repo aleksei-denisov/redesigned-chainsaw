@@ -257,7 +257,10 @@ class NumberRow(QWidget):
         self.slider.sliderMoved.connect(self._on_slider_moved)
         self.slider.sliderReleased.connect(self._on_slider_released)
         self.slider.actionTriggered.connect(self._on_slider_action)
-        self.slider.setVisible(slider)
+        if not slider:
+            # hide() only: setVisible(True) on a widget that has no parent yet makes it a
+            # top-level window for a moment (seen as a stray slider flashing on Android)
+            self.slider.hide()
         row.addWidget(self.minus)
         row.addWidget(self.slider, 1)
         if not slider:

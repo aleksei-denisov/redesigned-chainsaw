@@ -405,6 +405,40 @@ def test_slow_but_steady_frames_still_step_the_graphs(win, app):
         win.navigate("simulate")
 
 
+def test_no_widget_flashes_as_a_window_while_screens_are_built(app):
+    """A parentless widget made visible becomes a top-level window (a stray slider on Android)."""
+    from pendulum_sim.mobile.controls import NumberRow
+
+    before = {id(w) for w in QApplication.topLevelWidgets() if w.isVisible()}
+    row = NumberRow("Gain", 0.0, 10.0, 1.0)
+    w = MobileWindow(scenario("double_cart_lqr"))
+    app.processEvents()
+    stray = [type(t).__name__ for t in QApplication.topLevelWidgets() if t.isVisible() and id(t) not in before]
+    assert stray == [], stray
+    w.close()
+    w.deleteLater()
+    row.deleteLater()
+    app.processEvents()
+
+
+def test_loading_a_scenario_shows_the_busy_cover(win, app):
+    seen = []
+    original = win.busy.run
+
+    def spy(text, work):
+        seen.append(text)
+        original(text, work)
+        assert win.busy.isVisible()
+    win.busy.run = spy
+    try:
+        win.load(scenario("double_cart_lqr"))
+    finally:
+        del win.busy.run
+    assert len(seen) == 1 and seen[0].startswith("Loading")
+    assert win.config.name == scenario("double_cart_lqr").name
+    assert wait(app, lambda: not win.busy.isVisible(), 5)
+
+
 def test_trail_polygon_matches_to_screen(win, app):
     win.start()
     frames(win, app, 30)

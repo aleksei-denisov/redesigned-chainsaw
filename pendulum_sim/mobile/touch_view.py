@@ -260,6 +260,42 @@ class TouchPendulumView(PendulumView):
                 return
         p.drawImage(0, 0, self._grid_image)
 
+    def _draw_trails(self, p: QPainter) -> None:
+        """Same trails as the desktop, drawn with 1-device-pixel cosmetic pens.
+
+        An antialiased 1.6 px pen goes through Qt's general stroker: on the Pad 6 the
+        trail took ~17 ms per frame with antialiasing on (the profile's drawPolyline).
+        A cosmetic 1-pixel line uses the fast line rasteriser (also antialiased); drawn
+        twice one device pixel apart it is as wide as before.
+        """
+        from ..ui.widgets import SEGMENT_COLORS
+
+        indices = range(1, len(self.trails)) if self.settings.trail_all_joints else [len(self.trails) - 1]
+        offset = 1.0 / max(self.effective_scale(), 1.0)     # one device pixel in logical units
+        for k in indices:
+            pts = self.trails[k]
+            if len(pts) < 2:
+                continue
+            color = QColor(SEGMENT_COLORS[(k - 1) % len(SEGMENT_COLORS)])
+            poly = self._screen_polygon(pts)
+            n = poly.size()
+            size = max(2, n // 8 + 1)
+            parts = []
+            for c in range(0, n - 1, size - 1):
+                length = min(size, n - c)
+                if length >= 2:
+                    parts.append((poly.mid(c, length), int(25 + 200 * (c + length) / n)))
+            for dy in (0.0, offset):
+                p.save()
+                p.translate(0.0, dy)
+                for part, alpha in parts:
+                    color.setAlpha(alpha)
+                    pen = QPen(color, 0)
+                    pen.setCosmetic(True)
+                    p.setPen(pen)
+                    p.drawPolyline(part)
+                p.restore()
+
     def _paint_overlay(self, p: QPainter) -> None:
         if not self.overlay_text:
             return

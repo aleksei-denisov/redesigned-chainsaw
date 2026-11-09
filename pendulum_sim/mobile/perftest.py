@@ -160,9 +160,11 @@ class PerformanceTest(QObject):
             self.blocks.append(summarise(label, frames, elapsed))
 
     def _done(self) -> None:
+        from .startup import TIMER
+
         self._phase = -1
         self._restore()
-        report = "\n\n".join(self.blocks)
+        report = "\n\n".join(self.blocks + [TIMER.report()])
         print(report, flush=True)
         self.finished.emit(report)
 
