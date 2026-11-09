@@ -437,13 +437,17 @@ class MainWindow(QMainWindow):
         accepted = dialog.exec() == QDialog.DialogCode.Accepted
         result = dialog.result_value
         if accepted and result is not None:
-            self._apply_controller(
-                result.controller,
-                f"Robust gains applied: recoverable push {result.baseline_max_push:.3g} N → "
-                f"{result.max_push:.3g} N. Restart to try them; Push uses {result.recommended_push:g} N.")
-            self.push_force.setValue(result.recommended_push)
+            self._apply_tuning_result(result)
         if was_running:
             self.start()
+
+    def _apply_tuning_result(self, result) -> None:
+        """Use the gains of a :class:`TuningResult` and its recommended test push."""
+        self._apply_controller(
+            result.controller,
+            f"Robust gains applied: recoverable push {result.baseline_max_push:.3g} N → "
+            f"{result.max_push:.3g} N. Restart to try them; Push uses {result.recommended_push:g} N.")
+        self.push_force.setValue(result.recommended_push)
 
     def _on_restore_gains(self) -> None:
         plant = self.config.plant

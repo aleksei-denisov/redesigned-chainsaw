@@ -78,11 +78,12 @@ def test_round_nice():
     assert round_nice(0.0) == 0.0
 
 
-def test_no_worker_processes_on_android(monkeypatch):
-    import sys
+def test_android_uses_forked_workers(monkeypatch):
+    from pendulum_sim.simulation import parallel
 
-    from pendulum_sim.simulation import tuning
-
-    monkeypatch.setattr(sys, "getandroidapilevel", lambda: 34, raising=False)
-    assert not tuning.multiprocessing_supported()
-    assert tuning.default_workers() == 1
+    monkeypatch.setattr(parallel, "is_android", lambda: True)
+    pool = parallel.make_pool(2)
+    try:
+        assert pool.kind == "fork" and pool.workers == 2
+    finally:
+        pool.close()

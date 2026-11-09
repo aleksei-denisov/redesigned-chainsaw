@@ -16,7 +16,14 @@ from PySide6.QtWidgets import (
 )
 
 from ..simulation import AppConfig
-from ..simulation.tuning import TuningResult, TuningSettings, default_workers, robust_tune
+from ..simulation.tuning import (
+    CancelToken,
+    TuningCancelled,
+    TuningResult,
+    TuningSettings,
+    default_workers,
+    robust_tune,
+)
 from .widgets import hint
 
 
@@ -29,20 +36,30 @@ class TuningThread(QThread):
         super().__init__()
         self.config = config
         self.settings = settings
-        self._cancel = False
+        self.token = CancelToken()
 
     def cancel(self) -> None:
-        self._cancel = True
+        self.token.cancel()          # stops worker processes promptly
 
     def run(self) -> None:
         try:
-            def report(fraction: float, message: str) -> bool:
-                self.progress.emit(fraction, message)
-                return not self._cancel
+            def update(u) -> bool:
+                eta = f" · about {_duration(u.eta)} left" if u.eta else ""
+                self.progress.emit(u.fraction, f"{u.message} · {_duration(u.elapsed)} elapsed{eta}")
+                return True
 
-            self.finishedResult.emit(robust_tune(self.config, self.settings, report))
+            self.finishedResult.emit(robust_tune(self.config, self.settings, on_update=update, cancel=self.token))
+        except TuningCancelled:
+            self.failed.emit("cancelled before a candidate was evaluated")
         except Exception as exc:  # shown to the user in the dialog
             self.failed.emit(str(exc))
+
+
+def _duration(seconds: float | None) -> str:
+    if seconds is None:
+        return "?"
+    seconds = int(round(seconds))
+    return f"{seconds // 60} min {seconds % 60:02d} s" if seconds >= 60 else f"{seconds} s"
 
 
 class RobustTuneDialog(QDialog):
