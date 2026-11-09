@@ -789,6 +789,16 @@ class GraphsPanel(QWidget):
         self._rebuild_charts()
         self._version = -1
 
+    def set_window(self, seconds: int) -> None:
+        """Time window from outside (set-up files); ignored unless it is one of the choices."""
+        if seconds in WINDOWS_S:
+            self.window_row.setValue(seconds)
+            self._on_window(seconds)
+
+    def set_pid_loop(self, index: int) -> None:
+        if 0 <= index < self.loop_combo.count():
+            self.loop_combo.setCurrentIndex(index)
+
     def _on_window(self, value: int) -> None:
         self.window_s = int(value)
         QSettings().setValue("graphs/window_s", self.window_s)

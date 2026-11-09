@@ -3,8 +3,8 @@
 The simulator also ships as an Android app, **Inverted Pendulum Simulator**
 (application id `com.adenisov.invertedpendulum`). It runs the *same* physics,
 controller and simulation code as the desktop version and draws the pendulum with
-the *same* QPainter view and pyqtgraph telemetry; only the window layout and the
-input handling are mobile-specific.
+the *same* QPainter view; graphs, the experiment page and the input handling are
+mobile-specific (QPainter, no pyqtgraph).
 
 The app has the **same features as the desktop version**: live simulation, scenarios,
 pendulum / controller / simulation settings, LQR seeding, robust auto-tuning, restoring
@@ -26,6 +26,9 @@ pendulum_sim/mobile/controls.py              touch controls: number rows, switch
                                              action bar, progress bar
 pendulum_sim/mobile/theme.py, icons.py       theme system (colours, sizes, style sheet); bundled SVG icons
 pendulum_sim/mobile/graphs.py, plot_math.py  scrolling QPainter strip charts; Qt-free ring/downsampling/axis maths
+pendulum_sim/mobile/plot_view.py             explorable plots (pinch/pan/read-out) and the full-window graph explorer
+pendulum_sim/mobile/experiments_page.py      Experiments screen: runs, watch (replay), comparison, result cards, files
+pendulum_sim/mobile/setup_file.py            full set-up files: configuration + "app" section (Qt-free)
 pendulum_sim/mobile/touch_view.py            PendulumView subclass: tap / drag / pinch, render resolution
 pendulum_sim/mobile/performance.py, cpu.py   drawing settings (saved per device), frame timings, fast-core pinning
 pendulum_sim/mobile/perftest.py              on-device performance test (Settings → Diagnostics)
@@ -47,7 +50,8 @@ logic lives in the mobile package.
 
 Packaging uses Qt's official [`pyside6-android-deploy`](https://doc.qt.io/qtforpython-6/deployment/deployment-pyside6-android-deploy.html),
 which drives buildozer/python-for-android with the official PySide6 Android wheels.
-NumPy is compiled by its python-for-android recipe; pyqtgraph is pure Python.
+NumPy is compiled by its python-for-android recipe; pyqtgraph (pure Python) is still
+bundled but no longer imported by the app – it could be dropped to shrink the APK.
 **SciPy is not bundled**: LQR gain seeding uses the NumPy Riccati solver in
 `pendulum_sim/control/riccati.py` when SciPy is missing (desktop keeps using SciPy;
 the two agree to ~1e-9, see `tests/test_riccati.py`).
@@ -75,7 +79,7 @@ physics stop; on return the simulation continues in the state it had (no catch-u
 | **Controller** | auto-tune, seed from LQR, restore gains, reset integrators; LQR weights; controller settings; one section per PID loop (gains, P/I/D terms, derivative source, anti-windup, limits, live output) |
 | **System** | cart or fixed base, number of segments, gravity, cart and actuator, one section per segment, time step, telemetry, sensor noise |
 | **Auto-tune** | see below |
-| **Experiments** | the desktop experiment page (runs, comparison plots, results table, CSV) |
+| **Experiments** | runs, optional watching (replay), comparison plots, result cards, files – see below |
 | **Settings** | view options, trajectories, performance (this device), open / save configuration |
 
 Tablets in landscape show a navigation **rail** on the left with all screens; phones and
@@ -106,6 +110,39 @@ device's fonts.
 | tap on the pendulum view | tip push (0.1 s, *push force*) towards the tapped side of the tip |
 | one-finger drag on the view | continuous tip force pulling towards the finger (rubber band, capped at 4× push force) |
 | pinch / two-finger drag | zoom / pan the view |
+
+### Experiments
+
+The Experiments screen (`pendulum_sim/mobile/experiments_page.py`) has the functions of the
+desktop experiment page in the style of the other screens; the computation is the shared
+`run_experiment`:
+
+* **Experiment** – name, duration, settling band, *Same start as the first run* (plant, initial
+  state and noise of run 1, so only the controller differs), *Watch the pendulum*;
+  **Scheduled disturbance** – a tip push at a given time. *Run* / *Cancel* and the progress
+  bar stay in a bar at the bottom. Runs are computed in a plain Python thread at full speed
+  (the UI polls it; nothing Qt crosses the thread).
+* **Watch** (optional) – a finished run is played back in a pendulum view at real speed with
+  pause, a time slider and 0.25–4×; a time marker moves through the comparison plots. The
+  playback rebuilds the pendulum from the recorded states (`theta*`, `x`, …), so watching
+  never slows or changes the computation. Every result card has *Watch*, also for loaded
+  results. One finger pans the view, pinch zooms, double tap fits.
+* **Comparison** – angle, control error (with the ±settling band), actuator output and cart
+  position of every shown run, per segment; tap a plot to open it in the graph explorer.
+* **Results** – a card per run: colour, status (stable / fell / diverged), settling time, max
+  deviation, overshoot, RMSE, u RMS, u peak, ∫u² dt, max |x|, the gains, and *Shown/Hidden*,
+  *Watch*, *Use gains*, *CSV*, *Remove*.
+* **Files** – kept apart: *Save full set-up (JSON)* (configuration plus the app's graph and view
+  settings, see below), *Save / Load results (JSON)* (configuration, metrics and time series of
+  every run – the desktop format), *Save comparison graphs as image (PNG)* (the visible plots
+  stacked), *Save comparison graph data (CSV)* (every curve; one time column per run).
+
+**Full set-up files.** *Settings → Save / Save as…* and *Experiments → Save full set-up* write
+the configuration (plant, controller, simulation, experiment settings, push force – the
+desktop format) plus an `"app"` section with the pendulum-view options and the graph
+selection, time window and PID loop (`setup_file.py`). *Settings → Open* restores both; the
+desktop version opens the same file and ignores the `"app"` section. Recorded data never go
+into a set-up file.
 
 ### Auto-tune
 
@@ -260,8 +297,8 @@ shortened performance test). A tablet is slower in absolute terms; on the device
    that is shown becomes a window for a moment (the navigation rail's icons flashed over the
    loading screen). `tests/test_mobile_smoke.py` records every widget shown as a window while
    the screens are built and on every screen.
-3. **Lazy screens**: the Experiments screen (and with it pyqtgraph) and the Auto-tune screen are
-   built the first time they are opened; the desktop window imports its pyqtgraph panels inside
+3. **Lazy screens**: the Experiments screen and the Auto-tune screen are
+   built the first time they are opened (the app no longer imports pyqtgraph at all); the desktop window imports its pyqtgraph panels inside
    its builders (desktop behaviour unchanged); icons are rendered at two sizes instead of seven.
 
 Every step is timed from the start of the *process* (`/proc/self/stat`), printed to
@@ -436,6 +473,10 @@ API 28 or newer (e.g. *Pixel 7, API 35, Google APIs ARM 64*). Start it, then
   both orientations; Apply returns to *Controller*; pressing *Home* during a run cancels it;
 - every screen scrolls with the finger where its content is longer than the screen (also
   *Experiments*), on tablet and phone, portrait and landscape;
+- *Experiments*: run twice with different gains → two result cards, curves in the four plots; *Hidden*
+  removes a run's curves; *Watch* plays it back (pause, slider, speeds) with a marker in the plots;
+  tap a plot → full window; *Use gains* → Controller; *Files*: full set-up, results, PNG, CSV each
+  saved separately; *Settings → Open* of the set-up restores the graph selection;
 - rotate the device → layout switches (rail ↔ bottom bar, graphs beside ↔ below the view);
 - *Home* while running → come back → simulation resumes where it was, no jump.
 

@@ -31,17 +31,14 @@ import numpy as np
 from PySide6.QtCore import QEvent, QPoint, QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QGuiApplication
 from PySide6.QtWidgets import (
-    QAbstractScrollArea,
     QDialog,
     QDialogButtonBox,
-    QGraphicsView,
     QHBoxLayout,
     QLabel,
     QMenu,
     QMessageBox,
     QPushButton,
     QSizePolicy,
-    QSplitter,
     QStackedWidget,
     QToolButton,
     QVBoxLayout,
@@ -52,17 +49,17 @@ from ..control import ControllerConfig, LQRWeights
 from ..simulation import AppConfig
 from ..ui.main_window import SPEEDS, MainWindow
 from . import cpu, startup, theme
-from .controls import NumberRow, make_kinetic, scroll_area, tool_button
+from .controls import NumberRow, scroll_area, tool_button
 from .graphs import GraphsPanel
 from .icons import icon
 from .loading import BusyOverlay
 from .pages import ControllerPage, GraphsPage, NavBar, SettingsPage, SimulatePage, SystemPage
-from .performance import FrameStats, PerformanceSettings, instrument_graphs
+from .performance import FrameStats, PerformanceSettings
 from .touch_view import TouchPendulumView
 
 if TYPE_CHECKING:
-    from ..ui.experiment_panel import ExperimentPanel
     from .autotune_screen import AutotuneScreen
+    from .experiments_page import ExperimentsPage
 
 DRAG_GAIN = 2.0          # drag force = DRAG_GAIN · push force · (offset / total length)
 DRAG_LIMIT = 4.0         # … clamped to ±DRAG_LIMIT · push force
@@ -217,13 +214,12 @@ class MobileWindow(MainWindow):
         self.g_push_right_btn = tool_button("push_right", tip="Push the tip to the right")
         self.graphs_page = GraphsPage(self.view, self.telemetry, [self.g_run_btn, self.g_reset_btn,
                                                                   self.g_push_left_btn, self.g_push_right_btn])
-        inner = QWidget()
-        self._exp_layout = QVBoxLayout(inner)
-        self._exp_layout.setContentsMargins(8, 8, 8, 8)
+        experiments_page = QWidget()           # the page (own scrolling + action bar) is built on first use
+        self._exp_layout = QVBoxLayout(experiments_page)
+        self._exp_layout.setContentsMargins(0, 0, 0, 0)
         self._exp_loading = QLabel("Loading experiments…")
         self._exp_loading.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._exp_layout.addWidget(self._exp_loading, 1)
-        experiments_page = scroll_area(inner)  # scrolls only when the screen is too low (phone landscape)
         self.autotune_host = QWidget()
         self._tune_layout = QVBoxLayout(self.autotune_host)
         self._tune_layout.setContentsMargins(0, 0, 0, 0)
@@ -258,7 +254,7 @@ class MobileWindow(MainWindow):
 
     # ------------------------------------------------ screens built on first use
     @property
-    def experiments(self) -> ExperimentPanel:
+    def experiments(self) -> ExperimentsPage:
         if self._experiments is None:
             self._build_experiments()
         return self._experiments
@@ -273,28 +269,105 @@ class MobileWindow(MainWindow):
         return self._autotune is not None and self._autotune.busy
 
     def _build_experiments(self) -> None:
-        import pyqtgraph as pg
-
-        from ..ui.experiment_panel import ExperimentPanel
+        """The mobile Experiments screen (``experiments_page.py``; no pyqtgraph)."""
+        from .experiments_page import ExperimentsPage
 
         started = time.perf_counter()
-        pal = self.palette()
-        pg.setConfigOptions(antialias=True, background=pal.base().color(), foreground=pal.text().color())
-        panel = ExperimentPanel(lambda: self.config)
-        self._experiments = panel
+        page = ExperimentsPage(lambda: self.config, open_plot=self._open_static_plot)
+        self._experiments = page
         self._exp_loading.hide()
-        self._exp_layout.addWidget(panel)
-        panel.set_settings(self.config.experiment)
-        panel.statusMessage.connect(self.show_message)
-        panel.apply_btn.clicked.connect(self._apply_experiment_gains)
-        # finger scrolling for the settings column, lists and table (not for the plots:
-        # QGraphicsView is a scroll area too, but pans/zooms itself)
-        for area in panel.findChildren(QAbstractScrollArea):
-            if not isinstance(area, QGraphicsView):
-                make_kinetic(area)
-        instrument_graphs(self.stats)          # time the pyqtgraph plots of this page
+        self._exp_layout.addWidget(page, 1)
+        page.set_settings(self.config.experiment)
+        page.set_view_settings(self.view.settings)
+        page.set_drawing(self.view.gpu, self.perf.gpu_samples)
+        page.statusMessage.connect(self.show_message)
+        page.gainsRequested.connect(self._apply_result_gains)
+        page.saveSetupRequested.connect(self.save_config_as)
         self._orient_experiments()
         startup.TIMER.note("experiments screen built", time.perf_counter() - started)
+
+    def _on_view_settings(self, settings) -> None:
+        super()._on_view_settings(settings)
+        if self._experiments is not None:
+            self._experiments.set_view_settings(settings)
+
+    # ------------------------------------------------- full set-up files
+    def app_settings(self) -> dict:
+        """What the app shows (saved in set-up files next to the configuration)."""
+        from dataclasses import asdict
+
+        tel = self.telemetry
+        return {"view": asdict(self.view.settings),
+                "graphs": {"selected": list(tel.selected), "window_s": tel.window_s,
+                           "pid_loop": max(0, tel.loop_combo.currentIndex())}}
+
+    def apply_app_settings(self, app: dict) -> None:
+        from ..ui.pendulum_view import ViewSettings
+        from .setup_file import dataclass_from_dict
+
+        if isinstance(app.get("view"), dict):
+            view = dataclass_from_dict(ViewSettings, app["view"])
+            self.settings_page.set_view_settings(view)
+            self._on_view_settings(view)
+        graphs = app.get("graphs")
+        if isinstance(graphs, dict):
+            if isinstance(graphs.get("selected"), list):
+                self.telemetry.set_selection([str(k) for k in graphs["selected"]])
+            if isinstance(graphs.get("window_s"), (int, float)):
+                self.telemetry.set_window(int(graphs["window_s"]))
+            if isinstance(graphs.get("pid_loop"), int):
+                self.telemetry.set_pid_loop(graphs["pid_loop"])
+
+    def _write_config(self, path) -> None:
+        """Save = full set-up: the configuration plus the app's view and graph settings."""
+        from ..ui import file_io
+        from .setup_file import write_setup
+
+        if self._experiments is not None:
+            self.config.experiment = self._experiments.settings()
+        app = self.app_settings()
+        try:
+            file_io.write_with(path, lambda local: write_setup(local, self.config, app))
+        except OSError as exc:
+            QMessageBox.critical(self, "Could not save the set-up", str(exc))
+            return
+        self.config_path = path
+        self.show_message(f"Set-up saved to {file_io.display_name(path)}")
+
+    def open_config(self) -> None:
+        """Open a configuration or full set-up file (its app settings are applied too)."""
+        from pathlib import Path
+
+        from ..ui import file_io
+        from .setup_file import read_setup
+
+        path = file_io.open_file_name(self, "Open configuration", str(Path.cwd() / "configs"),
+                                      "Configuration (*.json)")
+        if not path:
+            return
+        try:
+            cfg, app = file_io.read_with(path, read_setup)
+        except (OSError, ValueError) as exc:
+            QMessageBox.critical(self, "Could not open configuration", str(exc))
+            return
+        self.load(cfg)
+        if app:
+            self.apply_app_settings(app)
+        self.config_path = path
+
+    def _open_static_plot(self, title: str, unit: str, curves, hlines=None, marker_x=None) -> None:
+        self.explorer.open_static(title, unit, curves, hlines, marker_x)
+
+    def _apply_result_gains(self, result) -> None:
+        """Experiments → 'Use gains' on a run: its controller into the Controller screen."""
+        plant = self.config.plant
+        if (result.config.plant.n_segments, result.config.plant.base_type) != (plant.n_segments, plant.base_type):
+            QMessageBox.warning(self, "Use gains", "That run used a different pendulum structure.")
+            return
+        ctrl = result.config.copy().controller
+        self._show_controller(ctrl)
+        self._on_controller_changed(ctrl)
+        self.show_message(f"Controller gains taken from '{result.name}'")
 
     def _build_autotune(self) -> None:
         from .autotune_screen import AutotuneScreen
@@ -636,6 +709,8 @@ class MobileWindow(MainWindow):
         self.view.gpu_fallback = self._gpu_unavailable
         on = self.view.set_gpu(gpu, samples)
         self.telemetry.set_gpu(on, samples)
+        if self._experiments is not None:
+            self._experiments.set_drawing(on, samples)
         return "gpu" if on else "software"
 
     def _gpu_unavailable(self) -> None:
@@ -700,13 +775,9 @@ class MobileWindow(MainWindow):
         QTimer.singleShot(0, self.view.fit)
 
     def _orient_experiments(self) -> None:
-        """Experiment controls beside the plots in landscape, above them in portrait."""
-        if self._experiments is None:
-            return
-        splitters = self._experiments.findChildren(QSplitter)
-        if splitters:
-            landscape = self.width() > self.height()
-            splitters[0].setOrientation(Qt.Orientation.Horizontal if landscape else Qt.Orientation.Vertical)
+        """Comparison plots in two columns on wide screens."""
+        if self._experiments is not None:
+            self._experiments.set_wide(self.stack.width() >= 900)
 
     def fit_to_screen(self) -> None:
         self.showMaximized()

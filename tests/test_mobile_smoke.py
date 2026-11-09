@@ -642,6 +642,86 @@ def test_tapping_a_graph_opens_the_explorer(win, app, tmp_path, monkeypatch):
     win.pause()
 
 
+def test_experiments_page_runs_watches_compares_and_saves(win, app, tmp_path, monkeypatch):
+    import json
+
+    from pendulum_sim.ui import file_io
+
+    win.navigate("experiments")
+    page = win.experiments
+    app.processEvents()
+    assert type(page).__name__ == "ExperimentsPage" and page.isVisible() and page.bar.isVisible()
+    page.clear()
+    page.duration.setValue(1.0)
+    page.watch_after.setChecked(False)
+    for gain in (None, 2.0):
+        if gain is not None:                      # second run: different controller gains
+            ctrl = win.config.controller
+            ctrl.loops[0].kp *= gain
+            win._on_controller_changed(ctrl)
+        page.run()
+        assert page.running and not page.run_btn.isEnabled()
+        assert wait(app, lambda: not page.running, 60)
+    assert len(page.results) == 2 and page.run_btn.isEnabled()
+    assert page.results_layout.count() == 2 and page.results_section.title() == "Results (2)"
+    assert all(len(page.plots[k].curves) == 2 for k in ("angle", "error", "effort"))
+    assert page.plots["error"].hlines == [page.tolerance.value(), -page.tolerance.value()]
+    # hide a run: its curves leave the plots
+    card = page.results_layout.itemAt(1).widget()
+    card.show_btn.click()
+    assert not page.results[1].visible and len(page.plots["angle"].curves) == 1
+    card.show_btn.click()
+    # watch: replay of the recorded run with a moving marker in the plots
+    page.results_layout.itemAt(0).widget().watch_btn.click()
+    assert page.replay.isVisible() and page.replay.playing and page.replay.view.frame is not None
+    page.replay.speed_row.buttons[4.0].click()
+    t0 = page.replay.t
+    deadline = time.monotonic() + 3
+    while page.replay.t <= t0 + 0.05 and time.monotonic() < deadline:
+        app.processEvents()
+        time.sleep(0.01)
+    assert page.replay.t > t0 and page.plots["angle"].marker_x == pytest.approx(page.replay.t)
+    page.replay.slider.setValue(500)
+    page.replay._scrub(500)
+    assert page.replay.t == pytest.approx(0.5 * page.replay.replay.duration)
+    page.replay.close_btn.click()
+    assert not page.replay.isVisible() and page.plots["angle"].marker_x is None
+    # a thumbnail opens the full-window explorer with the same curves
+    page._open_plot("angle")
+    assert win.explorer_open() and len(win.explorer.plot.curves) == 2 and not win.explorer.live_btn.isVisible()
+    win.explorer.close_explorer()
+    # use the gains of the first run
+    page.results_layout.itemAt(0).widget().gains_btn.click()
+    assert win.config.controller.loops[0].kp == page.results[0].config.controller.loops[0].kp
+    # files, each on its own
+    monkeypatch.setattr(file_io, "save_file_name", lambda parent, title, name, flt, suffix=None: tmp_path / name)
+    page.save()
+    page.image_btn.click()
+    page.data_btn.click()
+    page.results_layout.itemAt(1).widget().csv_btn.click()
+    assert (tmp_path / "experiments.json").exists() and (tmp_path / "run_2.csv").exists()
+    assert (tmp_path / "experiment_graphs.png").read_bytes()[:4] == b"\x89PNG"
+    header = (tmp_path / "experiment_graphs.csv").read_text(encoding="utf-8").splitlines()[0]
+    assert "Run 1 · Angle" in header and "Run 2 · Actuator output" in header
+    monkeypatch.setattr(file_io, "open_file_name", lambda *a: tmp_path / "experiments.json")
+    page.load()
+    assert len(page.results) == 4
+    # full set-up: configuration + app settings; opening it restores the graphs
+    win.telemetry.set_selection(["angle", "energy"])
+    page.setup_btn.click()
+    data = json.loads((tmp_path / "my_configuration.json").read_text(encoding="utf-8"))
+    assert data["app"]["graphs"]["selected"] == ["angle", "energy"] and "plant" in data and "controller" in data
+    assert "show_grid" in data["app"]["view"]
+    win.telemetry.set_selection(["control"])
+    monkeypatch.setattr(file_io, "open_file_name", lambda *a: tmp_path / "my_configuration.json")
+    win.open_config()
+    assert win.telemetry.selected == ["angle", "energy"]
+    page.clear()
+    assert page.results == [] and not page.plots["angle"].isVisible()
+    win.telemetry.set_selection(["angle", "control"])
+    win.navigate("simulate")
+
+
 def test_loading_a_scenario_shows_the_busy_cover(win, app):
     seen = []
     original = win.busy.run
@@ -865,7 +945,7 @@ def test_loading_screen_then_main_window_in_one_top_level(app):
 
 
 def test_start_up_needs_neither_pyqtgraph_nor_the_tuner(tmp_path):
-    """Experiments (pyqtgraph) and Auto-tune are built on first use, not at start-up."""
+    """Experiments and Auto-tune are built on first use; the mobile app never needs pyqtgraph."""
     import subprocess
 
     code = (
@@ -877,9 +957,10 @@ def test_start_up_needs_neither_pyqtgraph_nor_the_tuner(tmp_path):
         "from pendulum_sim.mobile.window import MobileWindow\n"
         "from pendulum_sim.simulation import scenario\n"
         "w = MobileWindow(scenario('single_cart_full'))\n"
-        "print('at start', 'pyqtgraph' in sys.modules, 'pendulum_sim.mobile.autotune_screen' in sys.modules)\n"
+        "mods = ('pyqtgraph', 'pendulum_sim.mobile.autotune_screen', 'pendulum_sim.mobile.experiments_page')\n"
+        "print('at start', *[m in sys.modules for m in mods])\n"
         "w.experiments; w.autotune\n"
-        "print('after use', 'pyqtgraph' in sys.modules, 'pendulum_sim.mobile.autotune_screen' in sys.modules)\n"
+        "print('after use', *[m in sys.modules for m in mods])\n"
         "print('age', startup.process_age() is not None or sys.platform != 'linux')\n"
         "w.close(); w.deleteLater(); app.processEvents()\n"
         "sys.stdout.flush()\n"
@@ -888,8 +969,8 @@ def test_start_up_needs_neither_pyqtgraph_nor_the_tuner(tmp_path):
     env = dict(os.environ, QT_QPA_PLATFORM="offscreen", PYTHONPATH=str(Path(__file__).resolve().parents[1]))
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env, timeout=120,
                          cwd=tmp_path)
-    assert "at start False False" in out.stdout, out.stdout + out.stderr
-    assert "after use True True" in out.stdout, out.stdout + out.stderr
+    assert "at start False False False" in out.stdout, out.stdout + out.stderr
+    assert "after use False True True" in out.stdout, out.stdout + out.stderr
     assert "age True" in out.stdout
 
 

@@ -38,7 +38,7 @@ def timed(fn, repeat: int) -> float:
 
 
 def main(out_dir: str) -> int:
-    from PySide6.QtCore import QSettings
+    from PySide6.QtCore import QPoint, QSettings
     from PySide6.QtWidgets import QApplication
 
     out = Path(out_dir)
@@ -190,9 +190,23 @@ def main(out_dir: str) -> int:
         while len(win.experiments.results) == n and time.perf_counter() < deadline:
             app.processEvents()
             time.sleep(0.01)
-    shot("tablet_landscape_experiments")
-    win.resize(*SIZES["phone_portrait"])
-    shot("phone_portrait_experiments")
+    exp = win.experiments
+    for size in ("tablet_landscape", "phone_portrait"):
+        win.resize(*SIZES[size])
+        exp.area.verticalScrollBar().setValue(0)
+        shot(f"{size}_experiments")
+        exp.area.ensureWidgetVisible(exp.compare, 0, 0)
+        exp.area.verticalScrollBar().setValue(exp.compare.mapTo(exp.area.widget(), QPoint(0, 0)).y() - 8)
+        shot(f"{size}_experiments_compare")
+        exp.area.verticalScrollBar().setValue(exp.results_section.mapTo(exp.area.widget(), QPoint(0, 0)).y() - 8)
+        shot(f"{size}_experiments_results")
+        exp.watch(1)
+        exp.replay.pause()
+        exp.replay._scrub(400)
+        exp.area.verticalScrollBar().setValue(exp.replay.mapTo(exp.area.widget(), QPoint(0, 0)).y() - 8)
+        shot(f"{size}_experiments_watch")
+        exp.replay.stop()
+        exp.area.verticalScrollBar().setValue(0)
 
     # Auto-tune screen: set-up, running and result pages (small search so CI stays quick)
     from pendulum_sim.mobile import autotune_screen

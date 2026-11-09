@@ -599,6 +599,13 @@ class SettingsPage(ScrollPage):
         self.add(about)
         self.finish()
 
+    def set_view_settings(self, v: ViewSettings) -> None:
+        """Show ``v`` (e.g. from a set-up file) without emitting changes."""
+        for key, row in self.view_rows.items():
+            row.setChecked(bool(getattr(v, key)))
+        self.trail_len.setValue(v.trail_length)
+        self.link_width.setValue(v.link_width_px)
+
     def view_settings(self) -> ViewSettings:
         values = {k: row.isChecked() for k, row in self.view_rows.items()}
         return replace(ViewSettings(), trail_length=int(self.trail_len.value()),

@@ -448,7 +448,9 @@ class PlotView(QWidget):
         pen.setCosmetic(True)
         p.setPen(pen)
         p.drawLine(QPointF(xx, r.top()), QPointF(xx, r.bottom()))
-        lines = [(f"{self.x_label or 'x'} = {fmt_value(self.cursor_x)}", theme.TEXT)]
+        x_text = f"t = {fmt_value(self.cursor_x)} s" if self.x_label == "s" else \
+            f"{self.x_label or 'x'} = {fmt_value(self.cursor_x)}"
+        lines = [(x_text, theme.TEXT)]
         lines += [(f"{label}: {fmt_value(v)}", color) for label, color, v in self.values_at(self.cursor_x)]
         w = max(fm.horizontalAdvance(t) for t, _ in lines) + 16
         h = len(lines) * fm.height() + 10
