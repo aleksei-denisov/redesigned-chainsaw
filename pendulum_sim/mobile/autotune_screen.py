@@ -57,7 +57,7 @@ from ..simulation.tuning import (
     estimate_seconds,
     robust_tune,
 )
-from .controls import ActionBar, scroll_area
+from .controls import ActionBar, ProgressBar, scroll_area
 from .plot_math import format_tick, nice_ticks
 
 PRESETS = [("quick", "Quick", "Fewest candidates · fastest"),
@@ -102,61 +102,6 @@ def gains_text(ctrl: ControllerConfig | None) -> str:
 
 
 # ------------------------------------------------------------------ widgets
-class ProgressBar(QWidget):
-    """Rounded progress bar with a centred percentage, painted directly.
-
-    Replaces ``QProgressBar``, whose ``setValue`` (synchronous repaint through the
-    style sheet + ``valueChanged`` emission) crashed PySide6 with Python 3.10 on
-    Windows while worker processes were shutting down. ``setValue`` here only stores
-    the value and schedules a normal repaint.
-    """
-
-    def __init__(self, maximum: int = 1000) -> None:
-        super().__init__()
-        self._max = max(1, maximum)
-        self._value = 0
-        self.setMinimumHeight(30)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-
-    def setValue(self, value: int) -> None:  # noqa: N802 - QProgressBar API
-        value = max(0, min(int(value), self._max))
-        if value != self._value:
-            self._value = value
-            self.update()
-
-    def value(self) -> int:
-        return self._value
-
-    def maximum(self) -> int:
-        return self._max
-
-    def text(self) -> str:
-        return f"{round(100 * self._value / self._max)} %"
-
-    def sizeHint(self) -> QSize:  # noqa: N802
-        return QSize(200, 30)
-
-    def paintEvent(self, event) -> None:  # noqa: N802
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        r = QRectF(self.rect())
-        radius = r.height() / 2
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QColor("#272C33"))
-        p.drawRoundedRect(r, radius, radius)
-        frac = self._value / self._max
-        if frac > 0:
-            chunk = QRectF(r.left(), r.top(), max(r.height(), r.width() * frac), r.height())
-            p.setBrush(ACCENT)
-            p.drawRoundedRect(chunk, radius, radius)
-        f = QFont(self.font())
-        f.setBold(True)
-        p.setFont(f)
-        p.setPen(self.palette().text().color())
-        p.drawText(r, Qt.AlignmentFlag.AlignCenter, self.text())
-        p.end()
-
-
 class Spinner(QWidget):
     """Small rotating arc – visible motion even between progress updates."""
 
@@ -591,7 +536,7 @@ class AutotuneScreen(QWidget):
             lay.addWidget(lab)
         self.gains_box.addWidget(old_card)
         self.gains_box.addWidget(new_card)
-        self.result_body.addWidget(gains)
+        self.result_body.addWidget(gains, 0, Qt.AlignmentFlag.AlignTop)   # cards only as tall as needed
         metrics_card, ml = _card("Response to the same push (before → after)")
         self.metrics_grid = QGridLayout()
         self.metrics_grid.setHorizontalSpacing(18)

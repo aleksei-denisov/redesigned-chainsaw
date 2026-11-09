@@ -15,8 +15,8 @@ from __future__ import annotations
 import math
 from typing import Callable
 
-from PySide6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, QRect, QSize, Qt, QTimer, Property, Signal
-from PySide6.QtGui import QColor, QDoubleValidator, QPainter
+from PySide6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, QRect, QRectF, QSize, Qt, QTimer, Property, Signal
+from PySide6.QtGui import QColor, QDoubleValidator, QFont, QPainter
 from PySide6.QtWidgets import (
     QAbstractButton,
     QAbstractScrollArea,
@@ -648,6 +648,63 @@ def scroll_area(inner: QWidget) -> QScrollArea:
     area.setFrameShape(QFrame.Shape.NoFrame)
     area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
     return make_kinetic(area)
+
+
+class ProgressBar(QWidget):
+    """Rounded progress bar with a centred percentage, painted directly.
+
+    Replaces ``QProgressBar``, whose ``setValue`` (synchronous repaint through the
+    style sheet + ``valueChanged`` emission) crashed PySide6 with Python 3.10 on
+    Windows while worker processes were shutting down. ``setValue`` here only stores
+    the value and schedules a normal repaint.
+    """
+
+    def __init__(self, maximum: int = 1000, show_text: bool = True, height: int = 30) -> None:
+        super().__init__()
+        self._max = max(1, maximum)
+        self._value = 0
+        self.show_text = show_text
+        self.setMinimumHeight(height)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+    def setValue(self, value: int) -> None:  # noqa: N802 - QProgressBar API
+        value = max(0, min(int(value), self._max))
+        if value != self._value:
+            self._value = value
+            self.update()
+
+    def value(self) -> int:
+        return self._value
+
+    def maximum(self) -> int:
+        return self._max
+
+    def text(self) -> str:
+        return f"{round(100 * self._value / self._max)} %"
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        return QSize(200, self.minimumHeight())
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        r = QRectF(self.rect())
+        radius = r.height() / 2
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(theme.SURFACE_2))
+        p.drawRoundedRect(r, radius, radius)
+        frac = self._value / self._max
+        if frac > 0:
+            chunk = QRectF(r.left(), r.top(), max(r.height(), r.width() * frac), r.height())
+            p.setBrush(QColor(theme.ACCENT))
+            p.drawRoundedRect(chunk, radius, radius)
+        if self.show_text:
+            f = QFont(self.font())
+            f.setBold(True)
+            p.setFont(f)
+            p.setPen(self.palette().text().color())
+            p.drawText(r, Qt.AlignmentFlag.AlignCenter, self.text())
+        p.end()
 
 
 class ActionBar(QWidget):
