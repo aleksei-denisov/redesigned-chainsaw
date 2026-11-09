@@ -501,7 +501,7 @@ class MobileWindow(MainWindow):
         self.graphs_page.set_landscape(landscape)
         self.telemetry.set_compact(self.height() < 600 or self.width() < 600)
         self.nav.set_compact(not rail and self.height() < 500)
-        compact = self.width() < 600                     # phones: icon-only secondary buttons
+        compact = self.width() < 600 or self.height() < 500   # phones: icon-only secondary buttons
         for b in (getattr(self, n, None) for n in ("reset_btn", "restart_btn", "scenario_btn")):
             if b is not None:
                 b.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly if compact
