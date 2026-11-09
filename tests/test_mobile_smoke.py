@@ -194,6 +194,41 @@ def test_settings_page_view_and_performance(win, app):
     assert win.view.overlay_text == ""
 
 
+def test_performance_presets():
+    default = PerformanceSettings()
+    assert default.preset == "smooth"
+    saver = default.with_preset("saver")
+    assert (saver.drawing, saver.antialias, saver.fps, saver.graph_fps) == ("gpu", False, 30, 15)
+    assert saver.preset == "saver" and saver.fast_cores == default.fast_cores
+    from dataclasses import replace
+
+    assert replace(saver, drawing="software").preset == "custom"
+    assert replace(default, render="fast").preset == "smooth"      # resolution is software-only
+    assert replace(default, drawing="software", render="native").preset == "custom"
+
+
+def test_performance_menu_presets_and_software_only_rows(win, app):
+    st = win.settings_page
+    win.apply_performance(PerformanceSettings())
+    try:
+        assert st.perf_preset.value() == "smooth"
+        assert st.perf_render.isHidden(), "resolution applies to software drawing only"
+        assert st.perf_preset.buttons["custom"].isHidden()
+        st.perf_drawing.buttons["software"].click()
+        assert win.perf.drawing == "software" and PerformanceSettings.load().drawing == "software"
+        assert not st.perf_render.isHidden()
+        assert st.perf_preset.value() == "custom" and not st.perf_preset.buttons["custom"].isHidden()
+        assert "software" in st.perf_drawing.hint_label.text().lower()
+        st.perf_preset.buttons["saver"].click()
+        p = win.perf
+        assert (p.drawing, p.antialias, p.fps, p.graph_fps) == ("gpu", False, 30, 15)
+        assert st.perf_preset.value() == "saver" and st.perf_render.isHidden()
+        assert win.timer.interval() == 33
+    finally:
+        win.apply_performance(PerformanceSettings())
+        PerformanceSettings().save()
+
+
 @pytest.mark.parametrize("render", ["native", "high", "balanced", "fast"])
 def test_performance_render_modes(win, app, render):
     win.apply_performance(PerformanceSettings(render=render, antialias=False))
@@ -455,9 +490,11 @@ def test_trail_polygon_matches_to_screen(win, app):
 def test_performance_test_reports_every_phase(win, app, monkeypatch):
     from pendulum_sim.mobile import perftest
 
+    assert perftest.PHASES[0][5] == "gpu"                    # the default drawing is measured first
     # software only here (offscreen has no OpenGL; GPU drawing: tests/test_mobile_gpu.py)
     phases = [ph[:3] + (0.4,) + ph[4:5] + ("software",) for ph in perftest.PHASES]
     monkeypatch.setattr(perftest, "PHASES", phases)
+    snapshot = list(phases)
     monkeypatch.setattr(perftest, "SETTLE_S", 0.1)
     before = (win.current, list(win.telemetry.selected))
     win.run_performance_test()
@@ -472,6 +509,7 @@ def test_performance_test_reports_every_phase(win, app, monkeypatch):
     win._report_dialog.accept()
     assert (win.current, list(win.telemetry.selected)) == before
     assert win.nav.isEnabled()
+    assert perftest.PHASES == snapshot, "a run must not rename the module's phases"
 
 
 # ------------------------------------------------------------------- autotune
@@ -599,28 +637,40 @@ def test_every_screen_scrolls_by_touch_and_keeps_actions_reachable(win, app, siz
 
 
 # ------------------------------------------------------------- start-up
-def test_loading_screen_steps_and_fades_into_the_window(app):
-    from PySide6.QtWidgets import QWidget as W
+def test_loading_screen_then_main_window_in_one_top_level(app):
+    """Start-up uses a single top-level window (two Android surfaces flickered)."""
+    from PySide6.QtCore import QEvent
+    from PySide6.QtGui import QKeyEvent
 
-    from pendulum_sim.mobile.loading import LoadingScreen
+    from pendulum_sim.mobile.loading import AppShell, LoadingScreen
 
+    before = {id(w) for w in QApplication.topLevelWidgets() if w.isVisible()}
+    shell = AppShell()
     screen = LoadingScreen(steps=3)
-    screen.resize(412, 915)
-    screen.show()
+    shell.show_page(screen)
+    shell.resize(412, 915)
+    shell.show()
     for text in ("Loading NumPy…", "Loading physics engine…", "Building screens…"):
         screen.step(text)
         assert screen.status == text
+    w = MobileWindow(scenario("single_cart_full"))      # built parentless, like app.py
     screen.finish()
     assert screen.bar.value() == screen.bar.maximum()
     img = screen.grab().toImage()
     assert img.pixelColor(img.width() // 2, img.height() // 2 - 100).name() != theme.BG.lower()   # logo drawn
-    window = W()
-    window.resize(412, 915)
-    window.show()
-    screen.fade_into(window, ms=100)
-    assert not screen.isVisible() and window._loading_cover.isVisible()
-    assert wait(app, lambda: window.findChildren(type(window._loading_cover)) == [], 5)
-    window.close()
+    shell.present(w)
+    app.processEvents()
+    new = [t for t in QApplication.topLevelWidgets() if t.isVisible() and id(t) not in before]
+    assert new == [shell], [type(t).__name__ for t in new]
+    assert w.isVisible() and not w.isWindow() and w.window() is shell and w.size() == shell.size()
+    w.navigate("settings")
+    shell.setFocus()                                     # no focus widget inside: Back reaches the shell
+    QApplication.sendEvent(shell, QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Back, Qt.KeyboardModifier.NoModifier))
+    assert w.current == "simulate"                       # handled by the main window (go back)
+    shell.close()
+    assert not w.isVisible()
+    shell.deleteLater()
+    app.processEvents()
 
 
 def test_start_up_needs_neither_pyqtgraph_nor_the_tuner(tmp_path):

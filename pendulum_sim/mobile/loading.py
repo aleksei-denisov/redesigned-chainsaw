@@ -3,9 +3,11 @@
 Android first shows the native splash (logo and name on the theme background, see
 docs/ANDROID.md). As soon as Python has created the QApplication this screen takes
 over with the *same* logo and title at the same place, adds a progress bar and
-the current step ("Loading NumPy…", "Loading physics engine…", …), and finally
-fades into the main window. Only PySide6 is imported here, so it appears before
-NumPy, the simulation and the UI modules are loaded.
+the current step ("Loading NumPy…", "Loading physics engine…", …). The screen is
+a page of :class:`AppShell`, the app's only top-level window, which then switches to
+the main window in one step (no second window, no fade over the GPU-drawn view).
+Only PySide6 is imported here, so it appears before NumPy, the simulation and the
+UI modules are loaded.
 
 The geometry (in dp) matches ``android/splash/splash_logo.png``: a 160 dp logo, a
 24 dp gap and the two-line title, centred on the screen.
@@ -15,9 +17,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QByteArray, QEasingCurve, QEventLoop, QPropertyAnimation, QRectF, Qt, QTimer
+from PySide6.QtCore import QByteArray, QEventLoop, QRectF, Qt, QTimer
 from PySide6.QtGui import QColor, QFont, QPainter, QPixmap
-from PySide6.QtWidgets import QApplication, QGraphicsOpacityEffect, QLabel, QWidget
+from PySide6.QtWidgets import QApplication, QStackedLayout, QWidget
 
 from . import theme
 from .controls import ProgressBar
@@ -111,34 +113,66 @@ class LoadingScreen(QWidget):
                    self.status)
         p.end()
 
-    # ----------------------------------------------------------- transition
-    def fade_into(self, window: QWidget, ms: int = 320) -> None:
-        """Cover ``window`` with a picture of this screen, close it, fade the picture out."""
-        picture = self.grab()
-        cover = QLabel(window)
-        cover.setPixmap(picture)
-        cover.setScaledContents(True)
-        cover.setGeometry(window.rect())
-        cover.show()
-        cover.raise_()
-        effect = QGraphicsOpacityEffect(cover)
-        cover.setGraphicsEffect(effect)
-        anim = QPropertyAnimation(effect, b"opacity", cover)
-        anim.setDuration(ms)
-        anim.setStartValue(1.0)
-        anim.setEndValue(0.0)
-        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
-        anim.finished.connect(cover.deleteLater)
-        self.close()
-        anim.start()
-        window._loading_cover = cover     # keep alive until the animation ends
+
+
+class AppShell(QWidget):
+    """The app's only top-level window: the loading screen first, then the main window.
+
+    On Android every top-level Qt window is a surface of its own, and two of them alive at
+    once (a loading window closing while the main window opens) were composed in changing
+    order: the loading screen flashed up again over the new main window. Here the main
+    window is embedded as a child page, so start-up never creates a second surface. Keys
+    (Android Back) and closing are passed on to the embedded window.
+    """
+
+    def __init__(self, title: str = "Inverted Pendulum Simulator") -> None:
+        super().__init__()
+        self.setWindowTitle(title)
+        self.setAutoFillBackground(True)
+        self.stack = QStackedLayout(self)
+        self.stack.setContentsMargins(0, 0, 0, 0)
+        self.content: QWidget | None = None
+
+    def show_page(self, widget: QWidget) -> None:
+        """Add ``widget`` (if new) and make it the visible page (the previous one stays below)."""
+        if self.stack.indexOf(widget) < 0:
+            self.stack.addWidget(widget)       # reparents: a top-level widget becomes a child page
+        self.stack.setCurrentWidget(widget)
+
+    def present(self, window: QWidget) -> None:
+        """Switch from the loading screen to ``window`` in one step and drop the other pages."""
+        self.content = window
+        self.show_page(window)
+        window.setFocus()
+        for i in reversed(range(self.stack.count())):
+            page = self.stack.widget(i)
+            if page is not window:
+                self.stack.removeWidget(page)
+                page.hide()
+                page.deleteLater()
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802 - no focus widget: keys go to the content
+        if self.content is not None and not getattr(self, "_forwarding", False):
+            self._forwarding = True            # unhandled keys propagate back up to us
+            try:
+                QApplication.sendEvent(self.content, event)
+            finally:
+                self._forwarding = False
+        else:
+            super().keyPressEvent(event)
+
+    def closeEvent(self, event) -> None:  # noqa: N802 - the content's shutdown (workers, files)
+        if self.content is not None and not self.content.close():
+            event.ignore()
+            return
+        super().closeEvent(event)
 
 
 class BusyOverlay(QWidget):
     """In-window "Loading …" cover for slow, blocking work (loading a scenario or a file).
 
     ``run(text, work)`` paints the cover *now* (the event loop is blocked while ``work``
-    runs), calls ``work`` and then fades the cover out once the new screen is drawn.
+    runs), calls ``work`` and removes the cover once the new screen is drawn.
     """
 
     def __init__(self, parent: QWidget) -> None:
@@ -171,13 +205,32 @@ class BusyOverlay(QWidget):
         self.setGeometry(parent.rect())
         self.show()
         self.raise_()
-        self.repaint()                         # painted and shown before the work blocks
-        QApplication.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
         try:
+            self._settle()                     # painted and on screen before the work blocks
             work()
         finally:
             self._depth -= 1
             self._hide_timer.start(150)        # after the new screen's first frames
+
+    SETTLE_S = 0.12
+
+    def _settle(self) -> None:
+        """Present the cover for a few frames before the event loop blocks.
+
+        Loads usually start from a popup menu, which on Android is a window (surface) of
+        its own; closing it while the work blocked the Qt thread left the main surface
+        black or half-drawn for seconds. Pumping events for ~0.1 s lets the popup go
+        and puts the cover into every buffer of the window's swap chain.
+        """
+        import time
+
+        end = time.perf_counter() + self.SETTLE_S
+        while True:
+            self.repaint()
+            QApplication.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
+            if time.perf_counter() >= end:
+                break
+            time.sleep(0.016)
 
     def mousePressEvent(self, event) -> None:  # noqa: N802 - swallow taps while covering
         event.accept()

@@ -164,8 +164,10 @@ class MobileWindow(MainWindow):
         self._drag_offset = 0.0
         self._resume_on_activate = False
         super().__init__(config)
+        startup.TIMER.mark("  scenario loaded into the screens")
         self.setWindowTitle("Inverted Pendulum Simulator")
         self.apply_performance(self.perf)
+        startup.TIMER.mark("  performance settings applied")
         app = QGuiApplication.instance()
         if app is not None:
             app.applicationStateChanged.connect(self.on_application_state)

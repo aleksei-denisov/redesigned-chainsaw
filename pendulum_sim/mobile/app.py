@@ -70,10 +70,13 @@ def main(argv: list[str] | None = None) -> int:
     theme.apply(app)        # dark palette, 16 dp text, 48 dp touch targets (no Python style hooks)
     TIMER.mark("Qt ready")
 
-    from .loading import LoadingScreen
+    from .loading import AppShell, LoadingScreen
 
+    # one top-level window for the whole run: loading screen first, then the main window
+    shell = AppShell()
     loading = LoadingScreen(steps=5)
-    _show(loading, args)
+    shell.show_page(loading)
+    _show(shell, args)
     loading.step("Loading NumPy…")
     TIMER.mark("loading screen shown")
     try:
@@ -106,8 +109,7 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         window = _error_screen(app, text)
 
-    _show(window, args)
-    loading.fade_into(window)
+    shell.present(window)
     TIMER.mark("main window shown")
     QTimer.singleShot(0, lambda: TIMER.mark("first frame"))
 
@@ -121,7 +123,7 @@ def main(argv: list[str] | None = None) -> int:
         code = _smoke_test(app, window, args.smoke_test)
     else:
         code = app.exec()
-    _shutdown(app, window)
+    _shutdown(app, shell)
     return code
 
 
@@ -137,16 +139,18 @@ def _show(widget, args) -> None:
         widget.show()
 
 
-def _shutdown(app, window) -> None:
+def _shutdown(app, shell) -> None:
     """Destroy the window while the QApplication still exists.
 
     Leaving the order to interpreter shutdown can delete Qt objects after the
-    application object (seen as a segfault on macOS).
+    application object (seen as a segfault on macOS). Closing the shell closes the
+    embedded main window (its shutdown); a shell the user closed already did that.
     """
     from PySide6.QtCore import QCoreApplication, QEvent
 
-    window.close()
-    window.deleteLater()
+    if shell.isVisible():
+        shell.close()
+    shell.deleteLater()
     QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
     app.processEvents()
 
