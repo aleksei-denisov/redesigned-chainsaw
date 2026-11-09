@@ -21,14 +21,18 @@ pendulum_sim/ui                              desktop UI; MainWindow is built fro
 pendulum_sim/ui/file_io.py                   file dialogs + read/write that accept Android content:// URIs
 pendulum_sim/mobile/window.py                MobileWindow(MainWindow): screens + navigation, inherits every handler
 pendulum_sim/mobile/pages.py                 Simulate, Graphs, Controller, System, Settings screens
-pendulum_sim/mobile/autotune_screen.py       auto-tune flow: set-up → progress → result
-pendulum_sim/mobile/controls.py              touch controls: number rows, switches, chips, sections, kinetic pages
-pendulum_sim/mobile/theme.py, icons.py       dark theme; bundled SVG icons (icons/*.svg, rendered with QtSvg)
-pendulum_sim/mobile/graphs.py, plot_math.py  fast QPainter strip charts; Qt-free downsampling and axis maths
+pendulum_sim/mobile/autotune_screen.py       auto-tune flow: set-up → progress → result (fixed action bars)
+pendulum_sim/mobile/controls.py              touch controls: number rows, switches, chips, sections, kinetic scrolling,
+                                             action bar, progress bar
+pendulum_sim/mobile/theme.py, icons.py       theme system (colours, sizes, style sheet); bundled SVG icons
+pendulum_sim/mobile/graphs.py, plot_math.py  scrolling QPainter strip charts; Qt-free ring/downsampling/axis maths
 pendulum_sim/mobile/touch_view.py            PendulumView subclass: tap / drag / pinch, render resolution
 pendulum_sim/mobile/performance.py, cpu.py   drawing settings (saved per device), frame timings, fast-core pinning
+pendulum_sim/mobile/perftest.py              on-device performance test (Settings → Debug)
+pendulum_sim/mobile/startup.py, loading.py   start-up timing from process start; in-app loading screen
 android/main.py                              APK entry point (packaged as main.py)
-scripts/build_android.py                     staging + pyside6-android-deploy + buildozer
+android/splash_logo.png                      native splash bitmap (logo + name, xhdpi)
+scripts/build_android.py                     staging + pyside6-android-deploy + python-for-android patch + buildozer
 scripts/mobile_preview.py                    offscreen screenshots of every screen + benchmark (CI)
 .github/workflows/android.yml                CI: debug APK on every push, signed AAB on tags
 ```
@@ -124,43 +128,119 @@ keep the screen on.
 | Setting | Effect |
 |---|---|
 | Pendulum drawing resolution | *Native* (default) draws the pendulum at the screen's full pixel density; *High* (1.5×), *Balanced* (1.25×) and *Fast* (1×) draw fewer pixels and scale up |
-| Graph refresh (maximum) | upper limit (default 10 Hz); lowered automatically when frames get slow |
+| Graph animation | how often the graphs scroll: 60 (default), 30 or 15 steps per second; each step draws only the new samples |
 | Frame rate | 60 or 30 fps |
 | Antialiased pendulum view | smooth edges (default on) |
 | Use performance CPU cores | pins the simulation thread to the big cores (Snapdragon 870: 3.2 + 3 × 2.42 GHz instead of the 1.8 GHz efficiency cores) |
-| Performance overlay (*Debug*) | at the top right of the view: `fps · max <longest frame gap> │ physics · view · graphs` in ms per frame, and the CPU core in use |
+| Performance overlay (*Debug*) | at the top right of the view: `fps · max <longest frame gap> │ physics · view · graphs <data>+<paint> · screen <whole update>` in ms per frame, and the CPU core in use |
 | Log timings (*Debug*) | the same line once per second in `adb logcat` (tag `python`) |
+| Run performance test (*Debug*) | about 30 s: Simulate, then Graphs with 2, 3 and 4 graphs, then a Python profile; shows a report with *Copy report* (also printed to `adb logcat`) |
+| Start-up times (*Debug*) | the start-up steps of this launch, in seconds since the process started |
 
-Graphs are QPainter strip charts: each refresh downsamples the visible window to two points
-(min/max) per pixel column straight from the telemetry ring buffer into a reused `QPolygonF`,
-axes and labels are cached in an image and rebuilt only when the range or size changes, and
-hidden graphs (another screen shown) are not updated at all. Axes keep a minimum span per
-quantity, so a signal at rest never shows `×1e-15` noise.
+### Graph rendering
 
-On the Xiaomi Pad 6 the phase-2 build showed 11 fps with graphs (35 ms per frame in the graphs,
-217 ms worst frame) and 30 fps without. Graphs already refreshed at 10 Hz then, so one pyqtgraph refresh took
-about 200 ms on the tablet (matching the 217 ms worst frame). On the CI runner pyqtgraph and the
-strip charts cost about the same per refresh; on the device the strip charts avoid pyqtgraph's
-per-item scene graph and antialiased path stroking (1-pixel cosmetic lines, the Qt rasteriser's
-fast path), hidden graphs are not touched, the pendulum grid is cached and the simulation thread
-runs on the fast cores. Check the *Performance overlay*
-on the device for the real numbers.
+Each graph is a `StripChart` (`pendulum_sim/mobile/graphs.py`) drawn with QPainter on Qt's
+software rasteriser – the same path as the rest of the widgets, so nothing extra is needed
+on Android:
 
-Measured offscreen at the Xiaomi Pad 6 geometry (1440×900 logical, pixel ratio 2) on a CI runner
-(`scripts/mobile_preview.py`; a tablet is slower, the ratios hold):
+* **Static layer** – title, legend, y labels, frame and time ticks are drawn once into an
+  image and rebuilt only when the y range, the size or the time window changes.
+* **Scrolling trace** – the curves live in an image of the plot area in device pixels used as
+  a *ring of pixel columns*: absolute column `c = t · px_per_s` is stored at image column
+  `(c − ring0) mod width`. On every graph step the columns that time has moved past are
+  cleared (with the horizontal grid), only the samples that arrived since the last step are
+  drawn as short line segments (2–4 per frame at the default 200 Hz telemetry), and the
+  paint copies the ring in two parts so that the newest column sits at the right edge. The
+  curves scroll by whole device pixels every frame and the cost does not depend on how much
+  history is shown (`ring_runs` / `ring_blits` in `plot_math.py`).
+* **Full redraw** – only when the y range changes (checked at 10 Hz, or at once when a new
+  sample leaves the range; ranges keep a minimum span, so no `×1e-15`), on resize or when the
+  time window changes. It decimates each series to a min/max pair per pixel column
+  (`downsample_minmax`) and writes the points straight into a `QPolygonF`'s memory.
+* **Pens** – 1-pixel cosmetic lines without antialiasing (Qt's fast line rasteriser), drawn
+  twice one device pixel apart on dense screens, i.e. ≈ 2 px thick.
+* **Scheduling** – the window steps the graphs from its frame timer, at the *Graph animation*
+  rate, after the physics; a frame that overran skips the graph step (the next one catches up
+  because the charts are time-based), so the pendulum and the physics keep their pace. Hidden
+  graphs (another screen shown, or not selected) do no work at all; only the trace areas are
+  repainted.
 
-| Per frame | phase 2 | now |
+Options considered (see the sources in the commit history): pyqtgraph tuned for speed
+(`setDownsampling(auto=True, method='peak')`, `setClipToView`, `skipFiniteCheck`, no
+antialiasing, cosmetic pens) still runs its Python scene graph on every refresh – about
+200 ms per refresh on the tablet in the first Android build; Qt Charts with OpenGL needs an
+extra Qt module, accelerates only line/scatter series and in Qt 6 needs the OpenGL backend
+forced; a Qt Quick scene-graph line item would add a second rendering stack to the widget
+app (an architecture change). The scrolling trace keeps the existing stack and makes the
+per-frame cost a small, constant amount.
+
+If the animation still stutters, switch on the performance overlay or run the performance
+test: a large *graphs* value → fewer graphs or a lower graph animation rate; a large *view*
+value → lower view resolution or no antialiasing; a large *physics* value with fast-core
+pinning off → turn it on; a large *screen* value with small parts → the upload of the frame
+to the display (Qt draws widgets in software and uploads the changed area each frame); a
+large *max* with small parts → the system (a background app or thermal throttling) delayed
+the frame.
+
+### Measurements
+
+Offscreen on a GitHub runner at the Xiaomi Pad 6 geometry (1440×900 logical, pixel ratio 2),
+triple pendulum, 200 Hz telemetry, 10 s window (`scripts/mobile_preview.py`, which also runs a
+shortened performance test). A tablet is slower in absolute terms; on the device use
+*Settings → Debug → Run performance test* (the report is the same format).
+
+| | before (mobile-ux) | now (mobile-polish) |
 |---|---|---|
-| pendulum view, native + antialiasing | 25.5 ms | **3.8 ms** – background grid cached as an image |
-| graphs, one refresh incl. window flush, 2 / 4 graphs | 2.3 / 2.9 ms (pyqtgraph) | 2.5 / 3.1 ms, of which the charts' own work (data + paint) **1.1 / 1.7 ms** |
-| graphs while another screen is shown | refreshed | not touched |
-| whole frame at 60 fps, Simulate / Graphs with 3 graphs | – | 7.9 / 6.4 ms mean, ≤ 10.7 ms max |
-| auto-tune *Quick*, single cart, 1 → 2 workers | 22.1 s | 11.7 s → **6.2 s** |
+| graph updates | all graphs recomputed and repainted every 100 ms in one frame (curves move in 100 ms steps) | every frame, only new samples; smooth 1-pixel scroll |
+| graph cost, 2 / 3 / 4 graphs | ≈ 2.4 ms in one frame out of six (CI) – on the tablet the earlier pyqtgraph build spent ≈ 200 ms per refresh | 0.9 / 0.9 / 1.1 ms per frame (data 0.5–0.7 + paint 0.4–0.5), every frame |
+| frame busy time, Graphs with 3 graphs (60 fps) | 5.5 ms mean, 8.8 ms max (different runner) | 5.0 ms mean, 5.6 ms p95 |
+| full graph redraw (range/size change only) | – | 3.7 / 5.3 ms for 2 / 4 graphs |
+| start-up (fresh process) | blank until everything, incl. pyqtgraph, Experiments and Auto-tune, was built | loading screen after 0.1–0.2 s, main window after 0.6–1.0 s (runner speeds vary); Experiments 0.06 s and Auto-tune 0.03 s on first use; icon rendering cut from 28 to ≤ 6 SVG renders per icon |
 
-If the animation still stutters, switch on the performance overlay: a large *graphs* value → fewer
-graphs or a lower graph refresh; a large *view* value → lower view resolution or no antialiasing;
-a large *physics* value with fast-core pinning off → turn it on; a large *max* with small parts →
-the system (a background app or thermal throttling) delayed the frame.
+### Start-up and loading screen
+
+1. **Native splash** (Android, before Python runs): the app logo and name centred on the app's
+   background colour. `scripts/build_android.py` checks out python-for-android at the commit
+   `pyside6-android-deploy` pins and patches its Qt bootstrap: the activity gets the
+   `android.app.splash_screen_drawable` meta-data (Qt's activity shows that drawable until Qt
+   draws its first frame) and its style gets the same drawable as window background (also
+   what shows behind Android 12+'s own short icon splash). The bitmap is
+   `android/splash_logo.png`; the drawable and colour are written into the bootstrap's
+   resources. The patch is checked against copies of the real templates
+   (`tests/test_build_android_splash.py`, rendered with Jinja) and, if the templates change,
+   the build continues without the splash instead of failing.
+2. **In-app loading screen** (`pendulum_sim/mobile/loading.py`), shown as soon as the
+   QApplication exists, with the *same* logo and title at the same place, a progress bar and
+   the current step: *Loading NumPy…*, *Loading physics engine…*, *Preparing user interface…*,
+   *Building screens…*, *Starting simulation…*. When the main window is ready, a picture of the
+   loading screen covers it and fades out (0.3 s).
+3. **Lazy screens**: the Experiments screen (and with it pyqtgraph) and the Auto-tune screen are
+   built the first time they are opened; the desktop window imports its pyqtgraph panels inside
+   its builders (desktop behaviour unchanged); icons are rendered at two sizes instead of seven.
+
+Every step is timed from the start of the *process* (`/proc/self/stat`), printed to
+`adb logcat` (`startup  1.234 s  …`) and listed under *Settings → Debug*;
+`python -m pendulum_sim.mobile --startup-test` prints the same report on the desktop.
+
+### Theme system
+
+`pendulum_sim/mobile/theme.py` is the single place for the look of the mobile app:
+
+* colour tokens (`BG`, `SURFACE`, `SURFACE_2`, `OUTLINE`, `TEXT`, `TEXT_2`, `DISABLED`,
+  `ACCENT`, `ACCENT_DARK`, `ON_ACCENT`, `DANGER`) chosen for contrast on an LCD in daylight
+  (body text 14.8 : 1, secondary text 8 : 1, accent 6.9 : 1 on the background);
+* sizes in logical pixels (= Android dp): body text 16, secondary 14, titles 20, touch targets 48;
+* `palette()` (Qt palette for every widget, including disabled states) and one `STYLE_SHEET`
+  with a few roles selected by widget properties – `primary` and `chip` buttons, `nav` and
+  `flat` tool buttons, `role="secondary|title|value"` labels, `card` frames, `navbar` /
+  `actionbar` bars;
+* `apply(app)` sets palette, pixel-sized font and style sheet once at start-up. There are no
+  Python style hooks (a Python `QProxyStyle` was removed: it ran Python on every paint).
+
+Custom-painted widgets (pendulum view, strip charts, auto-tune plots, progress bar, loading
+screen) take their colours from the palette or the same tokens, and the native splash uses
+`BG` (`SPLASH_BG` in the build script), so the hand-over from splash to loading screen to
+the app shows no colour jump.
 
 The mobile interface can be previewed on the desktop (mouse = one finger, wheel = zoom):
 
@@ -172,7 +252,7 @@ python -m pendulum_sim.mobile --tablet --landscape  # 1280×800 tablet
 CI renders every screen at a 2× pixel ratio for phone and tablet sizes and times the drawing
 (`scripts/mobile_preview.py`); the images and `benchmark.txt` are published as the
 [mobile-preview](https://github.com/aleksei-denisov/redesigned-chainsaw/releases/tag/mobile-preview)
-pre-release (`mobile-ux-preview` for the `mobile-ux` branch).
+pre-release (`mobile-ux-preview` / `mobile-polish-preview` for those branches).
 
 ## Building
 
@@ -183,9 +263,11 @@ Pushes to `main` and `android-apk` publish the debug APK as the rolling pre-rele
 
 <https://github.com/aleksei-denisov/redesigned-chainsaw/releases/download/android-latest/InvertedPendulumSimulator-debug.apk>
 
-The `mobile-ux` branch (multi-screen touch interface) publishes to **android-mobile-ux**:
+The `mobile-ux` branch (multi-screen touch interface) publishes to **android-mobile-ux**,
+`mobile-polish` (loading screen, scrolling graphs) to **android-mobile-polish**:
 
 <https://github.com/aleksei-denisov/redesigned-chainsaw/releases/download/android-mobile-ux/InvertedPendulumSimulator-debug.apk>
+<https://github.com/aleksei-denisov/redesigned-chainsaw/releases/download/android-mobile-polish/InvertedPendulumSimulator-debug.apk>
 
 Tap the downloaded file and allow installing from this source (browser) when asked.
 
@@ -281,18 +363,23 @@ API 28 or newer (e.g. *Pixel 7, API 35, Google APIs ARM 64*). Start it, then
 
 ### Test checklist
 
+- launch: the splash (logo and name) appears at once, then the loading screen with its steps, then
+  the app fades in – no black or blank screen; *Settings → Debug* lists the start-up times;
 - app starts, pendulum balances in the default scenario; *Settings → Debug → Performance overlay* shows ~60 fps;
 - tap left/right of the tip → push; drag → red rubber band and the pendulum follows; pinch/pan, *Fit*;
 - every screen opens from the rail / bottom bar (*More*); the simulation keeps running; back button
   walks back through the screens and asks before leaving on *Simulate*;
-- *Graphs*: select up to four, the fifth replaces the oldest; the choice survives a restart; with
-  2–3 graphs the overlay stays ≥ 30 fps;
+- *Graphs*: select up to four, the fifth replaces the oldest; the choice survives a restart; the
+  curves scroll smoothly (no 100 ms steps) and with 2–3 graphs the overlay stays at ~60 fps;
+  *Settings → Debug → Run performance test* → *Copy report*;
 - *Controller*: drag a gain slider, tap a value and type one, −/+; the pendulum reacts on release;
   *Seed from LQR* on the double/triple pendulum balances it;
 - *System*: add a segment → a new loop appears on *Controller*; switch cart ↔ fixed base;
 - *Auto-tune*: estimates appear for the three presets; run *Quick* → progress, cancel → best-so-far
-  offered; run again → result with Apply / Discard / Rerun; Apply returns to *Controller*;
-  pressing *Home* during a run cancels it;
+  offered; run again → result with Apply / Discard / Rerun in a bar that stays at the bottom, in
+  both orientations; Apply returns to *Controller*; pressing *Home* during a run cancels it;
+- every screen scrolls with the finger where its content is longer than the screen (also
+  *Experiments*), on tablet and phone, portrait and landscape;
 - rotate the device → layout switches (rail ↔ bottom bar, graphs beside ↔ below the view);
 - *Home* while running → come back → simulation resumes where it was, no jump.
 
@@ -307,4 +394,10 @@ API 28 or newer (e.g. *Pixel 7, API 35, Google APIs ARM 64*). Start it, then
 - arm64-v8a only (no 32-bit devices; Qt dropped them).
 - Android 9+ only (Qt 6.8+ requirement; Android 8.x cannot run current Qt).
 - APK size is large (~180 MB) because the PySide6 wheel is bundled whole.
-- First launch takes a few seconds while Python unpacks.
+- First launch takes a few seconds longer while Python unpacks (the splash covers it).
+- The native splash depends on patching python-for-android's Qt bootstrap templates; if a future
+  python-for-android changes them, the build logs a warning and the app starts without the
+  native splash (the in-app loading screen still appears).
+- Graphs scroll by whole device pixels (at 10 s on a 1400-pixel-wide chart ≈ 140 px/s); the
+  curves between two graph steps are straight segments, the full redraws decimate to min/max
+  per column – both look the same at this resolution.
