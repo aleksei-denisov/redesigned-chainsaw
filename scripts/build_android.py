@@ -186,14 +186,12 @@ SPLASH_DRAWABLE = """<?xml version="1.0" encoding="utf-8"?>
 SPLASH_VALUES = f"""<?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="splash_background">{SPLASH_BG}</color>
-    <!-- window background until Qt draws its first frame (and the Android 12+ system splash colour) -->
-    <style name="SplashTheme" parent="@android:style/Theme.NoTitleBar">
-        <item name="android:windowBackground">@drawable/splash</item>
-    </style>
 </resources>
 """
 SPLASH_META = ('<meta-data android:name="android.app.splash_screen_drawable" '
                'android:resource="@drawable/splash"/>')
+# window background until Qt draws its first frame (also behind the Android 12+ system splash)
+SPLASH_WINDOW_ITEM = '<item name="android:windowBackground">@drawable/splash</item>'
 
 
 def prepare_p4a(branch: str, commit: str) -> Path | None:
@@ -220,31 +218,46 @@ def prepare_p4a(branch: str, commit: str) -> Path | None:
 
 
 def patch_splash(p4a: Path) -> bool:
+    """Add the splash to the Qt bootstrap's templates and resources (idempotent).
+
+    * ``AndroidManifest.tmpl.xml``: the meta-data goes into the app's activity, right
+      before its ``android.app.lib_name`` meta-data (the activity's start tag holds Jinja
+      conditions with ``>`` in them, so it is not edited);
+    * ``strings.tmpl.xml``: the activity's style (``KivySupportCutout``) gets the splash
+      as window background;
+    * ``res/``: the layer-list drawable, the logo bitmap and the background colour.
+    """
     bootstrap = p4a / "pythonforandroid" / "bootstraps" / "qt" / "build"
-    template = bootstrap / "templates" / "AndroidManifest.tmpl.xml"
-    if not template.exists():
-        log.warning("no Qt bootstrap manifest template at %s: no native splash", template)
+    manifest = bootstrap / "templates" / "AndroidManifest.tmpl.xml"
+    strings = bootstrap / "templates" / "strings.tmpl.xml"
+    if not manifest.exists():
+        log.warning("no Qt bootstrap manifest template at %s: no native splash", manifest)
         return False
-    text = template.read_text(encoding="utf-8")
+    text = manifest.read_text(encoding="utf-8")
     if "splash_screen_drawable" not in text:
-        match = re.search(r"<activity\b[^>]*?>", text, re.S)
-        if match is None or match.group(0).endswith("/>"):
-            log.warning("activity element not found in %s: no native splash", template)
+        anchor = re.search(r'[ \t]*<meta-data\s+android:name="android\.app\.lib_name"', text)
+        if anchor is None:
+            log.warning("activity meta-data not found in %s: no native splash", manifest)
             return False
-        tag = match.group(0)
-        if "android:theme=" in tag:
-            new_tag = re.sub(r'android:theme="[^"]*"', 'android:theme="@style/SplashTheme"', tag)
-        else:
-            new_tag = tag[:-1].rstrip() + '\n                  android:theme="@style/SplashTheme">'
-        text = text[:match.start()] + new_tag + "\n            " + SPLASH_META + text[match.end():]
-        template.write_text(text, encoding="utf-8")
+        indent = re.match(r"[ \t]*", anchor.group(0)).group(0)
+        text = text[:anchor.start()] + indent + SPLASH_META + "\n" + text[anchor.start():]
+        manifest.write_text(text, encoding="utf-8")
+    if strings.exists():
+        st = strings.read_text(encoding="utf-8")
+        if "android:windowBackground" not in st:
+            style = re.search(r'([ \t]*)<style name="KivySupportCutout"[^>]*>\n', st)
+            if style is not None:
+                st = st[:style.end()] + style.group(1) + "    " + SPLASH_WINDOW_ITEM + "\n" + st[style.end():]
+                strings.write_text(st, encoding="utf-8")
+            else:
+                log.warning("activity style not found in %s: no splash window background", strings)
     res = bootstrap / "src" / "main" / "res"
     for sub in ("drawable", "drawable-xhdpi", "values"):
         (res / sub).mkdir(parents=True, exist_ok=True)
     (res / "drawable" / "splash.xml").write_text(SPLASH_DRAWABLE, encoding="utf-8")
     (res / "values" / "splash.xml").write_text(SPLASH_VALUES, encoding="utf-8")
     shutil.copy2(ANDROID_DIR / "splash_logo.png", res / "drawable-xhdpi" / "splash_logo.png")
-    log.info("native splash added to the Qt bootstrap (%s)", template)
+    log.info("native splash added to the Qt bootstrap (%s)", manifest)
     return True
 
 
