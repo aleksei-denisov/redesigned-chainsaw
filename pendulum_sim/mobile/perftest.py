@@ -2,10 +2,10 @@
 
 Runs the live simulation through a fixed sequence and records every frame:
 
-1. *Simulate* screen (no graphs visible),
-2. *Graphs* screen with 2, 3 and 4 graphs,
-3. *Graphs* with 3 graphs again under ``cProfile`` (Python hot spots; timings of
-   this phase are inflated by the profiler and not reported).
+1. GPU drawing: *Simulate* screen (no graphs visible), *Graphs* screen with 2, 3
+   and 4 graphs, then 3 graphs again under ``cProfile`` (Python hot spots; timings
+   of this phase are inflated by the profiler and not reported),
+2. software drawing: *Simulate* and *Graphs* with 3 graphs (for comparison).
 
 For each timed phase the report lists frames per second, frame-gap percentiles,
 the busy time per frame split into physics, pendulum view, graph data, graph
@@ -31,13 +31,13 @@ G2 = ["angle", "control"]
 G3 = ["angle", "control", "cart_position"]
 G4 = ["angle", "angular_velocity", "control", "cart_position"]
 PHASES = [  # (label, screen, graphs or None, seconds, profiled, drawing or None = keep)
-    ("Software · Simulate screen (no graphs)", "simulate", None, 5.0, False, "software"),
-    ("Software · Graphs screen, 3 graphs", "graphs", G3, 5.0, False, "software"),
     ("GPU · Simulate screen (no graphs)", "simulate", None, 5.0, False, "gpu"),
     ("GPU · Graphs screen, 2 graphs", "graphs", G2, 5.0, False, "gpu"),
     ("GPU · Graphs screen, 3 graphs", "graphs", G3, 5.0, False, "gpu"),
     ("GPU · Graphs screen, 4 graphs", "graphs", G4, 5.0, False, "gpu"),
     ("Python profile, 3 graphs, GPU", "graphs", G3, 4.0, True, "gpu"),
+    ("Software · Simulate screen (no graphs)", "simulate", None, 5.0, False, "software"),
+    ("Software · Graphs screen, 3 graphs", "graphs", G3, 5.0, False, "software"),
 ]
 SETTLE_S = 1.5             # after switching screen / drawing mode, before recording
 
@@ -85,6 +85,7 @@ class PerformanceTest(QObject):
         super().__init__(window)
         self.window = window
         self.blocks: list[str] = []
+        self.phases: list[tuple] = list(PHASES)   # this run's copy (labels get notes appended)
         self._phase = -1
         self._profile: cProfile.Profile | None = None
         self._started = 0.0
@@ -101,6 +102,7 @@ class PerformanceTest(QObject):
         w = self.window
         self._saved = (w.current, list(w.telemetry.selected), w.running)
         self.blocks = [self._header()]
+        self.phases = list(PHASES)
         self._phase = -1
         w.reset()
         w.start()
@@ -119,28 +121,29 @@ class PerformanceTest(QObject):
         if self._phase >= 0:
             self._finish_phase()
         self._phase += 1
-        if self._phase >= len(PHASES):
+        if self._phase >= len(self.phases):
             self._done()
             return
-        label, screen, graphs, seconds, profiled = PHASES[self._phase][:5]
-        drawing = PHASES[self._phase][5] if len(PHASES[self._phase]) > 5 else None
+        phase = self.phases[self._phase]
+        label, screen, graphs, seconds, profiled = phase[:5]
+        drawing = phase[5] if len(phase) > 5 else None
         if drawing is not None:
             used = w.set_drawing(drawing, w.perf.gpu_samples)
             if used != drawing:
                 label += f" (not available: {used} drawing)"
-                PHASES[self._phase] = (label,) + tuple(PHASES[self._phase][1:])
+                self.phases[self._phase] = (label,) + tuple(phase[1:])
         if graphs is not None:
             w.telemetry.set_selection(graphs)
         w.navigate(screen, remember=False)
         if not w.running:
             w.start()
-        self.progress.emit(f"{self._phase + 1}/{len(PHASES)}: {label}")
+        self.progress.emit(f"{self._phase + 1}/{len(self.phases)}: {label}")
         QTimer.singleShot(int(SETTLE_S * 1000), self._begin_recording)
 
     def _begin_recording(self) -> None:
         if not self.running:
             return
-        _label, _screen, _graphs, seconds, profiled = PHASES[self._phase][:5]
+        _label, _screen, _graphs, seconds, profiled = self.phases[self._phase][:5]
         self.window.stats.recording = []
         self._started = time.perf_counter()
         if profiled:
@@ -156,7 +159,7 @@ class PerformanceTest(QObject):
         return frames
 
     def _finish_phase(self) -> None:
-        label, _screen, _graphs, _seconds, profiled = PHASES[self._phase][:5]
+        label, _screen, _graphs, _seconds, profiled = self.phases[self._phase][:5]
         elapsed = time.perf_counter() - self._started
         frames = self._stop_recording()
         if profiled and self._profile is not None:

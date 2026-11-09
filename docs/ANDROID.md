@@ -28,7 +28,7 @@ pendulum_sim/mobile/theme.py, icons.py       theme system (colours, sizes, style
 pendulum_sim/mobile/graphs.py, plot_math.py  scrolling QPainter strip charts; Qt-free ring/downsampling/axis maths
 pendulum_sim/mobile/touch_view.py            PendulumView subclass: tap / drag / pinch, render resolution
 pendulum_sim/mobile/performance.py, cpu.py   drawing settings (saved per device), frame timings, fast-core pinning
-pendulum_sim/mobile/perftest.py              on-device performance test (Settings → Debug)
+pendulum_sim/mobile/perftest.py              on-device performance test (Settings → Diagnostics)
 pendulum_sim/mobile/startup.py, loading.py   start-up timing from process start; in-app loading screen
 android/main.py                              APK entry point (packaged as main.py)
 android/splash_logo.png                      native splash bitmap (logo + name, xhdpi)
@@ -82,7 +82,15 @@ Tablets in landscape show a navigation **rail** on the left with all screens; ph
 portrait show a **bottom bar** (Simulate, Graphs, Controller, System, *More* → Auto-tune,
 Experiments, Settings). The simulation keeps running on every screen; only what is visible
 is drawn. **Android back** returns to the previously visited screen, cancels a running
-auto-tune, and on *Simulate* asks before leaving the app.
+auto-tune, and on *Simulate* asks before leaving the app. (python-for-android's Qt activity
+swallowed every first key press with a *"Click again to close the app"* toast;
+`scripts/build_android.py` patches its `onKeyDown` so keys reach the app, checked against a
+copy of the real file in `tests/test_build_android_splash.py`.)
+
+Loading a scenario or a file, or adding/removing segments, shows a *Loading …* cover while
+the screens are rebuilt. It is put on screen for ~0.1 s before the work starts, so the
+scenario menu (a window of its own on Android) is gone first – closing it while the work
+blocked the app left the screen black or half-drawn.
 
 Numbers are edited with a slider (logarithmic for gains and wide ranges), large − / +
 steppers, or by tapping the value and typing it; a change is applied when the finger is
@@ -123,20 +131,22 @@ keep the screen on.
 
 ### Performance settings
 
-*Settings → Performance (this device)* – saved on the device:
+*Settings → Performance* – saved on the device. Rows that only apply to one drawing mode are
+shown only for it:
 
 | Setting | Effect |
 |---|---|
+| Preset | one tap sets drawing, smooth edges, frame rate and graph scrolling: **Smooth** (default: GPU, smooth edges, 60 fps, graphs 60×/s), **Balanced** (GPU, no edge smoothing, graphs 30×/s), **Battery saver** (GPU, 30 fps, graphs 15×/s). Any other combination shows as *Custom* |
 | Drawing | **GPU (OpenGL)** (default): the pendulum view and the graphs are drawn by the GPU (`QOpenGLWidget`, same QPainter code through Qt's OpenGL engine), which skips the per-frame copy of the whole window image (~10 ms on the Pad 6); *Software* is the fallback and is used automatically if no OpenGL context can be created |
-| Pendulum drawing resolution | *Native* (default) draws the pendulum at the screen's full pixel density; *High* (1.5×), *Balanced* (1.25×) and *Fast* (1×) draw fewer pixels and scale up |
-| Graph animation | how often the graphs scroll: 60 (default), 30 or 15 steps per second; each step draws only the new samples |
+| Software drawing resolution (*Software only*) | *Native* (default) draws the pendulum at the screen's full pixel density; *1.5×*, *1.25×* and *1×* draw fewer pixels and scale up. The GPU always draws at the screen's own resolution |
+| Smooth edges | antialiasing: 4× multisampling on the GPU, antialiased painting in software (default on) |
 | Frame rate | 60 or 30 fps |
-| Antialiased pendulum view | smooth edges (default on) |
+| Graph scrolling | how often the graphs take in new samples: 60 (default), 30 or 15 times per second, never more than the frame rate; each step draws only the new samples |
 | Use performance CPU cores | pins the simulation thread to the big cores (Snapdragon 870: 3.2 + 3 × 2.42 GHz instead of the 1.8 GHz efficiency cores) |
-| Performance overlay (*Debug*) | at the top right of the view: `fps · max <longest frame gap> │ physics · view · graphs <data>+<paint> · screen <whole update>` in ms per frame, and the CPU core in use |
-| Log timings (*Debug*) | the same line once per second in `adb logcat` (tag `python`) |
-| Run performance test (*Debug*) | about 30 s: Simulate, then Graphs with 2, 3 and 4 graphs, then a Python profile; shows a report with *Copy report* (also printed to `adb logcat`) |
-| Start-up times (*Debug*) | the start-up steps of this launch, in seconds since the process started |
+| Performance overlay (*Diagnostics*) | at the top right of the view: `fps · max <longest frame gap> │ physics · view · graphs <data>+<paint> · screen <whole update>` in ms per frame, and the CPU core in use |
+| Log timings (*Diagnostics*) | the same line once per second in `adb logcat` (tag `python`) |
+| Run performance test (*Diagnostics*) | about 45 s: with GPU drawing Simulate, Graphs with 2, 3 and 4 graphs and a Python profile, then Simulate and Graphs with software drawing for comparison; shows a report with *Copy report* (also printed to `adb logcat`) |
+| Start-up times (*Diagnostics*) | the start-up steps of this launch, in seconds since the process started |
 
 ### Graph rendering
 
@@ -188,7 +198,7 @@ the frame.
 Offscreen on a GitHub runner at the Xiaomi Pad 6 geometry (1440×900 logical, pixel ratio 2),
 triple pendulum, 200 Hz telemetry, 10 s window (`scripts/mobile_preview.py`, which also runs a
 shortened performance test). A tablet is slower in absolute terms; on the device use
-*Settings → Debug → Run performance test* (the report is the same format).
+*Settings → Diagnostics → Run performance test* (the report is the same format).
 
 | | before (mobile-ux) | now (mobile-polish) |
 |---|---|---|
@@ -213,14 +223,17 @@ shortened performance test). A tablet is slower in absolute terms; on the device
 2. **In-app loading screen** (`pendulum_sim/mobile/loading.py`), shown as soon as the
    QApplication exists, with the *same* logo and title at the same place, a progress bar and
    the current step: *Loading NumPy…*, *Loading physics engine…*, *Preparing user interface…*,
-   *Building screens…*, *Starting simulation…*. When the main window is ready, a picture of the
-   loading screen covers it and fades out (0.3 s).
+   *Building screens…*, *Starting simulation…*. The loading screen is a page of `AppShell`, the
+   app's **only top-level window**: when the main window is ready it is embedded as the next
+   page and shown in one step. (On Android every top-level Qt window is a surface of its own;
+   a separate loading window closing while the main window opened was composed in changing
+   order and flashed up again over the app, and a fade over the GPU-drawn view flickered.)
 3. **Lazy screens**: the Experiments screen (and with it pyqtgraph) and the Auto-tune screen are
    built the first time they are opened; the desktop window imports its pyqtgraph panels inside
    its builders (desktop behaviour unchanged); icons are rendered at two sizes instead of seven.
 
 Every step is timed from the start of the *process* (`/proc/self/stat`), printed to
-`adb logcat` (`startup  1.234 s  …`) and listed under *Settings → Debug*;
+`adb logcat` (`startup  1.234 s  …`) and listed under *Settings → Diagnostics*;
 `python -m pendulum_sim.mobile --startup-test` prints the same report on the desktop.
 
 ### Theme system
@@ -365,14 +378,19 @@ API 28 or newer (e.g. *Pixel 7, API 35, Google APIs ARM 64*). Start it, then
 ### Test checklist
 
 - launch: the splash (logo and name) appears at once, then the loading screen with its steps, then
-  the app fades in – no black or blank screen; *Settings → Debug* lists the start-up times;
-- app starts, pendulum balances in the default scenario; *Settings → Debug → Performance overlay* shows ~60 fps;
+  the app – no black or blank screen, no loading screen flashing up again; *Settings →
+  Diagnostics* lists the start-up times;
+- app starts, pendulum balances in the default scenario; *Settings → Diagnostics → Performance overlay* shows ~60 fps;
 - tap left/right of the tip → push; drag → red rubber band and the pendulum follows; pinch/pan, *Fit*;
 - every screen opens from the rail / bottom bar (*More*); the simulation keeps running; back button
-  walks back through the screens and asks before leaving on *Simulate*;
+  walks back through the screens with **one** press each (no "Click again to close the app" toast)
+  and asks before leaving on *Simulate*;
+- *Scenario* → another scenario: a steady *Loading …* cover, no black or flickering frames;
+- *Settings → Performance*: *Software drawing resolution* appears only with *Software*; the presets
+  switch the rows below them, any manual change shows *Custom*;
 - *Graphs*: select up to four, the fifth replaces the oldest; the choice survives a restart; the
   curves scroll smoothly (no 100 ms steps) and with 2–3 graphs the overlay stays at ~60 fps;
-  *Settings → Debug → Run performance test* → *Copy report*;
+  *Settings → Diagnostics → Run performance test* → *Copy report*;
 - *Controller*: drag a gain slider, tap a value and type one, −/+; the pendulum reacts on release;
   *Seed from LQR* on the double/triple pendulum balances it;
 - *System*: add a segment → a new loop appears on *Controller*; switch cart ↔ fixed base;
@@ -386,7 +404,8 @@ API 28 or newer (e.g. *Pixel 7, API 35, Google APIs ARM 64*). Start it, then
 
 ## Known limitations
 
-- Rendering is done by Qt's software rasteriser (as on the desktop); see *Performance settings*.
+- GPU drawing covers the pendulum view and the graphs; the other screens are drawn by Qt's software
+  rasteriser (as on the desktop); see *Performance settings*.
 - Auto-tune needs the app in the foreground; leaving the app cancels it.
 - The fork-based worker pool and the fast-core pinning are verified on Linux CI; on devices whose
   kernel forbids `sched_setaffinity` the pinning is silently skipped, and if forking fails the

@@ -172,8 +172,10 @@ class SwitchRow(QWidget):
         col.setSpacing(0)
         self.label = label(text)
         col.addWidget(self.label)
-        if hint:
-            col.addWidget(label(hint, "secondary"))
+        self.hint_label = label(hint, "secondary")
+        col.addWidget(self.hint_label)
+        if not hint:                    # hide() only: show() on a parentless widget opens a window
+            self.hint_label.hide()
         lay.addLayout(col, 1)
         self.switch = Switch()
         self.switch.setChecked(checked)
@@ -184,6 +186,10 @@ class SwitchRow(QWidget):
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802 - the whole row toggles
         if self.isEnabled() and self.rect().contains(event.position().toPoint()):
             self.switch.toggle()
+
+    def set_hint(self, text: str) -> None:
+        self.hint_label.setText(text)
+        self.hint_label.setVisible(bool(text))
 
     def isChecked(self) -> bool:  # noqa: N802
         return self.switch.isChecked()
@@ -471,10 +477,21 @@ class ChoiceRow(QWidget):
             self.buttons[val] = b
             b.clicked.connect(lambda _=False, v=val: self.changed.emit(v))
         outer.addWidget(holder)
-        if hint:
-            outer.addWidget(label(hint, "secondary"))
+        self.hint_label = label(hint, "secondary")
+        outer.addWidget(self.hint_label)
+        if not hint:                    # hide() only: show() on a parentless widget opens a window
+            self.hint_label.hide()
         if value is not None:
             self.setValue(value)
+
+    def set_hint(self, text: str) -> None:
+        self.hint_label.setText(text)
+        self.hint_label.setVisible(bool(text))
+
+    def set_option_visible(self, value, on: bool) -> None:
+        b = self.buttons.get(value)
+        if b is not None:
+            b.setVisible(on)
 
     def value(self):
         for v, b in self.buttons.items():

@@ -7,8 +7,11 @@ knobs here are all about drawing:
 
 * the pendulum view's background grid is cached (see ``touch_view``), which removed
   ~85 % of its drawing time; the remaining knobs are:
-* **render resolution** of the pendulum view – the scene is painted into an image
-  at a reduced pixel ratio and scaled up (``native`` = no reduction, the default);
+* **drawing** – ``gpu`` (default: the pendulum view and the graphs are drawn by
+  OpenGL, see ``gpu.py``) or ``software`` (Qt's rasteriser);
+* **render resolution** of the pendulum view, software drawing only – the scene is
+  painted into an image at a reduced pixel ratio and scaled up (``native`` = no
+  reduction, the default);
 * **graph animation rate** – how often the scrolling graphs take in new samples
   (60, 30 or 15 per second; each step draws only the new samples);
 * **frame rate** – 60 or 30 fps; 30 halves the drawing work on slow devices;
@@ -22,7 +25,7 @@ the pendulum view and the graphs.
 from __future__ import annotations
 
 import time
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, fields, replace
 
 from PySide6.QtCore import QSettings
 
@@ -92,6 +95,34 @@ class PerformanceSettings:
         for name, value in asdict(self).items():
             settings.setValue(f"performance/{name}", value)
         settings.sync()
+
+    # ------------------------------------------------------------------ presets
+    @property
+    def preset(self) -> str:
+        """Key of the :data:`PRESETS` entry these settings match, or ``"custom"``."""
+        for key, (_label, _hint, values) in PRESETS.items():
+            if all(getattr(self, name) == value for name, value in values.items()) and \
+                    (self.drawing == "gpu" or self.render == "native"):
+                return key
+        return "custom"
+
+    def with_preset(self, key: str) -> "PerformanceSettings":
+        """Copy with the preset's drawing, antialiasing and rates (other fields kept)."""
+        if key not in PRESETS:
+            return replace(self)
+        return replace(self, render="native", **PRESETS[key][2])
+
+
+# One-tap combinations (Settings → Performance → Preset). The device/diagnostics fields
+# (CPU cores, overlay, log) are not part of a preset.
+PRESETS: dict[str, tuple[str, str, dict]] = {
+    "smooth": ("Smooth", "GPU drawing, smooth edges, 60 fps, graphs scroll 60 times a second",
+               {"drawing": "gpu", "antialias": True, "fps": 60, "graph_fps": 60}),
+    "balanced": ("Balanced", "GPU drawing without edge smoothing, graphs scroll 30 times a second",
+                 {"drawing": "gpu", "antialias": False, "fps": 60, "graph_fps": 30}),
+    "saver": ("Battery saver", "30 fps and graphs scrolling 15 times a second: about half the work",
+              {"drawing": "gpu", "antialias": False, "fps": 30, "graph_fps": 15}),
+}
 
 
 class Smoothed:
