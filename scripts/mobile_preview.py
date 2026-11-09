@@ -48,12 +48,13 @@ def main(out_dir: str) -> int:
 
     import pyqtgraph as pg
 
+    from pendulum_sim.mobile import theme
     from pendulum_sim.mobile.performance import PerformanceSettings
-    from pendulum_sim.mobile.touch_style import apply_touch_style
     from pendulum_sim.mobile.window import MobileWindow
     from pendulum_sim.simulation import scenario
 
-    apply_touch_style(app)
+    app.setStyle("Fusion")
+    theme.apply(app)
     pal = app.palette()
     pg.setConfigOptions(antialias=True, background=pal.base().color(), foreground=pal.text().color())
 
@@ -63,15 +64,19 @@ def main(out_dir: str) -> int:
             app.processEvents()
             time.sleep(0.005)
 
+    def shot(name: str) -> None:
+        settle(win, 0.3)
+        win.grab().save(str(out / f"{name}.png"))
+
     report = [f"device pixel ratio {app.devicePixelRatio():g}", ""]
     win = MobileWindow(scenario("triple_cart_lqr"))
     win.show()
     win.apply_performance(PerformanceSettings(render="native"))
 
+    # Simulate screen in every orientation
     for name, (w, h) in SIZES.items():
         win.resize(w, h)
-        win.set_panel_visible(name.startswith("tablet"))
-        win.tabs.setCurrentIndex(0)
+        win.navigate("simulate", remember=False)
         win.reset()
         win.start()
         settle(win)
@@ -79,18 +84,26 @@ def main(out_dir: str) -> int:
         settle(win, 0.6)
         win.grab().save(str(out / f"{name}.png"))
 
-    # Configuration pages on the tablet in landscape
-    win.resize(*SIZES["tablet_landscape"])
-    win.set_panel_visible(True)
-    for i, page in enumerate(("pendulum", "pid", "simulation")):
-        win.side.setCurrentIndex(i)
-        settle(win, 0.3)
-        win.grab().save(str(out / f"tablet_panel_{page}.png"))
-    win.side.setCurrentIndex(0)
+    # The other screens on the tablet (landscape) and on a phone (portrait)
+    win.telemetry.set_selection(["angle", "control", "cart_position"])
+    for size in ("tablet_landscape", "tablet_portrait", "phone_portrait"):
+        win.resize(*SIZES[size])
+        for key in ("graphs", "controller", "system", "settings"):
+            win.navigate(key, remember=False)
+            shot(f"{size}_{key}")
+    win.resize(*SIZES["phone_portrait"])
+    win.navigate("system", remember=False)
+    page = win.system_page
+    page.verticalScrollBar().setValue(page.verticalScrollBar().maximum() // 2)
+    shot("phone_portrait_system_scrolled")
+    page.verticalScrollBar().setValue(0)
+    win.navigate("simulate", remember=False)
+    win.telemetry.set_selection(["angle", "control"])
 
-    # Experiments page with two runs
+    # Experiments screen with two runs
     win.pause()
-    win.tabs.setCurrentIndex(1)
+    win.resize(*SIZES["tablet_landscape"])
+    win.navigate("experiments", remember=False)
     for _ in range(2):
         win.experiments.duration.setValue(3.0)
         win.experiments.run()
@@ -99,58 +112,52 @@ def main(out_dir: str) -> int:
         while len(win.experiments.results) == n and time.perf_counter() < deadline:
             app.processEvents()
             time.sleep(0.01)
-    settle(win, 0.3)
-    win.grab().save(str(out / "tablet_experiments.png"))
+    shot("tablet_landscape_experiments")
     win.resize(*SIZES["phone_portrait"])
-    win.set_panel_visible(False)
-    settle(win, 0.3)
-    win.grab().save(str(out / "phone_experiments.png"))
+    shot("phone_portrait_experiments")
 
-    # Auto-tune screen: running and result pages (small search so CI stays quick)
+    # Auto-tune screen: set-up, running and result pages (small search so CI stays quick)
     from pendulum_sim.mobile import autotune_screen
     from pendulum_sim.simulation.tuning import TuningSettings
 
     small = TuningSettings(horizon=2.5, samples=6, refine_rounds=1, refine_samples=4, resolution=0.08)
     autotune_screen.TuningSettings.preset = staticmethod(lambda name: TuningSettings(**small.__dict__))
-    win.tabs.setCurrentIndex(0)
+    win.navigate("simulate", remember=False)
     win.load(scenario("single_cart_full"))
     win.resize(*SIZES["tablet_landscape"])
-    win.controller_panel.robustTuneRequested.emit()
+    win.navigate("controller")
+    win.controller_page.autotune_btn.click()
     screen = win.autotune
     deadline = time.perf_counter() + 60
     while screen.push_test_s is None and time.perf_counter() < deadline:
         app.processEvents()
         time.sleep(0.02)
-    settle(win, 0.2)
-    win.grab().save(str(out / "tablet_autotune_setup.png"))
+    shot("tablet_landscape_autotune_setup")
     screen.start()
     deadline = time.perf_counter() + 120
     while (screen.last is None or screen.last.candidates_done < 3) and time.perf_counter() < deadline:
         app.processEvents()
         time.sleep(0.02)
-    settle(win, 0.3)
-    win.grab().save(str(out / "tablet_autotune_running.png"))
+    shot("tablet_landscape_autotune_running")
     deadline = time.perf_counter() + 300
     while screen.busy and time.perf_counter() < deadline:
         app.processEvents()
         time.sleep(0.02)
-    settle(win, 0.3)
-    win.grab().save(str(out / "tablet_autotune_result.png"))
+    shot("tablet_landscape_autotune_result")
     win.resize(*SIZES["phone_portrait"])
-    settle(win, 0.3)
-    win.grab().save(str(out / "phone_autotune_result.png"))
-    screen.close_screen()
+    shot("phone_portrait_autotune_result")
+    screen.discard_btn.click()
+    win.navigate("simulate", remember=False)
+    win._history.clear()
     win.load(scenario("triple_cart_lqr"))
 
     # ------------------------------------------------------------ benchmark
-    win.tabs.setCurrentIndex(0)
     win.resize(*SIZES["tablet_landscape"])
-    win.set_panel_visible(True)
+    win.navigate("simulate", remember=False)
     win.start()
     settle(win, 1.0)
     view_px = win.view.width(), win.view.height()
-    report.append(f"Tablet landscape 1440×900 logical, view {view_px[0]}×{view_px[1]} logical, "
-                  f"graphs {win.telemetry.width()}×{win.telemetry.height()} logical")
+    report.append(f"Tablet landscape 1440×900 logical, view {view_px[0]}×{view_px[1]} logical (Simulate)")
     report.append("Pendulum view: paint time inside paintEvent (excludes Qt's window flush)")
     report.append(f"{'setting':44s} {'ms':>7s}")
 
@@ -208,6 +215,8 @@ def main(out_dir: str) -> int:
     # Graphs: new QPainter strip charts vs the desktop pyqtgraph panel, same area and selection
     from pendulum_sim.ui.telemetry_panel import TelemetryPanel
 
+    win.navigate("graphs", remember=False)
+    settle(win, 0.5)
     graphs = win.telemetry
     gw, gh = graphs.width(), graphs.height()
     old = TelemetryPanel()
@@ -246,13 +255,40 @@ def main(out_dir: str) -> int:
         graphs.pen_mode = "fast"
         report.append(line)
         if n == 4:
-            win.grab().save(str(out / "tablet_four_graphs.png"))
+            win.grab().save(str(out / "tablet_landscape_four_graphs.png"))
     old.close()
     old.deleteLater()
     graphs.set_selection(["angle", "control"])
     settle(win, 0.3)
-    whole = timed(win.repaint, 10)
-    report.append(f"{'whole window repaint':34s} {whole:8.2f}")
+    # End to end: one 60 fps frame (physics + view + graphs at their refresh rate + flush)
+    report.append("Frames at 60 fps for 3 s (busy time per frame: physics + drawing + flush, ms)")
+    for key, sel in (("simulate", None), ("graphs", ["angle", "control"]),
+                     ("graphs", ["angle", "control", "cart_position"])):
+        win.navigate(key, remember=False)
+        if sel:
+            graphs.set_selection(sel)
+        win.reset()
+        win.start()
+        settle(win, 0.5)
+        win.timer.stop()
+        busy = []
+        win._last_frame = time.perf_counter()
+        for _ in range(180):
+            t0 = time.perf_counter()
+            win._on_frame()
+            app.processEvents()
+            dt = time.perf_counter() - t0
+            busy.append(dt * 1000.0)
+            time.sleep(max(0.0, 1 / 60 - dt))
+        win.timer.start()
+        busy.sort()
+        label = key + (f" ({len(sel)} graphs)" if sel else "")
+        report.append(f"  {label:24s} mean {sum(busy) / len(busy):6.2f}   p95 {busy[int(0.95 * len(busy))]:6.2f}"
+                      f"   max {busy[-1]:6.2f}")
+    report.append(f"{'whole window repaint, Graphs screen':34s} {timed(win.repaint, 10):8.2f}")
+    win.navigate("simulate", remember=False)
+    settle(win, 0.3)
+    report.append(f"{'whole window repaint, Simulate':34s} {timed(win.repaint, 10):8.2f}")
     sim = win.sim
     step = timed(sim.step, 2000)
     report.append(f"{'one physics step (triple pendulum)':34s} {step:8.3f}  "

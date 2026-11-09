@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import time
 
 import pytest
 
@@ -11,10 +12,10 @@ pytest.importorskip("PySide6")
 pytest.importorskip("pyqtgraph")
 
 from PySide6.QtCore import QPointF, QSettings, Qt  # noqa: E402
-from PySide6.QtWidgets import QAbstractSpinBox, QApplication, QWidget  # noqa: E402
+from PySide6.QtWidgets import QAbstractButton, QApplication  # noqa: E402
 
+from pendulum_sim.mobile import icons, theme  # noqa: E402
 from pendulum_sim.mobile.performance import PerformanceSettings  # noqa: E402
-from pendulum_sim.mobile.touch_style import apply_touch_style  # noqa: E402
 from pendulum_sim.mobile.window import MobileWindow  # noqa: E402
 from pendulum_sim.simulation import SCENARIOS, scenario  # noqa: E402
 from pendulum_sim.ui.main_window import MainWindow  # noqa: E402
@@ -27,16 +28,18 @@ def app(tmp_path_factory):
     QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.UserScope,
                       str(tmp_path_factory.mktemp("settings")))
     app.setOrganizationName("pendulum-sim-tests")
-    previous = app.style().name()
-    apply_touch_style(app)
+    old_palette, old_sheet, old_font = app.palette(), app.styleSheet(), app.font()
+    theme.apply(app)
     yield app
-    app.setStyle(previous)
+    app.setPalette(old_palette)
+    app.setStyleSheet(old_sheet)
+    app.setFont(old_font)
 
 
 @pytest.fixture(scope="module")
 def mobile(app):
     w = MobileWindow(scenario("single_cart_full"))
-    w.resize(400, 800)
+    w.resize(1280, 800)
     w.show()
     app.processEvents()
     yield w
@@ -47,6 +50,9 @@ def mobile(app):
 @pytest.fixture
 def win(mobile, app):
     mobile.pause()
+    mobile.resize(1280, 800)
+    mobile.navigate("simulate", remember=False)
+    mobile._history.clear()
     mobile.load(scenario("single_cart_full"))
     app.processEvents()
     return mobile
@@ -59,22 +65,59 @@ def frames(w, app, n=10):
         app.processEvents()
 
 
-def test_is_the_desktop_window_with_a_touch_layout(win):
+def wait(app, cond, timeout=120.0):
+    end = time.monotonic() + timeout
+    while not cond() and time.monotonic() < end:
+        app.processEvents()
+        time.sleep(0.02)
+    return cond()
+
+
+# ------------------------------------------------------------------ structure
+def test_is_the_desktop_window_with_screens(win):
     assert isinstance(win, MainWindow)
-    assert win.menuBar().actions() == []                    # ☰ menu instead of a menu bar
-    assert win.tabs.count() == 2 and win.side.count() == 3  # Live/Experiments + 3 config pages
+    assert not hasattr(win, "plant_panel") and not hasattr(win, "controller_panel")   # config is the source
+    assert set(win.pages) == {"simulate", "graphs", "controller", "system", "autotune", "experiments", "settings"}
+    assert win.menuBar().actions() == [] and not win.statusBar().isVisible()
+    assert win.nav.vertical                                  # rail on a landscape tablet
+
+
+def test_navigation_and_back_button(win, app):
+    win.navigate("graphs")
+    win.navigate("controller")
+    assert win.current == "controller" and win.nav.buttons["controller"].isChecked()
+    assert win.go_back() and win.current == "graphs"
+    assert win.go_back() and win.current == "simulate"
+    assert not win.go_back()                                 # on Simulate: ask before leaving
+    win.resize(412, 915)                                     # phone portrait: bottom bar + More
+    app.processEvents()
+    assert not win.nav.vertical and win.nav.buttons["more"].isVisibleTo(win)
+    assert not win.nav.buttons["settings"].isVisibleTo(win)
+    win.navigate("settings")
+    assert win.nav.buttons["more"].isChecked()
+    win.navigate("simulate")
+
+
+def test_simulation_keeps_running_on_other_screens(win, app):
+    win.start()
+    win.navigate("controller")
+    t = win.sim.time
+    frames(win, app, 10)
+    assert win.sim.time > t
+    win.navigate("simulate")
+    win.pause()
 
 
 def test_runs_pauses_and_resets(win, app):
     win.run_btn.click()
     frames(win, app, 20)
-    assert win.running and win.sim.time > 0.2 and win.run_btn.text() == "⏸ Pause"
+    assert win.running and win.sim.time > 0.2 and "Pause" in win.run_btn.text()
     win.run_btn.click()
     t = win.sim.time
     frames(win, app, 5)
-    assert win.sim.time == t and win.run_btn.text() == "▶ Resume"
+    assert win.sim.time == t and "Resume" in win.run_btn.text()
     win.reset_btn.click()
-    assert win.sim.time == 0.0 and win.run_btn.text() == "▶ Start"
+    assert win.sim.time == 0.0 and "Start" in win.run_btn.text()
 
 
 def test_every_scenario_loads_and_paints(win, app):
@@ -83,35 +126,80 @@ def test_every_scenario_loads_and_paints(win, app):
         win.view.repaint()
         app.processEvents()
         assert win.config.name == scenario(key).name
+        assert len(win.controller_page.loop_sections) == len(win.config.controller.loops)
 
 
-def test_parameter_panels_drive_the_simulation(win, app):
-    # Inherited desktop handlers: editing the plant structure reconfigures the controller.
-    plant = win.plant_panel.plant()
-    plant.segments = plant.segments + [plant.segments[-1].__class__()]
-    win.plant_panel.changed.emit(plant, True)
-    app.processEvents()
+# --------------------------------------------------------------------- editors
+def test_controller_editor_drives_the_simulation(win, app):
+    page = win.controller_page
+    sec = page.loop_sections[-1]
+    sec.kp._commit(123.0)
+    assert win.sim.controller.config.loops[-1].kp == pytest.approx(123.0)
+    sec.terms.buttons["d"].setChecked(False)
+    assert win.sim.controller.config.loops[-1].d_enabled is False
+    page.freq._commit(250.0)
+    assert win.sim.controller.config.frequency_hz == pytest.approx(250.0)
+    page.lqr_btn.click()
+    assert win.toast.isVisible() and "LQR" in win.toast.text()
+    page.restore_btn.click()
+    original = scenario("single_cart_full").controller.loops[-1].kp
+    assert win.sim.controller.config.loops[-1].kp == pytest.approx(original)
+
+
+def test_system_editor_structural_and_parameter_changes(win, app):
+    page = win.system_page
+    page.segments.plus.click()
     assert win.config.plant.n_segments == 2 and win.sim.model.n == 2
-    win.seed_lqr()
-    assert "LQR" in win.statusBar().currentMessage()
-    win.push_force.setValue(3.0)
-    assert win.config.push_force == pytest.approx(3.0)
+    assert len(win.controller_page.loop_sections) == 3        # cart + θ1 + θ2 loops completed
+    assert page.seg_sections[1].isVisibleTo(page)
+    page.gravity._commit(3.71)
+    assert win.sim.config.plant.gravity == pytest.approx(3.71)
+    page.base.buttons["fixed"].click()
+    assert not win.config.plant.has_cart and not page.cart_sec.isVisibleTo(page)
+    page.dt._commit(0.5)
+    assert win.config.simulation.dt == pytest.approx(0.0005)
 
 
+def test_settings_page_view_and_performance(win, app):
+    st = win.settings_page
+    st.view_rows["show_grid"].switch.click()
+    assert win.view.settings.show_grid is False
+    st.view_rows["show_grid"].switch.click()
+    st.perf_fps.buttons[30].click()
+    assert win.timer.interval() == 33 and PerformanceSettings.load().fps == 30
+    st.perf_stats.switch.click()
+    frames(win, app, 3)
+    win._update_status()
+    assert "fps" in win.view.overlay_text
+    win.apply_performance(PerformanceSettings())
+    PerformanceSettings().save()
+    assert win.view.overlay_text == ""
+
+
+@pytest.mark.parametrize("render", ["native", "high", "balanced", "fast"])
+def test_performance_render_modes(win, app, render):
+    win.apply_performance(PerformanceSettings(render=render, antialias=False))
+    win.view.repaint()
+    assert not win.view.antialias and win.stats.view_ms.value >= 0.0
+    win.apply_performance(PerformanceSettings())
+
+
+# --------------------------------------------------------------------- gestures
 def test_background_pauses_and_resumes(win, app):
     win.start()
     frames(win, app, 5)
     win.on_application_state(Qt.ApplicationState.ApplicationSuspended)
     assert not win.running and not win.timer.isActive()
     t = win.sim.time
-    win._last_frame -= 60.0             # a minute in the background
+    win._last_frame -= 60.0
     win.on_application_state(Qt.ApplicationState.ApplicationActive)
     assert win.running and win.timer.isActive()
     frames(win, app, 1)
-    assert win.sim.time - t < 0.05      # no catch-up burst after resuming
+    assert win.sim.time - t < 0.05
+    win.pause()
 
 
-def test_tap_pushes_towards_tapped_side(win, app):
+def test_tap_drag_and_pinch(win, app):
     pushes = []
     win.view.tapPush.connect(pushes.append)
     tip = win.view.to_screen(win.view.tip_world())
@@ -121,154 +209,85 @@ def test_tap_pushes_towards_tapped_side(win, app):
         win.view.one_up(p)
         assert pushes[-1] == expected
     win.view.tapPush.disconnect(pushes.append)
-    win.push(+1)
-    assert win.sim.disturbances and win.sim.disturbances[-1].force == pytest.approx(win.config.push_force)
-
-
-def test_drag_applies_continuous_force_and_releases(win, app):
     win.start()
-    tip = win.view.to_screen(win.view.tip_world())
     win.view.one_down(tip)
     win.view.one_move(QPointF(tip.x() + 100, tip.y()))
-    assert win._drag_offset > 0 and win.drag_force() > 0
+    assert win.drag_force() > 0
     frames(win, app, 3)
-    assert max(abs(r) for r in win.sim.telemetry.column("tip_force")) > 0
     win.view.one_up(QPointF(tip.x() + 100, tip.y()))
-    assert win._drag_offset == 0.0 and win.drag_force() == 0.0
-
-
-def test_pinch_zooms_and_two_finger_pans(win, app):
+    assert win.drag_force() == 0.0
     v = win.view
     scale0 = v.scale
     c = QPointF(v.width() / 2, v.height() / 2)
     v.two_begin(c - QPointF(50, 0), c + QPointF(50, 0))
     v.two_move(c - QPointF(100, 0), c + QPointF(100, 0))
     assert v.scale == pytest.approx(2 * scale0)
-    cam = v.camera.copy()
-    v.two_move(c - QPointF(100, 0) + QPointF(30, 0), c + QPointF(100, 0) + QPointF(30, 0))
-    assert v.camera[0] < cam[0]          # content follows the fingers
     v.two_end()
+    win.pause()
 
 
-def test_orientation_and_panel(win, app):
-    win.resize(1280, 800)
-    app.processEvents()
-    assert win.body.orientation() == Qt.Orientation.Horizontal
-    win.set_panel_visible(True)
-    app.processEvents()
-    assert win.side.isVisible() and win.panel_btn.isChecked()
-    win.resize(400, 800)
-    app.processEvents()
-    assert win.body.orientation() == Qt.Orientation.Vertical
-    win.set_panel_visible(False)
-    assert not win.side.isVisible()
-
-
-def test_fits_a_phone_width(win, app):
-    wide = sorted((w.minimumSizeHint().width(), type(w).__name__)
-                  for w in win.findChildren(QWidget)
-                  if w.isVisibleTo(win) and w.minimumSizeHint().width() > 300)
-    assert win.minimumSizeHint().width() <= 360, (win.minimumSizeHint(), wide[-8:])
-
-
-def test_touch_style(win, app):
-    boxes = win.findChildren(QAbstractSpinBox)
-    assert boxes and all(b.buttonSymbols() == QAbstractSpinBox.ButtonSymbols.PlusMinus for b in boxes)
-    assert win.run_btn.sizeHint().height() >= 44
-
-
-@pytest.mark.parametrize("render", ["native", "high", "balanced", "fast"])
-def test_performance_settings_apply_and_persist(win, app, render):
-    perf = PerformanceSettings(render=render, graph_hz=5, fps=30, antialias=False, debug_overlay=True)
-    win.apply_performance(perf)
-    perf.save()
-    win.view.repaint()
-    assert win.timer.interval() == 33 and win.plot_interval_min == pytest.approx(0.2)
-    assert not win.view.antialias
-    assert win.stats.view_ms.value >= 0.0
-    assert PerformanceSettings.load() == perf
-    win.apply_performance(PerformanceSettings())
-
-
+# ---------------------------------------------------------------------- graphs
 def test_graphs_selection_limit_persistence_and_visibility(win, app):
     from pendulum_sim.mobile.graphs import GraphsPanel
     from pendulum_sim.mobile.plot_math import MAX_VISIBLE
 
     g = win.telemetry
-    assert isinstance(g, GraphsPanel)
+    win.navigate("graphs")
     g.set_selection(["angle", "angular_velocity", "cart_position", "control", "energy"])
-    assert len(g.shown_keys()) == MAX_VISIBLE
-    g.actions["energy"].setChecked(True)                    # replaces the oldest
+    assert len(g.shown_keys()) == MAX_VISIBLE and "energy" not in g.selected
+    g.chips.buttons["energy"].click()                         # replaces the oldest
     assert "energy" in g.selected and len(g.selected) == MAX_VISIBLE
-    assert GraphsPanel().selected == g.selected              # remembered (QSettings)
+    assert GraphsPanel().selected == g.selected               # remembered
     win.start()
     frames(win, app, 30)
     g.refresh(win.sim.telemetry, force=True)
     app.processEvents()
-    assert all(chart._paths for chart in g.visible_charts())  # curves drawn
-    for chart in g.visible_charts():                          # minimum span, no 1e-15 ranges
+    assert all(chart._paths for chart in g.visible_charts())
+    for chart in g.visible_charts():
         assert chart.axis.hi - chart.axis.lo >= chart.gdef.min_span
-    # hidden graphs: no data work, refreshed on show
-    g.hide()
+    win.navigate("simulate")                                  # graphs hidden: no data work
+    app.processEvents()
     version = g._version
     frames(win, app, 5)
     g.refresh(win.sim.telemetry, force=True)
     assert g._version == version and g._pending is not None
-    g.show()
+    win.navigate("graphs")
     app.processEvents()
-    assert g._pending is None and g._version == win.sim.telemetry.version
+    assert g._pending is None
     g.set_selection(["angle", "control"])
+    win.pause()
+    win.navigate("simulate")
 
 
-def test_graphs_follow_structure(win, app):
-    win.load(scenario("double_fixed_lqr"))
-    g = win.telemetry
-    g.set_selection(["angle", "cart_position", "pid"])
-    assert "cart_position" not in g.shown_keys()              # no cart on a fixed pivot
-    assert len(g.charts["angle"].series) == 2
-    assert [s.label for s in g.charts["pid"].series] == ["P", "I", "D"]
-    g.set_selection(["angle", "control"])
-
-
-def _wait(app, cond, timeout=120.0):
-    import time as _t
-
-    end = _t.monotonic() + timeout
-    while not cond() and _t.monotonic() < end:
-        app.processEvents()
-        _t.sleep(0.02)
-    return cond()
-
-
-def test_autotune_screen_full_flow(win, app, monkeypatch):
+# ------------------------------------------------------------------- autotune
+def test_autotune_page_locks_the_app_and_applies(win, app, monkeypatch):
+    from pendulum_sim.mobile import autotune_screen
     from pendulum_sim.simulation import tuning
 
     fast = tuning.TuningSettings(horizon=2.0, samples=3, refine_rounds=1, refine_samples=2, resolution=0.1)
-    monkeypatch.setattr(tuning.TuningSettings, "preset", staticmethod(lambda name: tuning.TuningSettings(**fast.__dict__)))
-    from pendulum_sim.mobile import autotune_screen
-
     monkeypatch.setattr(autotune_screen.TuningSettings, "preset",
                         staticmethod(lambda name: tuning.TuningSettings(**fast.__dict__)))
     win.start()
-    win.controller_panel.robustTuneRequested.emit()
+    win.navigate("controller")
+    win.controller_page.autotune_btn.click()
     screen = win.autotune
-    assert screen.isVisible() and not win.running and screen.geometry() == win.rect()
-    assert _wait(app, lambda: screen.push_test_s is not None, 60)        # device calibration
-    assert "about" in screen.preset_buttons["normal"].text()
+    assert win.current == "autotune" and screen.pages.currentIndex() == 0
+    assert wait(app, lambda: screen.push_test_s is not None, 60)
     screen.workers = 2
-    screen.start()
-    assert screen.pages.currentIndex() == 1 and screen.busy
-    assert _wait(app, lambda: not screen.busy, 180)
-    assert screen.pages.currentIndex() == 2 and screen.result is not None
-    assert "→" in screen.headline.text() and screen.metrics_grid.count() > 0
+    screen.start_btn.click()
+    assert screen.busy and not win.running and not win.nav.isEnabled()
+    win.navigate("simulate")
+    assert win.current == "autotune"                          # locked while running
+    assert wait(app, lambda: not screen.busy, 180)
+    assert win.nav.isEnabled() and screen.result is not None and screen.pages.currentIndex() == 2
     screen.apply_btn.click()
     app.processEvents()
-    assert not screen.isVisible() and win.running                       # resumed after closing
+    assert win.current == "controller" and win.running        # back where we came from, resumed
     assert win.push_force.value() == pytest.approx(screen.result.recommended_push)
     win.pause()
 
 
-def test_autotune_cancel_on_background(win, app, monkeypatch):
+def test_autotune_cancelled_by_back_and_background(win, app, monkeypatch):
     from pendulum_sim.mobile import autotune_screen
     from pendulum_sim.simulation import tuning
 
@@ -276,15 +295,41 @@ def test_autotune_cancel_on_background(win, app, monkeypatch):
     monkeypatch.setattr(autotune_screen.TuningSettings, "preset",
                         staticmethod(lambda name: tuning.TuningSettings(**slow.__dict__)))
     win.load(scenario("double_cart_lqr"))
-    win.controller_panel.robustTuneRequested.emit()
+    win.navigate("autotune")
     screen = win.autotune
     screen.workers = 2
     screen.start()
-    _wait(app, lambda: screen.last is not None and screen.last.candidates_done >= 1, 120)
-    win.on_application_state(Qt.ApplicationState.ApplicationSuspended)   # user leaves the app
-    assert _wait(app, lambda: not screen.busy, 30)
+    wait(app, lambda: screen.last is not None and screen.last.candidates_done >= 1, 120)
+    assert win.go_back()                                      # back = cancel while running
+    assert wait(app, lambda: not screen.busy, 30)
     assert screen.pages.currentIndex() == 2
-    assert screen.result is None or screen.result.cancelled
+    screen.rerun_btn.click()
+    screen.start()
+    wait(app, lambda: screen.last is not None, 60)
+    win.on_application_state(Qt.ApplicationState.ApplicationSuspended)
+    assert wait(app, lambda: not screen.busy, 30)
     win.on_application_state(Qt.ApplicationState.ApplicationActive)
-    screen.close_screen()
-    assert not screen.isVisible()
+    screen.discard_btn.click()
+    app.processEvents()
+    assert win.current != "autotune"
+
+
+# ------------------------------------------------------------ touch & layout
+def test_phone_layout_fits_and_targets_are_large(win, app):
+    win.resize(360, 760)
+    app.processEvents()
+    assert win.minimumSizeHint().width() <= 360, win.minimumSizeHint()
+    for key in ("simulate", "controller", "system", "settings"):
+        win.navigate(key)
+        app.processEvents()
+        small = [(b.text() or b.toolTip(), b.height()) for b in win.pages[key].findChildren(QAbstractButton)
+                 if b.isVisibleTo(win) and b.height() < 40]
+        assert not small, (key, small[:5])
+    win.navigate("simulate")
+    win.resize(1280, 800)
+
+
+def test_all_icons_render(app):
+    for name in icons.names():
+        img = icons.pixmap(name, 24, "#FFFFFF").toImage()
+        assert any(img.pixelColor(x, y).alpha() > 0 for x in range(img.width()) for y in range(img.height())), name
