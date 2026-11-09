@@ -84,9 +84,6 @@ QSlider::sub-page:horizontal {{ height: 6px; border-radius: 3px; background: {AC
 QSlider::handle:horizontal {{ width: 28px; height: 28px; margin: -11px 0; border-radius: 14px;
     background: {TEXT}; }}
 QSlider {{ min-height: {TOUCH_PX}px; }}
-QProgressBar {{ min-height: 28px; border-radius: 14px; background: {SURFACE_2}; border: none;
-    text-align: center; color: {TEXT}; font-weight: 600; }}
-QProgressBar::chunk {{ border-radius: 14px; background: {ACCENT}; }}
 QScrollArea {{ background: transparent; border: none; }}
 QScrollBar:vertical {{ width: 4px; background: transparent; }}
 QScrollBar::handle:vertical {{ background: {OUTLINE}; border-radius: 2px; min-height: 40px; }}

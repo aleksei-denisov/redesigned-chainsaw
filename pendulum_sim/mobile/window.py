@@ -31,11 +31,13 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QDialog,
     QDialogButtonBox,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QMenu,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QScroller,
     QSplitter,
     QStackedWidget,
@@ -85,13 +87,18 @@ class Toast(QLabel):
 
     def show_text(self, text: str, ms: int) -> None:
         self.setText(text)
-        parent = self.parentWidget()
-        self.setFixedWidth(max(min(parent.width() - 32, 640), 120))
-        self.adjustSize()
-        self.move((parent.width() - self.width()) // 2, parent.height() - self.height() - 96)
+        self.place()
         self.show()
         self.raise_()
         self._timer.start(max(ms, 1500))
+
+    def place(self) -> None:
+        """Centred just above the controls of the current screen, never over them."""
+        parent = self.parentWidget()
+        self.setFixedWidth(max(min(parent.width() - 32, 640), 120))
+        self.adjustSize()
+        bottom = getattr(parent, "toast_bottom", lambda: parent.height() - 16)()
+        self.move((parent.width() - self.width()) // 2, max(8, bottom - self.height() - 12))
 
 
 class MobileWindow(MainWindow):
@@ -147,10 +154,15 @@ class MobileWindow(MainWindow):
         self.g_push_right_btn = tool_button("push_right", tip="Push the tip to the right")
         self.graphs_page = GraphsPage(self.view, self.telemetry, [self.g_run_btn, self.g_reset_btn,
                                                                   self.g_push_left_btn, self.g_push_right_btn])
-        experiments_page = QWidget()
-        el = QVBoxLayout(experiments_page)
+        inner = QWidget()
+        el = QVBoxLayout(inner)
         el.setContentsMargins(8, 8, 8, 8)
         el.addWidget(self.experiments)
+        experiments_page = QScrollArea()       # scrolls only when the screen is too low (phone landscape)
+        experiments_page.setWidgetResizable(True)
+        experiments_page.setFrameShape(QFrame.Shape.NoFrame)
+        experiments_page.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        experiments_page.setWidget(inner)
         self.pages: dict[str, QWidget] = {
             "simulate": self.simulate_page, "graphs": self.graphs_page, "controller": self.controller_page,
             "system": self.system_page, "autotune": self.autotune, "experiments": experiments_page,
@@ -329,6 +341,8 @@ class MobileWindow(MainWindow):
             self.simulate_page.attach()
         self.stack.setCurrentWidget(self.pages[key])
         self.nav.set_current(self._nav_key(key))
+        if self.toast.isVisible():
+            QTimer.singleShot(0, self.toast.place)
         if key == "autotune" and not self.autotune.busy and self.autotune.config is None:
             self.config.controller = self._ui_controller()
             self.autotune.open(self.config)
@@ -429,6 +443,13 @@ class MobileWindow(MainWindow):
     def seed_lqr(self) -> None:
         self._on_auto_tune(LQRWeights())
 
+    def toast_bottom(self) -> int:
+        """y (window coordinates) the toast must stay above: the current screen's control bar."""
+        bar = {"simulate": self.simulate_page.bar, "graphs": self.graphs_page.bar}.get(self.current)
+        if bar is not None and bar.isVisible():
+            return bar.mapTo(self, QPoint(0, 0)).y()
+        return self.stack.mapTo(self, QPoint(0, self.stack.height())).y()
+
     def show_message(self, text: str, timeout_ms: int = 4000) -> None:
         self.toast.show_text(text, min(timeout_ms, 6000))
 
@@ -468,6 +489,13 @@ class MobileWindow(MainWindow):
             self._arrange(rail)
             self.nav.set_current(self._nav_key(self.current))
         self.graphs_page.set_landscape(landscape)
+        compact = self.width() < 600                     # phones: icon-only secondary buttons
+        for b in (getattr(self, n, None) for n in ("reset_btn", "restart_btn", "scenario_btn")):
+            if b is not None:
+                b.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly if compact
+                                     else Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        if self.toast.isVisible():
+            QTimer.singleShot(0, self.toast.place)
         splitters = self.experiments.findChildren(QSplitter)
         if splitters:      # experiment controls beside the plots in landscape, above them in portrait
             splitters[0].setOrientation(Qt.Orientation.Horizontal if landscape else Qt.Orientation.Vertical)

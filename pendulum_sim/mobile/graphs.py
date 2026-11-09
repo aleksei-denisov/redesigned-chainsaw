@@ -329,21 +329,17 @@ class GraphsPanel(QWidget):
         lb.addWidget(self.loop_label)
         lb.addWidget(self.loop_combo)
         self.loop_box = loop_box
-        win_box = QWidget()
-        wb = QHBoxLayout(win_box)
-        wb.setContentsMargins(0, 0, 0, 0)
-        wb.addWidget(QLabel("Window"))
-        while self.window_row.flow.count():           # chips directly in the row
+        while self.window_row.flow.count():           # window chips directly in the header row
             self.window_row.flow.takeAt(0)
-        for b in self.window_row.buttons.values():
-            wb.addWidget(b)
         self.window_row.setParent(self)               # kept for its button group / signal
         self.window_row.hide()
         row_holder = QWidget()
-        row = FlowLayout(row_holder, spacing=12)
+        row = FlowLayout(row_holder, spacing=10)
         row.addWidget(self.count_label)
         row.addWidget(loop_box)
-        row.addWidget(win_box)
+        row.addWidget(QLabel("Window"))
+        for b in self.window_row.buttons.values():
+            row.addWidget(b)
         bar.addWidget(row_holder)
         self.stack = QVBoxLayout()
         self.stack.setContentsMargins(0, 0, 0, 0)

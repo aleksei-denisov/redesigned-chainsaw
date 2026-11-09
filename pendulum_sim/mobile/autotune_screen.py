@@ -28,7 +28,7 @@ import threading
 import time
 
 import numpy as np
-from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetricsF, QPainter, QPen
 from PySide6.QtWidgets import (
     QButtonGroup,
@@ -36,7 +36,6 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
-    QProgressBar,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -102,6 +101,61 @@ def gains_text(ctrl: ControllerConfig | None) -> str:
 
 
 # ------------------------------------------------------------------ widgets
+class ProgressBar(QWidget):
+    """Rounded progress bar with a centred percentage, painted directly.
+
+    Replaces ``QProgressBar``, whose ``setValue`` (synchronous repaint through the
+    style sheet + ``valueChanged`` emission) crashed PySide6 with Python 3.10 on
+    Windows while worker processes were shutting down. ``setValue`` here only stores
+    the value and schedules a normal repaint.
+    """
+
+    def __init__(self, maximum: int = 1000) -> None:
+        super().__init__()
+        self._max = max(1, maximum)
+        self._value = 0
+        self.setMinimumHeight(30)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+    def setValue(self, value: int) -> None:  # noqa: N802 - QProgressBar API
+        value = max(0, min(int(value), self._max))
+        if value != self._value:
+            self._value = value
+            self.update()
+
+    def value(self) -> int:
+        return self._value
+
+    def maximum(self) -> int:
+        return self._max
+
+    def text(self) -> str:
+        return f"{round(100 * self._value / self._max)} %"
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        return QSize(200, 30)
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        r = QRectF(self.rect())
+        radius = r.height() / 2
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor("#272C33"))
+        p.drawRoundedRect(r, radius, radius)
+        frac = self._value / self._max
+        if frac > 0:
+            chunk = QRectF(r.left(), r.top(), max(r.height(), r.width() * frac), r.height())
+            p.setBrush(ACCENT)
+            p.drawRoundedRect(chunk, radius, radius)
+        f = QFont(self.font())
+        f.setBold(True)
+        p.setFont(f)
+        p.setPen(self.palette().text().color())
+        p.drawText(r, Qt.AlignmentFlag.AlignCenter, self.text())
+        p.end()
+
+
 class Spinner(QWidget):
     """Small rotating arc – visible motion even between progress updates."""
 
@@ -140,9 +194,12 @@ class Spinner(QWidget):
 class MiniPlot(QWidget):
     """Compact line plot of a few (x, y, colour, label) series with readable ticks."""
 
-    def __init__(self, unit: str = "", min_height: int = 150) -> None:
+    def __init__(self, unit: str = "", min_height: int = 150, zero_based: bool = False,
+                 integer_x: bool = False) -> None:
         super().__init__()
         self.unit = unit
+        self.zero_based = zero_based        # y axis includes 0 (pushes: ties stay visibly flat)
+        self.integer_x = integer_x          # x ticks on whole numbers only (candidate index)
         self.series: list[tuple[np.ndarray, np.ndarray, QColor, str]] = []
         self.points = None
         self.x_label = ""
@@ -175,38 +232,46 @@ class MiniPlot(QWidget):
             return
         x0, x1 = float(xs.min()), float(xs.max())
         y0, y1 = float(ys.min()), float(ys.max())
+        if self.zero_based:
+            y0 = min(y0, 0.0)
         if y1 - y0 < 1e-9:
             y0, y1 = y0 - 0.5, y1 + 0.5
         pad = 0.08 * (y1 - y0)
-        y0, y1 = y0 - pad, y1 + pad
+        y0, y1 = (y0 if self.zero_based and y0 == 0.0 else y0 - pad), y1 + pad
         if x1 <= x0:
             x1 = x0 + 1
         yt, ystep = nice_ticks(y0, y1, 4)
         left = max(fm.horizontalAdvance(format_tick(v, ystep)) for v in yt) + 10 if yt else 30
-        top = fm.height() * 1.5
+        # header: unit, then the legend entries, wrapped onto further lines when narrow
+        head = f"{self.unit}  vs  {self.x_label}" if self.x_label else self.unit
+        entries = [("text", head, None)]
+        if self.points is not None and self.points[3]:
+            entries.append(("dot", self.points[3], self.points[2]))
+        entries += [("line", label, col) for _x, _y, col, label in self.series if label]
+        placed, lx, line = [], 4.0, 0
+        for kind, text, col in entries:
+            w = fm.horizontalAdvance(text) + (0 if kind == "text" else 18)
+            if lx > 4.0 and lx + w > self.width() - 4:
+                lx, line = 4.0, line + 1
+            placed.append((kind, text, col, lx, line))
+            lx += w + 16
+        top = fm.height() * (line + 1.5)
         r = QRectF(left, top, self.width() - left - 8, self.height() - top - fm.height() * 1.6)
         grid = QColor(fg)
         grid.setAlpha(40)
-        # header: unit + legend
-        p.setPen(fg)
-        head = f"{self.unit}  vs  {self.x_label}" if self.x_label else self.unit
-        p.drawText(QPointF(4, fm.ascent()), head)
-        lx = 4 + fm.horizontalAdvance(head) + 16
-        if self.points is not None and self.points[3]:
-            p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(self.points[2])
-            p.drawEllipse(QPointF(lx + 7, fm.ascent() * 0.65), 4, 4)
+        for kind, text, col, x, ln in placed:
+            base = fm.ascent() + ln * fm.height()
+            mid = base - fm.ascent() * 0.35
+            if kind == "dot":
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(col)
+                p.drawEllipse(QPointF(x + 7, mid), 4, 4)
+                p.setBrush(Qt.BrushStyle.NoBrush)
+            elif kind == "line":
+                p.setPen(QPen(col, 3))
+                p.drawLine(QPointF(x, mid), QPointF(x + 14, mid))
             p.setPen(fg)
-            p.drawText(QPointF(lx + 18, fm.ascent()), self.points[3])
-            lx += 18 + fm.horizontalAdvance(self.points[3]) + 14
-        for _x, _y, col, label in self.series:
-            if not label:
-                continue
-            p.setPen(QPen(col, 3))
-            p.drawLine(QPointF(lx, fm.ascent() * 0.65), QPointF(lx + 14, fm.ascent() * 0.65))
-            p.setPen(fg)
-            p.drawText(QPointF(lx + 18, fm.ascent()), label)
-            lx += 18 + fm.horizontalAdvance(label) + 14
+            p.drawText(QPointF(x + (0 if kind == "text" else 18), base), text)
         for v in yt:
             y = r.bottom() - (v - y0) / (y1 - y0) * r.height()
             p.setPen(QPen(grid, 1))
@@ -215,10 +280,15 @@ class MiniPlot(QWidget):
             p.drawText(QRectF(0, y - fm.height() / 2, left - 6, fm.height()),
                        Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, format_tick(v, ystep))
         xt, xstep = nice_ticks(x0, x1, 5)
+        if self.integer_x and xstep < 1:
+            xstep = 1.0
+            xt = [float(v) for v in range(math.ceil(x0), math.floor(x1) + 1)]
         for v in xt:
             x = r.left() + (v - x0) / (x1 - x0) * r.width()
             label = format_tick(v, xstep)
-            p.drawText(QPointF(x - fm.horizontalAdvance(label) / 2, r.bottom() + fm.ascent() + 3), label)
+            tw = fm.horizontalAdvance(label)
+            tx = min(max(x - tw / 2, 0.0), self.width() - tw - 2)      # never cut at the edges
+            p.drawText(QPointF(tx, r.bottom() + fm.ascent() + 3), label)
         p.setClipRect(r.adjusted(-6, -6, 6, 6))
         if self.points is not None:
             px_, py_, pcol, _ = self.points
@@ -365,6 +435,7 @@ class AutotuneScreen(QWidget):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         title = QLabel("Auto-tune for robustness")
+        title.setWordWrap(True)
         title.setFont(scaled_font(title.font(), 1.35, bold=True))
         title.setContentsMargins(16, 12, 16, 4)
         outer.addWidget(title)
@@ -462,10 +533,7 @@ class AutotuneScreen(QWidget):
         self.phase_label.setFont(scaled_font(self.phase_label.font(), 1.15))
         head.addWidget(self.phase_label, 1)
         v.addLayout(head)
-        self.bar = QProgressBar()
-        self.bar.setRange(0, 1000)
-        self.bar.setMinimumHeight(30)
-        self.bar.setFormat("%p %")
+        self.bar = ProgressBar(1000)
         v.addWidget(self.bar)
         self.time_label = QLabel()
         self.cores_running = QLabel()
@@ -481,7 +549,7 @@ class AutotuneScreen(QWidget):
         self.best_gains.setFont(mono)
         cl.addWidget(self.best_label)
         cl.addWidget(self.best_gains)
-        self.history_plot = MiniPlot("recoverable push [N]", 150)
+        self.history_plot = MiniPlot("recoverable push [N]", 150, zero_based=True, integer_x=True)
         cl.addWidget(self.history_plot)
         v.addWidget(card, 1)
         self.cancel_btn = _big_button("Cancel")
