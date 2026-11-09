@@ -175,7 +175,10 @@ class PerformanceTest(QObject):
 
         self._phase = -1
         self._restore()
-        report = "\n\n".join(self.blocks + [TIMER.report()])
+        from . import gpu
+
+        errors = f"GPU drawing errors: {gpu.ERRORS['count']}"
+        report = "\n\n".join(self.blocks + [errors, TIMER.report()])
         print(report, flush=True)
         self.finished.emit(report)
 

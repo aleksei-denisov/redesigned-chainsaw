@@ -29,8 +29,23 @@ except ImportError:  # pragma: no cover - module missing in a stripped Qt build
 DRAWING_MODES = [("software", "Software"), ("gpu", "GPU (OpenGL)")]
 
 
+ERRORS = {"count": 0}           # exceptions raised while drawing on the GPU (shown in the report)
+
+
 def available() -> bool:
-    return QOpenGLWidget is not None
+    """OpenGL widgets present and a platform that can create a GL context.
+
+    The ``offscreen``/``minimal`` platforms (tests, CI screenshots) get software drawing;
+    ``PENDULUM_FORCE_GPU=1`` overrides that.
+    """
+    if QOpenGLWidget is None:
+        return False
+    import os
+
+    from PySide6.QtGui import QGuiApplication
+
+    platform = QGuiApplication.platformName() if QGuiApplication.instance() is not None else ""
+    return platform not in ("offscreen", "minimal") or os.environ.get("PENDULUM_FORCE_GPU") == "1"
 
 
 if QOpenGLWidget is not None:
@@ -43,6 +58,8 @@ if QOpenGLWidget is not None:
             super().__init__(host)
             fmt = QSurfaceFormat()
             fmt.setSamples(max(0, samples))          # multisampling = antialiasing on the GPU
+            fmt.setDepthBufferSize(24)               # depth/stencil: what Qt's GL paint engine
+            fmt.setStencilBufferSize(8)              # uses for complex fills and clipping
             self.setFormat(fmt)
             self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
             self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -67,6 +84,12 @@ if QOpenGLWidget is not None:
                 return
             try:
                 self._paint(p)
+            except Exception:  # noqa: BLE001 - report once, keep the app running
+                ERRORS["count"] += 1
+                if ERRORS["count"] <= 3:
+                    import traceback
+
+                    print("GPU drawing error:\n" + traceback.format_exc(), flush=True)
             finally:
                 p.end()
 

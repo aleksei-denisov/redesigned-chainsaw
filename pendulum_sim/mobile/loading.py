@@ -149,12 +149,25 @@ class BusyOverlay(QWidget):
         self._font = QFont(self.font())
         self._font.setPixelSize(theme.BODY_PX + 2)
         self._font.setBold(True)
-        self._anim = None
+        self._depth = 0
+        self._hide_timer = QTimer(self)
+        self._hide_timer.setSingleShot(True)
+        self._hide_timer.timeout.connect(self.hide)
 
     def run(self, text: str, work) -> None:
+        """Cover, work, uncover – once. A nested request (work that itself loads) just works.
+
+        No fade: an opacity effect re-renders the cover on every animation frame, which
+        flickered over the GPU-drawn view and graphs. The cover stays until the new
+        screen has been drawn, then disappears in one step.
+        """
+        if self._depth:
+            work()
+            return
+        self._depth += 1
         parent = self.parentWidget()
         self.text = text
-        self.setGraphicsEffect(None)
+        self._hide_timer.stop()
         self.setGeometry(parent.rect())
         self.show()
         self.raise_()
@@ -163,27 +176,15 @@ class BusyOverlay(QWidget):
         try:
             work()
         finally:
-            QTimer.singleShot(60, self._fade)
-
-    def _fade(self) -> None:
-        effect = QGraphicsOpacityEffect(self)
-        self.setGraphicsEffect(effect)
-        anim = QPropertyAnimation(effect, b"opacity", self)
-        anim.setDuration(220)
-        anim.setStartValue(1.0)
-        anim.setEndValue(0.0)
-        anim.finished.connect(self.hide)
-        anim.start()
-        self._anim = anim
+            self._depth -= 1
+            self._hide_timer.start(150)        # after the new screen's first frames
 
     def mousePressEvent(self, event) -> None:  # noqa: N802 - swallow taps while covering
         event.accept()
 
     def paintEvent(self, event) -> None:  # noqa: N802
         p = QPainter(self)
-        bg = QColor(theme.BG)
-        bg.setAlpha(240)
-        p.fillRect(self.rect(), bg)
+        p.fillRect(self.rect(), QColor(theme.BG))   # opaque: nothing shows through
         p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         top = self.height() / 2 - 72
         p.drawPixmap(round((self.width() - 72) / 2), round(top), self._logo)

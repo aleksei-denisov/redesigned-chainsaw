@@ -127,6 +127,7 @@ keep the screen on.
 
 | Setting | Effect |
 |---|---|
+| Drawing | **GPU (OpenGL)** (default): the pendulum view and the graphs are drawn by the GPU (`QOpenGLWidget`, same QPainter code through Qt's OpenGL engine), which skips the per-frame copy of the whole window image (~10 ms on the Pad 6); *Software* is the fallback and is used automatically if no OpenGL context can be created |
 | Pendulum drawing resolution | *Native* (default) draws the pendulum at the screen's full pixel density; *High* (1.5×), *Balanced* (1.25×) and *Fast* (1×) draw fewer pixels and scale up |
 | Graph animation | how often the graphs scroll: 60 (default), 30 or 15 steps per second; each step draws only the new samples |
 | Frame rate | 60 or 30 fps |

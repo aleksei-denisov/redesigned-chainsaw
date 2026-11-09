@@ -42,7 +42,7 @@ class PerformanceSettings:
     debug_overlay: bool = False   # timing read-out on the pendulum view
     log_stats: bool = False       # one timing line per second on stdout (adb logcat)
     fast_cores: bool = True       # keep the simulation/UI thread on the performance cores
-    drawing: str = "software"     # "software" or "gpu" (pendulum view and graphs via OpenGL)
+    drawing: str = "gpu"          # "gpu" (pendulum view and graphs via OpenGL) or "software"
 
     @property
     def gpu_samples(self) -> int:

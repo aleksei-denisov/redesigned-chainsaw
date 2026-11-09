@@ -553,7 +553,7 @@ class SettingsPage(ScrollPage):
         perf = Section("Performance")
         self.perf_drawing = perf.add(ChoiceRow("Drawing", DRAWING_MODES,
                                                hint="GPU draws the pendulum and the graphs with OpenGL and skips "
-                                                    "copying the whole screen every frame; Software is the fallback"))
+                                                    "copying the whole screen every frame (default); Software if it misbehaves"))
         self.perf_render = perf.add(ChoiceRow("Pendulum drawing resolution",
                                               list(RENDER_LABELS.items()),
                                               hint="Native is sharpest; lower only if the view stutters"))

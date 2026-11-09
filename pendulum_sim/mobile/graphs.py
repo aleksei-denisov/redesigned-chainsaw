@@ -322,6 +322,7 @@ class StripChart(GPUHost, QWidget):
             lo, hi = (self.axis.lo, self.axis.hi) if not math.isnan(self.axis.lo) else \
                 (-0.5 * self.gdef.min_span, 0.5 * self.gdef.min_span)
             self._ensure_static(lo, hi)
+        p.fillRect(self.rect(), self.palette().base().color())
         p.drawImage(0, 0, self._static)               # unchanged image: GL keeps its texture
         if self.source is not None and self._trace_range is not None and self.series:
             t, columns = self.source()
@@ -334,7 +335,8 @@ class StripChart(GPUHost, QWidget):
                 cols = max(2, self._plot_px[2])        # ≤ 2 points per device-pixel column
                 sx = area.width() / self.window_s
                 sy = area.height() / (hi - lo)
-                p.setClipRect(area)
+                # no clip rectangle: at fractional pixel ratios Qt's GL engine clips with the
+                # stencil buffer; the curves stay inside the plot anyway (time window, y range)
                 for s in self.series:
                     ys = columns(s.column)[sl] * s.scale
                     if s.wrap:
@@ -350,7 +352,6 @@ class StripChart(GPUHost, QWidget):
                     for run in finite_runs(py, wrap=False) if not s.wrap else finite_runs(yd, wrap=True):
                         if run.stop - run.start >= 2:
                             p.drawPolyline(_polygon(px[run], py[run]))
-                p.setClipping(False)
         self.paint_ms = (time.perf_counter() - started) * 1000.0
         if self.stats is not None:
             self.stats.add_graph_paint(self.paint_ms)
