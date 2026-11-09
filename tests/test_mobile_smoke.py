@@ -342,7 +342,8 @@ def test_phone_layout_fits_and_targets_are_large(win, app, size):
     too_big = {k: (p.minimumSizeHint().width(), p.minimumSizeHint().height()) for k, p in win.pages.items()
                if p.minimumSizeHint().width() > size[0] or p.minimumSizeHint().height() > size[1] - 60}
     assert (win.width(), win.height()) == size, (win.minimumSizeHint(), too_big,
-                                                 {k: widest(win.pages[k], size[0] - 40) for k in too_big})
+                                                 {k: widest(win.pages[k], size[0] - 40) for k in too_big},
+                                                 win.telemetry.minimumSizeHint(), win.view.minimumSizeHint())
     for key in ("simulate", "graphs", "controller", "system", "settings", "autotune"):
         win.navigate(key)
         app.processEvents()
@@ -355,7 +356,7 @@ def test_phone_layout_fits_and_targets_are_large(win, app, size):
             if inner is not None and area.isVisibleTo(win):          # nothing clipped at the right
                 need = inner.layout().minimumSize().width() if inner.layout() else 0
                 assert need <= area.viewport().width() + 1, (key, need, area.viewport().width(),
-                                                             widest(inner, area.viewport().width() - 40))
+                                                             widest(inner, area.viewport().width() - 80))
     win.navigate("simulate")
     win.telemetry.set_selection(["angle", "control"])
     win.resize(1280, 800)

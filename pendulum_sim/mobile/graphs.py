@@ -97,7 +97,7 @@ class StripChart(QWidget):
         self._static_key = None
         self._plot = QRectF()
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.setMinimumHeight(72)
+        self.setMinimumHeight(56)
         self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
         f = QFont(self.font())
         if f.pixelSize() > 0:

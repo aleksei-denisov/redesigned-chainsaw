@@ -508,13 +508,15 @@ class SettingsPage(ScrollPage):
         super().__init__()
         files, fl = card()
         fl.addWidget(label("Configuration file", "title"))
-        row = QHBoxLayout()
+        holder = QWidget()
+        row = FlowLayout(holder, spacing=8)                 # wraps on phones
         self.open_btn = push_button("Open", "open")
         self.save_btn = push_button("Save", "save")
         self.save_as_btn = push_button("Save as…", "save")
         for b in (self.open_btn, self.save_btn, self.save_as_btn):
+            b.setMinimumWidth(110)
             row.addWidget(b)
-        fl.addLayout(row)
+        fl.addWidget(holder)
         self.add(files)
         self.open_btn.clicked.connect(self.openRequested)
         self.save_btn.clicked.connect(self.saveRequested)
