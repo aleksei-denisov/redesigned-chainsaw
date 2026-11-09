@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QByteArray, QEasingCurve, QPropertyAnimation, QRectF, Qt, QTimer
+from PySide6.QtCore import QByteArray, QEasingCurve, QEventLoop, QPropertyAnimation, QRectF, Qt, QTimer
 from PySide6.QtGui import QColor, QFont, QPainter, QPixmap
 from PySide6.QtWidgets import QApplication, QGraphicsOpacityEffect, QLabel, QWidget
 
@@ -159,7 +159,7 @@ class BusyOverlay(QWidget):
         self.show()
         self.raise_()
         self.repaint()                         # painted and shown before the work blocks
-        QApplication.processEvents(QApplication.ProcessEventsFlag.ExcludeUserInputEvents)
+        QApplication.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
         try:
             work()
         finally:
