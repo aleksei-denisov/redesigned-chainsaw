@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import copy
 import math
+import threading
 import time
 
 import numpy as np
@@ -253,10 +254,13 @@ def _big_button(text: str, primary: bool = False) -> QPushButton:
 
 # ------------------------------------------------------------------- worker
 class TuneWorker(QThread):
-    calibrated = Signal(float)
-    progressed = Signal(object)         # TuneProgress (copy)
-    finishedResult = Signal(object, object)   # TuningResult, (old, new) ExperimentResults or None
-    failed = Signal(str)
+    """Runs calibration or the search in a thread.
+
+    No Python objects cross the thread boundary through Qt signals: the worker keeps its
+    latest progress snapshot and its outcome in attributes guarded by a lock, the UI
+    polls them on a timer and reacts to Qt's own ``finished`` signal. (Queued signals
+    carrying Python objects crashed PySide6 with Python 3.10 on Windows.)
+    """
 
     def __init__(self, config: AppConfig, settings: TuningSettings | None, calibrate_only: bool = False) -> None:
         super().__init__()
@@ -264,20 +268,32 @@ class TuneWorker(QThread):
         self.settings = settings
         self.calibrate_only = calibrate_only
         self.token = CancelToken()
+        self._lock = threading.Lock()
+        self._latest: TuneProgress | None = None
+        self.calibration: float | None = None
+        self.outcome: tuple[TuningResult, object] | None = None
+        self.error: str | None = None
 
     def cancel(self) -> None:
         self.token.cancel()
 
+    def take_progress(self) -> TuneProgress | None:
+        with self._lock:
+            u, self._latest = self._latest, None
+        return u
+
     def run(self) -> None:
         try:
             if self.calibrate_only:
-                self.calibrated.emit(calibrate_push_test_seconds(self.config))
+                self.calibration = calibrate_push_test_seconds(self.config)
                 return
 
             def update(u: TuneProgress) -> bool:
                 snap = copy.copy(u)
                 snap.history = list(u.history)
-                self.progressed.emit(snap)
+                snap.candidate_pushes = list(u.candidate_pushes)
+                with self._lock:
+                    self._latest = snap
                 return not self.token.cancelled
 
             result = robust_tune(self.config, self.settings, on_update=update, cancel=self.token)
@@ -287,11 +303,11 @@ class TuneWorker(QThread):
                                                max(result.recommended_push, 1e-3), self.settings)
             except Exception:  # noqa: BLE001 - the summary works without the preview
                 comparison = None
-            self.finishedResult.emit(result, comparison)
+            self.outcome = (result, comparison)
         except TuningCancelled:
-            self.failed.emit("Cancelled before any candidate was finished – nothing to apply.")
+            self.error = "Cancelled before any candidate was finished – nothing to apply."
         except Exception as exc:  # noqa: BLE001 - shown on screen
-            self.failed.emit(str(exc))
+            self.error = str(exc)
 
 
 # ------------------------------------------------------------------- screen
@@ -327,7 +343,7 @@ class AutotuneScreen(QWidget):
         outer.addWidget(title)
         outer.addWidget(self.pages, 1)
         self._ticker = QTimer(self)
-        self._ticker.timeout.connect(self._tick)
+        self._ticker.timeout.connect(self._poll)
         self.hide()
 
     # ------------------------------------------------------------ pages
@@ -491,18 +507,17 @@ class AutotuneScreen(QWidget):
         self._update_estimates()
         if self.push_test_s is None and self.calibration is None and self.config is not None:
             self.calibration = TuneWorker(self.config, None, calibrate_only=True)
-            self.calibration.calibrated.connect(self._on_calibrated)
             self.calibration.finished.connect(self._calibration_done)
             self.calibration.start()
 
-    def _on_calibrated(self, seconds: float) -> None:
-        self.push_test_s = seconds
-        self._update_estimates()
-
     def _calibration_done(self) -> None:
-        if self.calibration is not None:
-            self.calibration.deleteLater()
-        self.calibration = None
+        worker, self.calibration = self.calibration, None
+        if worker is None:
+            return
+        if worker.calibration is not None:
+            self.push_test_s = worker.calibration
+            self._update_estimates()
+        worker.deleteLater()
 
     def _update_estimates(self) -> None:
         for key, name, desc in PRESETS:
@@ -533,9 +548,6 @@ class AutotuneScreen(QWidget):
         self.pages.setCurrentIndex(1)
         self._started = time.monotonic()
         self.worker = TuneWorker(self.config, settings)
-        self.worker.progressed.connect(self._on_progress)
-        self.worker.finishedResult.connect(self._on_result)
-        self.worker.failed.connect(self._on_failed)
         self.worker.finished.connect(self._worker_done)
         self.spinner.start()
         self._ticker.start(100)
@@ -570,6 +582,16 @@ class AutotuneScreen(QWidget):
             self.history_plot.set_series([(n, u.history, ACCENT, "best (ties → faster recovery)")],
                                          "candidate", points=(n, pushes, MUTED, "each candidate"))
         self._tick()
+
+    def _poll(self) -> None:
+        """UI-thread timer: pick up the worker's latest progress, animate bar and times."""
+        if self.worker is None:
+            return
+        u = self.worker.take_progress()
+        if u is not None:
+            self._on_progress(u)
+        else:
+            self._tick()
 
     def _tick(self) -> None:
         if self.worker is None:
@@ -650,12 +672,21 @@ class AutotuneScreen(QWidget):
         self.pages.setCurrentIndex(2)
 
     def _worker_done(self) -> None:
+        worker = self.worker
+        if worker is None:
+            return
+        last = worker.take_progress()
+        if last is not None:
+            self._on_progress(last)
         self.spinner.stop()
         self._ticker.stop()
-        self.apply_btn.setEnabled(self.result is not None)
-        if self.worker is not None:
-            self.worker.deleteLater()
         self.worker = None
+        if worker.outcome is not None:
+            self._on_result(*worker.outcome)
+        else:
+            self._on_failed(worker.error or "Auto-tune stopped.")
+        self.apply_btn.setEnabled(self.result is not None)
+        worker.deleteLater()
 
     def _apply(self) -> None:
         if self.result is not None:
