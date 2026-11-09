@@ -169,17 +169,41 @@ def main(out_dir: str) -> int:
                   "  ".join(f"{k[1:]} {v / n:.2f}" for k, v in parts.items()))
     report.append(f"{'repaint() incl. window flush, native+AA+cache':44s} {timed(win.view.repaint, 20):7.2f}")
     win.apply_performance(PerformanceSettings())
-    toggles = win.telemetry.toggles
-    shown = {k for k, a in toggles.items() if a.isChecked()}
-    for label, keys in (("graphs: mobile default " + "+".join(sorted(shown)), shown),
-                        ("graphs: angles+error+control+energy", {"angles", "error", "control", "energy"})):
-        for k, a in toggles.items():
-            a.setChecked(k in keys)
+    # Graphs: new QPainter strip charts vs the desktop pyqtgraph panel, same area and selection
+    from pendulum_sim.ui.telemetry_panel import TelemetryPanel
+
+    graphs = win.telemetry
+    gw, gh = graphs.width(), graphs.height()
+    old = TelemetryPanel()
+    old.resize(gw, gh)
+    old.configure(win.config.plant.n_segments, win.config.plant.has_cart,
+                  ["cart" if lp.signal == "cart" else f"θ{lp.signal[5:]}" for lp in win.config.controller.loops])
+    old.show()
+    selections = {
+        2: (["angle", "control"], {"angles", "control"}),
+        4: (["angle", "angular_velocity", "cart_position", "control"], {"angles", "velocities", "cart", "control"}),
+    }
+    report.append(f"Graphs in {gw}×{gh} logical: one refresh = update data + paint (ms)")
+    for n, (new_keys, old_keys) in selections.items():
+        graphs.set_selection(new_keys)
+        for k, a in old.toggles.items():
+            a.setChecked(k in old_keys)
         settle(win, 0.3)
-        ms = timed(lambda: (win.telemetry.refresh(win.sim.telemetry, force=True), win.telemetry.repaint()), 20)
-        report.append(f"{label:34s} {ms:8.2f}  per refresh")
-    for k, a in toggles.items():
-        a.setChecked(k in shown)
+
+        def new_refresh():
+            graphs.refresh(win.sim.telemetry, force=True)
+            graphs.repaint()
+
+        def old_refresh():
+            old.refresh(win.sim.telemetry, force=True)
+            old.repaint()
+
+        report.append(f"  {n} graphs: pyqtgraph (before) {timed(old_refresh, 15):7.2f}   "
+                      f"strip charts (now) {timed(new_refresh, 30):7.2f}")
+        if n == 4:
+            win.grab().save(str(out / "tablet_four_graphs.png"))
+    old.close()
+    graphs.set_selection(["angle", "control"])
     settle(win, 0.3)
     whole = timed(win.repaint, 10)
     report.append(f"{'whole window repaint':34s} {whole:8.2f}")

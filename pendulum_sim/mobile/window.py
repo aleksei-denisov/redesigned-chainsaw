@@ -46,6 +46,8 @@ from ..control import LQRWeights
 from ..simulation import AppConfig
 from ..ui.main_window import MainWindow
 from ..ui.widgets import hint, scrollable
+from . import cpu
+from .graphs import GraphsPanel
 from .performance import FRAME_RATES, GRAPH_RATES_HZ, FrameStats, PerformanceSettings, instrument_graphs
 from .touch_view import TouchPendulumView
 
@@ -54,7 +56,6 @@ DRAG_LIMIT = 4.0         # … clamped to ±DRAG_LIMIT · push force
 WIDE_BAR_PX = 900        # control bar in one row from this width on
 VIEW_SHARE = 0.6         # share of the live page height (portrait: width too) for the pendulum view
 EXPERIMENT_CONTROLS_PX = 440
-DEFAULT_GRAPHS = {"angles", "control"}   # more via the Graphs menu, as on the desktop
 SIDE_PANEL_MIN_SHORT_EDGE = 600   # show the configuration panel at start on tablets
 
 RENDER_LABELS = {"native": "Native (sharpest)", "high": "High (1.5×)",
@@ -102,14 +103,19 @@ class MobileWindow(MainWindow):
         view.dragOffset.connect(self._on_drag)
         return view
 
+    def _create_telemetry(self) -> GraphsPanel:
+        return GraphsPanel()
+
     def _build_layout(self) -> None:
         self.perf = PerformanceSettings.load()
         self.stats = FrameStats()
+        self.stats.on_second = self._on_stats_second
         self.view.stats = self.stats
-        instrument_graphs(self.stats)
-        for key, act in self.telemetry.toggles.items():
-            act.setChecked(key in DEFAULT_GRAPHS)
+        self.telemetry.stats = self.stats
+        instrument_graphs(self.stats)          # pyqtgraph plots on the experiment page
         self._last_drawn = None
+        self._cpu_text = ""
+        self._pinned: set[int] = set()
 
         self.live = QSplitter(Qt.Orientation.Vertical)
         self.live.setChildrenCollapsible(False)
@@ -174,7 +180,7 @@ class MobileWindow(MainWindow):
 
         self.act_clear_trails = QAction("Clear trajectories", self)
         self.act_clear_trails.triggered.connect(self.view.clear_trails)
-        self.act_stats = QAction("Show performance read-out", self)
+        self.act_stats = QAction("Debug: performance overlay", self)
         self.act_stats.setCheckable(True)
         self.act_stats.toggled.connect(self._on_stats_toggled)
         menu = QMenu(self)
@@ -253,13 +259,18 @@ class MobileWindow(MainWindow):
         self.perf_fps = QComboBox()
         for fps in FRAME_RATES:
             self.perf_fps.addItem(f"{fps} fps", fps)
-        self.perf_aa = QCheckBox("Antialiased pendulum view")
-        self.perf_stats = QCheckBox("Timing read-out in the status bar")
+        self.perf_aa = QCheckBox("Antialiasing (pendulum and graphs)")
+        self.perf_cores = QCheckBox("Use performance CPU cores")
+        self.perf_cores.setToolTip("Keeps the simulation on the fast cores of big.LITTLE processors")
+        self.perf_stats = QCheckBox("Debug: performance overlay on the view")
+        self.perf_log = QCheckBox("Debug: log timings (adb logcat)")
         form.addRow("View resolution", self.perf_render)
         form.addRow("Graph refresh", self.perf_graph)
         form.addRow("Frame rate", self.perf_fps)
         form.addRow("", self.perf_aa)
+        form.addRow("", self.perf_cores)
         form.addRow("", self.perf_stats)
+        form.addRow("", self.perf_log)
         form.addRow(hint("Drawing, not physics, limits the frame rate on high-resolution screens. "
                          "If the animation stutters, show fewer graphs or lower the graph refresh first. "
                          "Read-out: fps · longest frame gap · physics / view / graphs time per frame."))
@@ -267,8 +278,8 @@ class MobileWindow(MainWindow):
             combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
             combo.setMinimumContentsLength(6)
             combo.currentIndexChanged.connect(self._on_performance_edited)
-        self.perf_aa.toggled.connect(self._on_performance_edited)
-        self.perf_stats.toggled.connect(self._on_performance_edited)
+        for box in (self.perf_aa, self.perf_cores, self.perf_stats, self.perf_log):
+            box.toggled.connect(self._on_performance_edited)
         return box
 
     # ============================================================ performance
@@ -279,12 +290,13 @@ class MobileWindow(MainWindow):
             combo.blockSignals(True)
             combo.setCurrentIndex(max(0, combo.findData(value)))
             combo.blockSignals(False)
-        for box, value in ((self.perf_aa, perf.antialias), (self.perf_stats, perf.show_stats)):
+        for box, value in ((self.perf_aa, perf.antialias), (self.perf_stats, perf.debug_overlay),
+                           (self.perf_log, perf.log_stats), (self.perf_cores, perf.fast_cores)):
             box.blockSignals(True)
             box.setChecked(value)
             box.blockSignals(False)
         self.act_stats.blockSignals(True)
-        self.act_stats.setChecked(perf.show_stats)
+        self.act_stats.setChecked(perf.debug_overlay)
         self.act_stats.blockSignals(False)
         self.view.set_render_scale(perf.render_scale)
         self.view.antialias = perf.antialias
@@ -293,7 +305,13 @@ class MobileWindow(MainWindow):
         self.target_frame_s = 1.25 * perf.frame_interval_ms / 1000.0
         self._plot_interval = perf.plot_interval_s
         self.timer.setInterval(perf.frame_interval_ms)
-        if not perf.show_stats:
+        self.telemetry.antialias = perf.antialias
+        if perf.fast_cores and not self._pinned:
+            self._pinned = cpu.pin_to_performance_cores()
+        elif not perf.fast_cores and self._pinned:
+            cpu.unpin()
+            self._pinned = set()
+        if not perf.debug_overlay:
             self.view.overlay_text = ""
         self.view.update()
 
@@ -303,7 +321,9 @@ class MobileWindow(MainWindow):
             graph_hz=self.perf_graph.currentData(),
             fps=self.perf_fps.currentData(),
             antialias=self.perf_aa.isChecked(),
-            show_stats=self.perf_stats.isChecked(),
+            debug_overlay=self.perf_stats.isChecked(),
+            log_stats=self.perf_log.isChecked(),
+            fast_cores=self.perf_cores.isChecked(),
         )
         self.apply_performance(perf)
         perf.save()
@@ -421,10 +441,19 @@ class MobileWindow(MainWindow):
         self._last_drawn = key
         super()._update_view()
 
+    def timing_text(self) -> str:
+        s = self.stats
+        return (f"{s.fps:.0f} fps · max {s.worst_gap_ms:.0f} ms │ physics {self.stepper.physics_ms:.1f} · "
+                f"view {s.view_ms.value:.1f} · graphs {s.graph_ms:.1f} ms/frame │ {self._cpu_text}")
+
+    def _on_stats_second(self, _stats: FrameStats) -> None:
+        if not (self.perf.debug_overlay or self.perf.log_stats):
+            return
+        self._cpu_text = cpu.describe()     # one small /proc read per second, only in debug mode
+        if self.perf.log_stats:
+            print(f"pendulum-perf: {self.timing_text()} · running={self.running}", flush=True)
+
     def _update_status(self) -> None:
         super()._update_status()
-        if self.perf.show_stats:
-            s = self.stats
-            self.view.overlay_text = (
-                f"{s.fps:.0f} fps · max {s.worst_gap_ms:.0f} ms │ physics {self.stepper.physics_ms:.1f} · "
-                f"view {s.view_ms.value:.1f} · graphs {s.graph_ms:.1f} ms/frame")
+        if self.perf.debug_overlay:
+            self.view.overlay_text = self.timing_text()

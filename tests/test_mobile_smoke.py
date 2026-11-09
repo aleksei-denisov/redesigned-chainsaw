@@ -179,7 +179,7 @@ def test_touch_style(win, app):
 
 @pytest.mark.parametrize("render", ["native", "high", "balanced", "fast"])
 def test_performance_settings_apply_and_persist(win, app, render):
-    perf = PerformanceSettings(render=render, graph_hz=5, fps=30, antialias=False, show_stats=True)
+    perf = PerformanceSettings(render=render, graph_hz=5, fps=30, antialias=False, debug_overlay=True)
     win.apply_performance(perf)
     perf.save()
     win.view.repaint()
@@ -188,3 +188,43 @@ def test_performance_settings_apply_and_persist(win, app, render):
     assert win.stats.view_ms.value >= 0.0
     assert PerformanceSettings.load() == perf
     win.apply_performance(PerformanceSettings())
+
+
+def test_graphs_selection_limit_persistence_and_visibility(win, app):
+    from pendulum_sim.mobile.graphs import GraphsPanel
+    from pendulum_sim.mobile.plot_math import MAX_VISIBLE
+
+    g = win.telemetry
+    assert isinstance(g, GraphsPanel)
+    g.set_selection(["angle", "angular_velocity", "cart_position", "control", "energy"])
+    assert len(g.shown_keys()) == MAX_VISIBLE
+    g.actions["energy"].setChecked(True)                    # replaces the oldest
+    assert "energy" in g.selected and len(g.selected) == MAX_VISIBLE
+    assert GraphsPanel().selected == g.selected              # remembered (QSettings)
+    win.start()
+    frames(win, app, 30)
+    g.refresh(win.sim.telemetry, force=True)
+    app.processEvents()
+    assert all(chart._paths for chart in g.visible_charts())  # curves drawn
+    lo, hi = g.charts["angle"].axis.lo, g.charts["angle"].axis.hi
+    assert hi - lo >= 2.0                                     # minimum span, no 1e-15 ranges
+    # hidden graphs: no data work, refreshed on show
+    g.hide()
+    version = g._version
+    frames(win, app, 5)
+    g.refresh(win.sim.telemetry, force=True)
+    assert g._version == version and g._pending is not None
+    g.show()
+    app.processEvents()
+    assert g._pending is None and g._version == win.sim.telemetry.version
+    g.set_selection(["angle", "control"])
+
+
+def test_graphs_follow_structure(win, app):
+    win.load(scenario("double_fixed_lqr"))
+    g = win.telemetry
+    g.set_selection(["angle", "cart_position", "pid"])
+    assert "cart_position" not in g.shown_keys()              # no cart on a fixed pivot
+    assert len(g.charts["angle"].series) == 2
+    assert [s.label for s in g.charts["pid"].series] == ["P", "I", "D"]
+    g.set_selection(["angle", "control"])

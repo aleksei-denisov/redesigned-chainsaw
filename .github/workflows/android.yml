@@ -100,13 +100,15 @@ jobs:
       # A direct download link for phones/tablets (artifacts are zipped and need a GitHub login):
       # https://github.com/<owner>/<repo>/releases/download/android-latest/InvertedPendulumSimulator-debug.apk
       - name: Publish rolling pre-release
-        if: github.event_name == 'push' && (github.ref == 'refs/heads/android-apk' || github.ref == 'refs/heads/main')
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/android-apk' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/mobile-ux')
         env:
           GH_TOKEN: ${{ github.token }}
+          # mobile-ux (work in progress) gets its own link so android-latest stays stable
+          TAG: ${{ github.ref == 'refs/heads/mobile-ux' && 'android-mobile-ux' || 'android-latest' }}
         run: |
           cp dist/*.apk InvertedPendulumSimulator-debug.apk
-          gh release delete android-latest --yes --cleanup-tag || true
-          gh release create android-latest InvertedPendulumSimulator-debug.apk \
+          gh release delete "$TAG" --yes --cleanup-tag || true
+          gh release create "$TAG" InvertedPendulumSimulator-debug.apk \
             --prerelease --target "$GITHUB_SHA" \
             --title "Android debug APK (latest ${GITHUB_REF_NAME})" \
             --notes "Debug build of ${GITHUB_SHA::7} from ${GITHUB_REF_NAME}. Android 9+ (API 28), arm64-v8a. Open this page on the device, tap the .apk, allow installing from this source. See docs/ANDROID.md."

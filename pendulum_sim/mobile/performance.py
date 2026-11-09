@@ -38,7 +38,9 @@ class PerformanceSettings:
     graph_hz: int = 10
     fps: int = 60
     antialias: bool = True
-    show_stats: bool = True
+    debug_overlay: bool = False   # timing read-out on the pendulum view
+    log_stats: bool = False       # one timing line per second on stdout (adb logcat)
+    fast_cores: bool = True       # keep the simulation/UI thread on the performance cores
 
     @property
     def render_scale(self) -> float | None:
@@ -111,6 +113,8 @@ class FrameStats:
     def add_graph(self, ms: float) -> None:
         self._graph_accum += ms
 
+    on_second = None   # optional callback(self) once per measurement window
+
     def frame(self, gap_s: float) -> None:
         self._frames += 1
         self._worst_gap = max(self._worst_gap, gap_s)
@@ -122,6 +126,8 @@ class FrameStats:
             self.graph_ms = self._graph_accum / max(self._frames, 1)
             self._frames, self._worst_gap, self._graph_accum = 0, 0.0, 0.0
             self._window_start = now
+            if self.on_second is not None:
+                self.on_second(self)
 
 
 _graph_hooked = False

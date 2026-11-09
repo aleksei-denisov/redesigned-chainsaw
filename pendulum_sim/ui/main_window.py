@@ -91,10 +91,14 @@ class MainWindow(QMainWindow):
     def _create_view(self) -> PendulumView:
         return PendulumView()
 
+    def _create_telemetry(self):
+        """Live graphs; must offer configure / set_output_limit / refresh like TelemetryPanel."""
+        return TelemetryPanel()
+
     def _create_widgets(self) -> None:
         """Create the view, graphs, experiment page and configuration panels (no layout)."""
         self.view = self._create_view()
-        self.telemetry = TelemetryPanel()
+        self.telemetry = self._create_telemetry()
         self.experiments = ExperimentPanel(lambda: self.config)
         self.plant_panel = PlantPanel()
         self.controller_panel = ControllerPanel()
