@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 
 import numpy as np
+import pytest
 
 from pendulum_sim.simulation import Simulator, scenario
 from pendulum_sim.simulation.tuning import (
@@ -78,6 +79,7 @@ def test_round_nice():
     assert round_nice(0.0) == 0.0
 
 
+@pytest.mark.skipif(not hasattr(__import__("os"), "fork"), reason="no os.fork (Windows)")
 def test_android_uses_forked_workers(monkeypatch):
     from pendulum_sim.simulation import parallel
 

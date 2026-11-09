@@ -385,11 +385,11 @@ class GraphsPanel(QWidget):
         self._version = -1
 
     def set_selection(self, keys: list[str]) -> None:
+        self.selected = [k for k in keys if k in GRAPHS][:MAX_VISIBLE]
         for key, act in self.actions.items():
             act.blockSignals(True)
-            act.setChecked(key in keys)
+            act.setChecked(key in self.selected)
             act.blockSignals(False)
-        self.selected = [k for k in keys if k in GRAPHS][:MAX_VISIBLE]
         QSettings().setValue("graphs/selected", ",".join(self.selected))
         self._rebuild_charts()
         self._version = -1

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import os
 import threading
 import time
 
@@ -19,6 +20,8 @@ from pendulum_sim.simulation.tuning import (
     robust_tune,
 )
 
+needs_fork = pytest.mark.skipif(not hasattr(os, "fork"), reason="no os.fork (Windows); Android has it")
+
 FAST = TuningSettings(horizon=2.5, samples=5, refine_rounds=1, refine_samples=4, resolution=0.08, workers=1)
 
 
@@ -31,7 +34,7 @@ def _signature(result):
 
 
 @pytest.mark.parametrize("make_pool", [
-    lambda: parallel.ForkPool(3),
+    pytest.param(lambda: parallel.ForkPool(3), marks=needs_fork),
     lambda: parallel.ProcessPool(2),
 ], ids=["fork", "processes"])
 def test_parallel_result_equals_serial(make_pool):
@@ -73,7 +76,8 @@ def test_progress_reports_everything_a_progress_screen_needs():
     assert updates[-1][6] == FAST.candidates and result.evaluations == FAST.candidates
 
 
-@pytest.mark.parametrize("pool_factory", [lambda: parallel.SerialPool(), lambda: parallel.ForkPool(2)],
+@pytest.mark.parametrize("pool_factory", [lambda: parallel.SerialPool(),
+                                          pytest.param(lambda: parallel.ForkPool(2), marks=needs_fork)],
                          ids=["serial", "fork"])
 def test_cancel_is_prompt(pool_factory):
     s = TuningSettings(horizon=4.0, samples=30, refine_rounds=3, refine_samples=8, workers=1)
@@ -109,6 +113,7 @@ def test_estimate_is_positive_and_scales_with_workers():
         estimate_seconds(TuningSettings.preset("thorough"), 0.1, 1)
 
 
+@needs_fork
 def test_worker_errors_are_reported():
     with parallel.ForkPool(2) as pool:
         with pytest.raises(parallel.WorkerError, match="ZeroDivisionError"):
