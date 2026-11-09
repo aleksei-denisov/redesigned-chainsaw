@@ -57,7 +57,7 @@ EXPERIMENT_CONTROLS_PX = 440
 DEFAULT_GRAPHS = {"angles", "control"}   # more via the Graphs menu, as on the desktop
 SIDE_PANEL_MIN_SHORT_EDGE = 600   # show the configuration panel at start on tablets
 
-RENDER_LABELS = {"native": "Native (sharpest, slowest)", "high": "High (1.5×)",
+RENDER_LABELS = {"native": "Native (sharpest)", "high": "High (1.5×)",
                  "balanced": "Balanced (1.25×)", "fast": "Fast (1×)"}
 
 
@@ -261,7 +261,7 @@ class MobileWindow(MainWindow):
         form.addRow("", self.perf_aa)
         form.addRow("", self.perf_stats)
         form.addRow(hint("Drawing, not physics, limits the frame rate on high-resolution screens. "
-                         "Lower the view resolution or graph refresh if the animation stutters. "
+                         "If the animation stutters, show fewer graphs or lower the graph refresh first. "
                          "Read-out: fps · longest frame gap · physics / view / graphs time per frame."))
         for combo in (self.perf_render, self.perf_graph, self.perf_fps):
             combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)

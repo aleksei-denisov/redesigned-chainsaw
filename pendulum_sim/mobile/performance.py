@@ -5,8 +5,10 @@ software rasteriser paint four times as many pixels as a desktop window of the
 same logical size. Physics is cheap in comparison (≈0.05 ms per step), so the
 knobs here are all about drawing:
 
+* the pendulum view's background grid is cached (see ``touch_view``), which removed
+  ~85 % of its drawing time; the remaining knobs are:
 * **render resolution** of the pendulum view – the scene is painted into an image
-  at a reduced pixel ratio and scaled up (``native`` = no reduction);
+  at a reduced pixel ratio and scaled up (``native`` = no reduction, the default);
 * **graph refresh rate** – the upper limit; the window still lowers it
   automatically when frames get slow (same logic as the desktop);
 * **frame rate** – 60 or 30 fps; 30 halves the drawing work on slow devices;
@@ -32,7 +34,7 @@ FRAME_RATES = [60, 30]
 
 @dataclass
 class PerformanceSettings:
-    render: str = "balanced"
+    render: str = "native"
     graph_hz: int = 10
     fps: int = 60
     antialias: bool = True

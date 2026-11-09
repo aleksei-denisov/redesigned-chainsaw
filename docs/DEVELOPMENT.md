@@ -19,10 +19,14 @@
    └───────────────────────────────────┘   └─────────────────────────────────────┘
 ```
 
-`pendulum_sim/mobile` is a second, touch-first front end over the same lower layers (used by
-the Android app, see [ANDROID.md](ANDROID.md)). It reuses `PendulumView` (subclassed only for
-touch input) and `TelemetryPanel` from `ui/`, and paces the simulator with the Qt-free
-`simulation/realtime.py`. It must not contain simulation or control logic.
+`pendulum_sim/mobile` is the touch-first front end of the Android app (see
+[ANDROID.md](ANDROID.md)). `MobileWindow` subclasses the desktop `MainWindow`, whose
+constructor is split into builder methods (`_create_view`, `_create_widgets`, `_build_layout`,
+`_create_actions`, `_build_toolbar_and_menu`, `_build_status_bar`, `_connect_signals`); the
+mobile class overrides only those and inherits every handler. Both windows pace the simulator
+with the Qt-free `simulation/realtime.py`. File dialogs go through `ui/file_io.py`, which also
+accepts Android `content://` URIs. Put new behaviour in `MainWindow` (or below) so that both
+front ends get it; `mobile/` must not contain simulation or control logic.
 
 - `physics`, `control` and `simulation` never import Qt; they are fully tested headless.
 - SciPy is optional at run time: `control/riccati.py` uses SciPy's CARE solver when installed
@@ -72,7 +76,7 @@ python -m pytest tests/test_physics.py tests/test_controller.py tests/test_simul
 | `tests/test_simulation.py` | engine determinism, live updates, disturbances, noise, telemetry, JSON round trip, example files, metrics, experiments |
 | `tests/test_riccati.py` | NumPy CARE solver against SciPy (all plants, random systems), LQR gains without SciPy |
 | `tests/test_realtime.py` | fixed-timestep pacing: frame-rate independence, speed, stall clamp, compute budget |
-| `tests/test_mobile_smoke.py` | offscreen mobile UI: run/pause/reset, scenarios, background pause/resume, tap/drag/pinch, LQR, orientation, phone width |
+| `tests/test_mobile_smoke.py` | offscreen mobile UI: inherits the desktop window, run/pause/reset, scenarios, parameter panels, background pause/resume, tap/drag/pinch, orientation/panel, phone width, touch style, performance settings |
 | `tests/test_gui_smoke.py` | offscreen GUI: window, painting every scenario, live edits, structural change, LQR seeding, experiments, config save |
 
 ## Continuous integration
@@ -89,6 +93,9 @@ python -m pytest tests/test_physics.py tests/test_controller.py tests/test_simul
 4. The `start.sh` / `start.bat` launchers.
 5. PyInstaller builds for Windows and macOS, smoke-tested, uploaded as artifacts – only on
    `main` and when the workflow is started manually (GitHub → Actions → CI → Run workflow).
+
+The CI job *Mobile UI preview* renders the mobile interface at a 2× pixel ratio and times the
+drawing (`scripts/mobile_preview.py`); results go to the `mobile-preview` pre-release.
 
 `.github/workflows/android.yml` builds the debug APK on every push (artifact
 `inverted-pendulum-debug-apk`) and a signed AAB on `v*` tags – see [ANDROID.md](ANDROID.md).

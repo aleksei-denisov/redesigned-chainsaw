@@ -81,16 +81,25 @@ configuration panel is open at start, on phones it is hidden.
 
 | Setting | Effect |
 |---|---|
-| View resolution | *Native* draws the pendulum at the screen's full pixel density; *High* (1.5×), *Balanced* (1.25×) and *Fast* (1×) draw fewer pixels and scale up. *Fast* on a 2× screen is a plain pixel doubling and the cheapest. |
+| View resolution | *Native* (default) draws the pendulum at the screen's full pixel density; *High* (1.5×), *Balanced* (1.25×) and *Fast* (1×) draw fewer pixels and scale up – rarely needed since the grid cache (below) |
 | Graph refresh | upper limit (default 10 Hz); lowered automatically when frames get slow |
 | Frame rate | 60 or 30 fps |
-| Antialiased pendulum view | smooth edges; off is noticeably cheaper |
+| Antialiased pendulum view | smooth edges (default on) |
 | Timing read-out | top-right of the view: `fps · max <longest frame gap> │ physics · view · graphs` in ms per frame |
 
-The physics takes about 0.05 ms per step on a desktop CPU (≈1 ms per 60 Hz frame) and is not
-the bottleneck; drawing a 2880×1800 screen in software is. If the animation stutters, read the
-timing read-out: a large *graphs* value → fewer graphs or a lower graph refresh; a large *view*
-value → lower view resolution or no antialiasing.
+Measured offscreen at the Xiaomi Pad 6 geometry (1440×900 logical, pixel ratio 2) on a CI runner
+(`scripts/mobile_preview.py`; a tablet is slower, the ratios hold):
+
+| Per frame | before | now |
+|---|---|---|
+| pendulum view, native + antialiasing | 25.5 ms | **3.0 ms** – background grid cached as an image, redrawn only on pan/zoom |
+| graphs (per refresh, 10 Hz) | 5.2 ms (4 graphs) | 4.1 ms (2 graphs by default; others in *Graphs ▾*) |
+| view while paused | redrawn 60×/s | redrawn only when something changes |
+| physics, triple pendulum | ≈0.8 ms (16 steps × 0.05 ms) | unchanged |
+
+If the animation still stutters, read the timing read-out: a large *graphs* value → fewer graphs or a
+lower graph refresh; a large *view* value → lower view resolution or no antialiasing; a large *max*
+with small parts → the system (e.g. a background app or thermal throttling) delayed the frame.
 
 The mobile interface can be previewed on the desktop (mouse = one finger, wheel = zoom):
 
