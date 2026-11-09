@@ -142,6 +142,22 @@ def main(out_dir: str) -> int:
     page.verticalScrollBar().setValue(page.verticalScrollBar().maximum() // 2)
     shot("phone_portrait_system_scrolled")
     page.verticalScrollBar().setValue(0)
+    # Settings → Performance, with GPU (default) and with Software drawing (resolution row)
+    from pendulum_sim.mobile.performance import PerformanceSettings
+
+    st = win.settings_page
+    for size in ("tablet_landscape", "phone_portrait"):
+        win.resize(*SIZES[size])
+        win.navigate("settings", remember=False)
+        for drawing in ("gpu", "software"):
+            win.apply_performance(PerformanceSettings(drawing=drawing))
+            app.processEvents()
+            st.ensureWidgetVisible(st.perf_preset, 0, 0)
+            bar = st.verticalScrollBar()
+            bar.setValue(st.perf_preset.mapTo(st.widget(), st.perf_preset.rect().topLeft()).y() - 60)
+            shot(f"{size}_settings_performance_{drawing}")
+        st.verticalScrollBar().setValue(0)
+    win.apply_performance(PerformanceSettings())
     win.navigate("simulate", remember=False)
     win.telemetry.set_selection(["angle", "control"])
 
