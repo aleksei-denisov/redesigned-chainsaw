@@ -663,6 +663,11 @@ def test_loading_screen_then_main_window_in_one_top_level(app):
     new = [t for t in QApplication.topLevelWidgets() if t.isVisible() and id(t) not in before]
     assert new == [shell], [type(t).__name__ for t in new]
     assert w.isVisible() and not w.isWindow() and w.window() is shell and w.size() == shell.size()
+    assert w.timer.isActive(), "frame timer must run in the embedded window"
+    w.start()
+    t0 = w.sim.time
+    assert wait(app, lambda: w.sim.time > t0, 5), "simulation must advance"
+    w.pause()
     w.navigate("settings")
     shell.setFocus()                                     # no focus widget inside: Back reaches the shell
     QApplication.sendEvent(shell, QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Back, Qt.KeyboardModifier.NoModifier))

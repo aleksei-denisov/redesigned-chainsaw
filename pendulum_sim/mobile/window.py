@@ -702,6 +702,16 @@ class MobileWindow(MainWindow):
             self._drag_offset = 0.0
             self.timer.stop()
 
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        # Embedded in the start-up shell the window may miss the "application active"
+        # change (it happened while the loading screen was shown): run the frame timer.
+        app = QGuiApplication.instance()
+        if app is not None and app.applicationState() == Qt.ApplicationState.ApplicationActive \
+                and not self.timer.isActive():
+            self._last_frame = time.perf_counter()
+            self.timer.start()
+
     def closeEvent(self, event) -> None:  # noqa: N802
         if self._tune_busy():
             self.autotune.cancel()

@@ -144,6 +144,7 @@ class AppShell(QWidget):
         self.content = window
         self.show_page(window)
         window.setFocus()
+        self.activateWindow()                  # keep the application "active" (frame timer runs)
         for i in reversed(range(self.stack.count())):
             page = self.stack.widget(i)
             if page is not window:

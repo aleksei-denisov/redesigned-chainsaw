@@ -174,7 +174,9 @@ def _smoke_test(app, window, seconds: float) -> int:
             print(f"mobile smoke test: live t={window.sim.time:.2f}s after "
                   f"{time.perf_counter() - started:.1f}s wall, angles="
                   f"{[round(float(a), 4) for a in window.sim.angles]}, experiment '{res.name}' "
-                  f"rmse={res.metrics.rmse:.3f} deg, {window.stats.fps:.0f} fps", flush=True)
+                  f"rmse={res.metrics.rmse:.3f} deg, {window.stats.fps:.0f} fps "
+                  f"(frame timer {'on' if window.timer.isActive() else 'OFF'}, "
+                  f"application state {app.applicationState().name})", flush=True)
             result["code"] = 0 if window.sim.time > 0 else 1
             app.quit()
         elif time.perf_counter() - started > seconds + 120:
