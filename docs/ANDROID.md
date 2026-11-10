@@ -86,10 +86,19 @@ Tablets in landscape show a navigation **rail** on the left with all screens; ph
 portrait show a **bottom bar** (Simulate, Graphs, Controller, System, *More* → Auto-tune,
 Experiments, Settings). The simulation keeps running on every screen; only what is visible
 is drawn. **Android back** returns to the previously visited screen, cancels a running
-auto-tune, and on *Simulate* asks before leaving the app. (python-for-android's Qt activity
-swallowed every first key press with a *"Click again to close the app"* toast;
-`scripts/build_android.py` patches its `onKeyDown` so keys reach the app, checked against a
-copy of the real file in `tests/test_build_android_splash.py`.)
+auto-tune, and on *Simulate* asks before leaving the app. Back is handled just after the key
+event (Android's UI thread waits while the key is delivered; a dialog opened inside it froze the
+app). Questions and messages (*Leave the simulator?*, errors, the performance report, the push
+force) are in-window dialogs (`dialogs.py`) – no `QMessageBox`/`QDialog` windows.
+
+`scripts/build_android.py` patches python-for-android's Qt activity (`PythonActivity.java`),
+checked against a copy of the real file in `tests/test_build_android_splash.py`:
+
+- `onKeyDown` swallowed every first key press with a *"Click again to close the app"* toast –
+  keys now go straight to Qt;
+- `onActivityResult` / `onNewIntent` did not call `super`, so Qt never received the storage
+  picker's answer: after *Save… / Open…* a modal file dialog waited forever and no button
+  reacted – they now pass the result on to Qt.
 
 Loading a scenario or a file, or adding/removing segments, shows a *Loading …* cover while
 the screens are rebuilt. It is put on screen for ~0.1 s before the work starts, so the
@@ -239,8 +248,9 @@ the frame.
 
 Tapping a graph on *Graphs* opens it over the whole window (`pendulum_sim/mobile/plot_view.py`,
 `GraphExplorer` around a `PlotView`). It shows everything still in the live recording (the
-last 30–60 s) and follows the running simulation (*Live*) until the plot is touched; then it
-freezes so the data stay put while exploring:
+last 30–60 s). With **Live: on** it follows the running simulation: the right edge stays at the
+newest sample, and pinching changes the time span and the value range, which are kept while it
+follows. **Live: off** (only the button switches) freezes the data for free panning and zooming:
 
 | Gesture | Effect |
 |---|---|
@@ -248,7 +258,7 @@ freezes so the data stay put while exploring:
 | one-finger drag | pan |
 | tap | read-out: cursor line with the value of every curve at that time |
 | double tap / *Fit* | all data |
-| *Live* | follow the simulation again (last *time window* seconds) |
+| *Live: on / off* | follow the simulation / freeze the data; *Fit* while live = last *time window* seconds, values fitted |
 | *Image* / *Data* | save the graph as PNG / its curves as CSV (time + one column per curve) |
 | *Close* / Android back | back to *Graphs* |
 

@@ -35,7 +35,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QMessageBox,
     QSizePolicy,
     QSlider,
     QVBoxLayout,
@@ -68,6 +67,7 @@ from .controls import (
     scroll_area,
     tool_button,
 )
+from .dialogs import alert
 from .plot_math import Curve
 from .plot_view import PlotView, save_plot_data, slug
 from .touch_view import TouchPendulumView
@@ -580,7 +580,7 @@ class ExperimentsPage(QWidget):
             cfg = self.build_config()
             cfg.validate()
         except ValueError as exc:
-            QMessageBox.warning(self, "Invalid configuration", str(exc))
+            alert(self, "Invalid configuration", str(exc))
             return
         name = self.name.text().strip() or f"Run {self._counter}"
         self._counter += 1
@@ -609,7 +609,7 @@ class ExperimentsPage(QWidget):
         self.run_btn.setEnabled(True)
         self.cancel_btn.setEnabled(False)
         if w.error is not None:
-            QMessageBox.critical(self, "Experiment failed", w.error)
+            alert(self, "Experiment failed", w.error)
             return
         r = w.result
         if r is None:
@@ -771,7 +771,7 @@ class ExperimentsPage(QWidget):
         try:
             fio.write_with(path, lambda local: save_experiments(self.results, local))
         except OSError as exc:
-            QMessageBox.critical(self, "Save failed", str(exc))
+            alert(self, "Save failed", str(exc))
             return
         self.statusMessage.emit(f"Saved {len(self.results)} runs to {fio.display_name(path)}")
 
@@ -783,7 +783,7 @@ class ExperimentsPage(QWidget):
         try:
             loaded = fio.read_with(path, load_experiments)
         except (OSError, ValueError) as exc:
-            QMessageBox.critical(self, "Load failed", str(exc))
+            alert(self, "Load failed", str(exc))
             return
         self.results.extend(loaded)
         self._rebuild()
@@ -800,7 +800,7 @@ class ExperimentsPage(QWidget):
         try:
             fio.write_with(path, lambda local: export_result_csv(r, local))
         except OSError as exc:
-            QMessageBox.critical(self, "Export failed", str(exc))
+            alert(self, "Export failed", str(exc))
             return
         self.statusMessage.emit(f"Time series of '{r.name}' saved to {fio.display_name(path)}")
 
@@ -842,7 +842,7 @@ class ExperimentsPage(QWidget):
         try:
             fio.write_with(path, write)
         except OSError as exc:
-            QMessageBox.critical(self, "Save failed", str(exc))
+            alert(self, "Save failed", str(exc))
             return
         self.statusMessage.emit(f"Graphs saved to {fio.display_name(path)}")
 
@@ -862,7 +862,7 @@ class ExperimentsPage(QWidget):
         try:
             name = save_plot_data(self, curves, "experiment_graphs")
         except (OSError, ValueError) as exc:
-            QMessageBox.critical(self, "Save failed", str(exc))
+            alert(self, "Save failed", str(exc))
             return
         if name:
             self.statusMessage.emit(f"Graph data saved to {name}")

@@ -31,12 +31,9 @@ import numpy as np
 from PySide6.QtCore import QEvent, QPoint, QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QGuiApplication
 from PySide6.QtWidgets import (
-    QDialog,
-    QDialogButtonBox,
     QHBoxLayout,
     QLabel,
     QMenu,
-    QMessageBox,
     QPushButton,
     QSizePolicy,
     QStackedWidget,
@@ -50,6 +47,7 @@ from ..simulation import AppConfig
 from ..ui.main_window import SPEEDS, MainWindow
 from . import cpu, startup, theme
 from .controls import NumberRow, scroll_area, tool_button
+from .dialogs import OK, OverlayDialog, alert, ask, dialog_host, top_dialog
 from .graphs import GraphsPanel
 from .icons import icon
 from .loading import BusyOverlay
@@ -84,14 +82,11 @@ NAV_ITEMS = [("simulate", "Simulate", "simulate"), ("graphs", "Graphs", "graphs"
              ("settings", "Settings", "settings"), ("more", "More", "more")]
 
 
-class ReportDialog(QDialog):
-    """Monospace report with Copy and Close (fills most of the window)."""
+class ReportDialog(OverlayDialog):
+    """Monospace report with Copy and Close over most of the window (in-window dialog)."""
 
     def __init__(self, title: str, text: str, parent: QWidget) -> None:
-        super().__init__(parent)
-        self.setWindowTitle(title)
         self.text = text
-        v = QVBoxLayout(self)
         body = QLabel(text)
         mono = body.font()
         mono.setFamily("monospace")
@@ -107,18 +102,18 @@ class ReportDialog(QDialog):
         area = scroll_area(holder)
         area.widget().setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
         area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        v.addWidget(area, 1)
-        row = QHBoxLayout()
-        self.copy_btn = QPushButton("Copy report")
-        self.copy_btn.setProperty("primary", True)
-        close = QPushButton("Close")
-        row.addWidget(close)
-        row.addWidget(self.copy_btn, 1)
-        v.addLayout(row)
-        self.copy_btn.clicked.connect(self.copy)
-        close.clicked.connect(self.accept)
-        r = parent.rect()
-        self.resize(max(320, int(r.width() * 0.92)), max(300, int(r.height() * 0.85)))
+        super().__init__(dialog_host(parent), title, "", (("close", "Close", False), ("copy", "Copy report", True)),
+                         body=area, large=True, dismissible=False)
+        self.copy_btn = self.buttons["copy"]
+
+    def done(self, key: str) -> None:
+        if key == "copy":
+            self.copy()
+            return
+        super().done(key)
+
+    def accept(self) -> None:
+        self.done("close")
 
     def copy(self) -> None:
         QGuiApplication.clipboard().setText(self.text)
@@ -157,6 +152,8 @@ class Toast(QLabel):
 
 
 class MobileWindow(MainWindow):
+    _dialog_host = True                    # in-window dialogs (dialogs.py) cover this widget
+
     def __init__(self, config: AppConfig) -> None:
         self._drag_offset = 0.0
         self._resume_on_activate = False
@@ -329,7 +326,7 @@ class MobileWindow(MainWindow):
         try:
             file_io.write_with(path, lambda local: write_setup(local, self.config, app))
         except OSError as exc:
-            QMessageBox.critical(self, "Could not save the set-up", str(exc))
+            alert(self, "Could not save the set-up", str(exc))
             return
         self.config_path = path
         self.show_message(f"Set-up saved to {file_io.display_name(path)}")
@@ -348,7 +345,7 @@ class MobileWindow(MainWindow):
         try:
             cfg, app = file_io.read_with(path, read_setup)
         except (OSError, ValueError) as exc:
-            QMessageBox.critical(self, "Could not open configuration", str(exc))
+            alert(self, "Could not open configuration", str(exc))
             return
         self.load(cfg)
         if app:
@@ -362,7 +359,7 @@ class MobileWindow(MainWindow):
         """Experiments → 'Use gains' on a run: its controller into the Controller screen."""
         plant = self.config.plant
         if (result.config.plant.n_segments, result.config.plant.base_type) != (plant.n_segments, plant.base_type):
-            QMessageBox.warning(self, "Use gains", "That run used a different pendulum structure.")
+            alert(self, "Use gains", "That run used a different pendulum structure.")
             return
         ctrl = result.config.copy().controller
         self._show_controller(ctrl)
@@ -574,6 +571,10 @@ class MobileWindow(MainWindow):
 
     def go_back(self) -> bool:
         """Android back; returns False when the app should ask before exiting."""
+        dlg = top_dialog(self)
+        if dlg is not None:
+            dlg.reject()
+            return True
         if self.explorer_open():
             self._explorer.close_explorer()
             return True
@@ -590,22 +591,30 @@ class MobileWindow(MainWindow):
 
     def keyPressEvent(self, event) -> None:  # noqa: N802
         if event.key() == Qt.Key.Key_Back:
+            # handled after the key event has returned: Android's UI thread waits for the
+            # app while the key is delivered (blocking here froze the app)
             event.accept()
-            if not self.go_back():
-                self.confirm_exit()
+            QTimer.singleShot(0, self._on_back_key)
             return
         super().keyPressEvent(event)
 
+    def _on_back_key(self) -> None:
+        if not self.go_back():
+            self.confirm_exit()
+
     def confirm_exit(self) -> None:
-        box = QMessageBox(QMessageBox.Icon.Question, "Leave the simulator?",
-                          "Close the Inverted Pendulum Simulator?", parent=self)
-        leave = box.addButton("Leave", QMessageBox.ButtonRole.AcceptRole)
-        box.addButton("Stay", QMessageBox.ButtonRole.RejectRole)
-        box.exec()
-        if box.clickedButton() is leave:
-            app = QGuiApplication.instance()
-            if app is not None:
-                app.quit()
+        """In-window question (a QMessageBox froze the app on Android)."""
+        if any(d.title_label.text() == "Leave the simulator?" for d in self.findChildren(OverlayDialog)
+               if d.isVisible()):
+            return
+
+        def answer(key: str) -> None:
+            if key == "leave":
+                app = QGuiApplication.instance()
+                if app is not None:
+                    app.quit()
+        ask(self, "Leave the simulator?", "Close the Inverted Pendulum Simulator?",
+            (("stay", "Stay", False), ("leave", "Leave", True)), answer)
 
     # ============================================================ auto-tune
     def _on_robust_tune(self) -> None:
@@ -638,17 +647,9 @@ class MobileWindow(MainWindow):
         self.speed_btn.setText(f"{value:g}×")
 
     def _edit_push_force(self) -> None:
-        dlg = QDialog(self)
-        dlg.setWindowTitle("Push force")
-        lay = QVBoxLayout(dlg)
         row = NumberRow("Push force (0.1 s pulse at the tip)", 0.01, 1000.0, self.push_force.value(), 2, "N", "log")
-        lay.addWidget(row)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
-        buttons.accepted.connect(dlg.accept)
-        lay.addWidget(buttons)
         row.valueChanged.connect(self.push_force.setValue)
-        dlg.resize(min(self.width() - 32, 560), dlg.sizeHint().height())
-        dlg.exec()
+        ask(self, "Push force", "", OK, body=row, then=lambda _key: row.finish_edit())
 
     def _update_actions(self) -> None:
         super()._update_actions()
@@ -733,9 +734,7 @@ class MobileWindow(MainWindow):
 
     def _show_report(self, text: str) -> None:
         self.nav.setEnabled(not self._tune_busy())
-        dialog = ReportDialog("Performance test", text, self)
-        dialog.open()
-        self._report_dialog = dialog
+        self._report_dialog = ReportDialog("Performance test", text, self)   # shown in the window
 
     def _on_performance_edited(self, perf: PerformanceSettings) -> None:
         self.apply_performance(perf)
@@ -746,6 +745,8 @@ class MobileWindow(MainWindow):
         super().resizeEvent(event)
         if self.explorer_open():
             self._explorer.follow_parent()
+        for dlg in self.findChildren(OverlayDialog, options=Qt.FindChildOption.FindDirectChildrenOnly):
+            dlg.follow_host()
         self._apply_orientation()
 
     def _apply_orientation(self) -> None:

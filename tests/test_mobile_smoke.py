@@ -110,6 +110,18 @@ def test_navigation_and_back_button(win, app):
     assert win.go_back() and win.current == "graphs"
     assert win.go_back() and win.current == "simulate"
     assert not win.go_back()                                 # on Simulate: ask before leaving
+    win.confirm_exit()                                       # in-window question, no window of its own
+    from pendulum_sim.mobile.dialogs import OverlayDialog, top_dialog
+
+    dlg = top_dialog(win)
+    assert isinstance(dlg, OverlayDialog) and dlg.isVisible() and dlg.parentWidget() is win
+    assert set(dlg.buttons) == {"stay", "leave"}
+    win.confirm_exit()                                       # Back again: not a second one
+    assert len([d for d in win.findChildren(OverlayDialog) if d.isVisible()]) == 1
+    assert win.go_back() and top_dialog(win) is None         # Back closes it (= stay)
+    win.confirm_exit()
+    top_dialog(win).buttons["stay"].click()
+    assert top_dialog(win) is None
     win.resize(412, 915)                                     # phone portrait: bottom bar + More
     app.processEvents()
     assert not win.nav.vertical and win.nav.buttons["more"].isVisibleTo(win)
@@ -525,13 +537,15 @@ def test_no_widget_flashes_as_a_window(app):
     app.processEvents()
 
 
-def test_typed_numbers_ignore_the_device_language(app):
+def test_typed_numbers_ignore_the_device_language(app, monkeypatch):
     """Russian keyboards/locales use a decimal comma; '30.408' must still be accepted."""
     from PySide6.QtCore import QLocale
     from PySide6.QtTest import QTest
     from PySide6.QtWidgets import QVBoxLayout
 
-    from pendulum_sim.mobile.controls import NumberRow, parse_number
+    from pendulum_sim.mobile.controls import NumberRow, _EditCloser, parse_number
+
+    monkeypatch.setattr(_EditCloser, "GRACE_S", 0.0)        # QTest taps follow at once
 
     assert parse_number("30,5") == 30.5 and parse_number("30.408") == 30.408 and parse_number("-1e-3") == -0.001
     assert parse_number("") is None and parse_number("-") is None and parse_number("nan") is None
@@ -609,14 +623,29 @@ def test_tapping_a_graph_opens_the_explorer(win, app, tmp_path, monkeypatch):
     advanced = chart.points_drawn
     frames(win, app, 5)
     assert chart.points_drawn == advanced, "graphs behind the explorer are not drawn"
-    # a drag freezes the view (no more following), zoom and read-out work, fit restores
-    plot.resize(plot.size())
+    # live stays on while zooming: the time span and value range change, the right edge follows
+    plot.zoom(2.0, 3.0)
+    assert ex.live_btn.isChecked() and ex.timer.isActive()
+    assert ex.live_span == pytest.approx(0.5 * win.telemetry.window_s)
+    kept_y = ex.live_y
+    frames(win, app, 10)
+    ex._pull()
+    x0, x1, y0, y1 = plot.view_range()
+    assert x1 == pytest.approx(plot.curves[0].x[-1]) and x1 - x0 == pytest.approx(ex.live_span)
+    assert (y0, y1) == pytest.approx(kept_y)
+    ex.fit_btn.click()                                          # live fit: default span, values fitted
+    assert ex.live_span == win.telemetry.window_s and ex.live_y is None
+    # only the button switches live off; then the data stay put for free exploring
+    ex.live_btn.click()
+    assert not ex.live_btn.isChecked() and not ex.timer.isActive() and ex.live_btn.text() == "Live: off"
     QTest.mousePress(plot, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, plot.rect().center())
     QTest.mouseMove(plot, plot.rect().center() + QPoint(80, 0))
     QTest.mouseRelease(plot, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier,
                        plot.rect().center() + QPoint(80, 0))
     assert not ex.live_btn.isChecked() and not plot.fitted
     frozen = plot.view_range()
+    frames(win, app, 5)
+    assert plot.view_range() == frozen
     plot.zoom(2.0, 1.0)
     assert plot.view_range()[1] - plot.view_range()[0] == pytest.approx(0.5 * (frozen[1] - frozen[0]))
     QTest.mouseClick(plot, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, plot.rect().center())
@@ -636,6 +665,7 @@ def test_tapping_a_graph_opens_the_explorer(win, app, tmp_path, monkeypatch):
     assert ex.live_btn.isChecked() and ex.timer.isActive()
     # Back closes it; the graphs move again
     QApplication.sendEvent(win, QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Back, Qt.KeyboardModifier.NoModifier))
+    app.processEvents()                                         # Back is handled after the key event
     assert not win.explorer_open() and win.current == "graphs" and not ex.timer.isActive()
     frames(win, app, 5)
     assert chart.points_drawn > advanced
@@ -937,6 +967,7 @@ def test_loading_screen_then_main_window_in_one_top_level(app):
     w.navigate("settings")
     shell.setFocus()                                     # no focus widget inside: Back reaches the shell
     QApplication.sendEvent(shell, QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Back, Qt.KeyboardModifier.NoModifier))
+    app.processEvents()
     assert w.current == "simulate"                       # handled by the main window (go back)
     shell.close()
     assert not w.isVisible()

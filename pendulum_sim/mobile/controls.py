@@ -82,28 +82,46 @@ class _EditCloser(QObject):
     """
 
     active: "NumberRow | None" = None
-    _installed = False
+    since = 0.0
+    GRACE_S = 0.35                        # events of the tap that opened the field
+    _instance: "_EditCloser | None" = None
 
     @classmethod
     def watch(cls, row: "NumberRow") -> None:
-        app = QApplication.instance()
-        if app is not None and not cls._installed:
-            cls._instance = cls()
-            app.installEventFilter(cls._instance)
-            cls._installed = True
+        """Installed only while a number is being typed (an app-wide filter sees every event)."""
+        import time
+
         if cls.active is not None and cls.active is not row:
             cls.active.finish_edit()
+        app = QApplication.instance()
+        if app is not None and cls._instance is None:
+            cls._instance = cls()
+            app.installEventFilter(cls._instance)
         cls.active = row
+        cls.since = time.monotonic()
+
+    @classmethod
+    def release(cls, row: "NumberRow") -> None:
+        if cls.active is row:
+            cls.active = None
+        if cls.active is None and cls._instance is not None:
+            app = QApplication.instance()
+            if app is not None:
+                app.removeEventFilter(cls._instance)
+            cls._instance.deleteLater()
+            cls._instance = None
 
     def eventFilter(self, obj, event) -> bool:  # noqa: N802 - Qt API
+        import time
+
         row = _EditCloser.active
         if row is None or event.type() not in (QEvent.Type.MouseButtonPress, QEvent.Type.TouchBegin):
             return False
-        if not isinstance(obj, QWidget):
+        if not isinstance(obj, QWidget) or time.monotonic() - _EditCloser.since < _EditCloser.GRACE_S:
             return False
         try:
             if obj is not row.edit and not row.edit.isAncestorOf(obj):
-                row.finish_edit()
+                QTimer.singleShot(0, row.finish_edit)     # not inside the filter
         except RuntimeError:              # the row was deleted meanwhile
             _EditCloser.active = None
         return False
@@ -306,8 +324,9 @@ class NumberRow(QWidget):
         self.value_btn.clicked.connect(self._begin_edit)
         self.edit = QLineEdit()
         self.edit.setValidator(QRegularExpressionValidator(QRegularExpression(NUMBER_PATTERN), self.edit))
-        self.edit.setInputMethodHints(Qt.InputMethodHint.ImhFormattedNumbersOnly
-                                      | Qt.InputMethodHint.ImhNoPredictiveText)
+        # numbers only (ImhNoPredictiveText added a text flag to the number keyboard type and
+        # Android's keyboard no longer came up)
+        self.edit.setInputMethodHints(Qt.InputMethodHint.ImhFormattedNumbersOnly)
         self.edit.setAlignment(Qt.AlignmentFlag.AlignRight)
         self.edit.editingFinished.connect(self._end_edit)
         self.edit.returnPressed.connect(self._end_edit)
@@ -420,8 +439,16 @@ class NumberRow(QWidget):
         _EditCloser.watch(self)
         self.edit.setText(fmt_number(self._value, self.decimals))
         self.value_stack.setCurrentIndex(1)
-        self.edit.setFocus()
+        self.edit.setFocus(Qt.FocusReason.MouseFocusReason)
         self.edit.selectAll()
+        # the tap went to the value button, not to the field: ask for the keyboard explicitly
+        QTimer.singleShot(0, self._show_keyboard)
+
+    def _show_keyboard(self) -> None:
+        if self.editing and self.edit.hasFocus():
+            im = QGuiApplication.inputMethod()
+            if im is not None:
+                im.show()
 
     def finish_edit(self) -> None:
         """Commit what was typed (or keep the old value if it is not a number)."""
@@ -430,8 +457,7 @@ class NumberRow(QWidget):
     def _end_edit(self) -> None:
         if not self.editing:
             return
-        if _EditCloser.active is self:
-            _EditCloser.active = None
+        _EditCloser.release(self)
         im = QGuiApplication.inputMethod()
         if im is not None and self.edit.hasFocus():
             im.commit()                    # digits still being composed by the keyboard

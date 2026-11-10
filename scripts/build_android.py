@@ -215,6 +215,7 @@ def prepare_p4a(branch: str, commit: str) -> Path | None:
         return None
     patch_splash(P4A_DIR)
     patch_back_key(P4A_DIR)
+    patch_activity_callbacks(P4A_DIR)
     return P4A_DIR
 
 
@@ -352,3 +353,40 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+CALLBACK_MARK = "Inverted Pendulum Simulator: Qt gets the result too"
+CALLBACKS = {  # method header → call of the overridden method (QtActivity's)
+    "protected void onActivityResult(int requestCode, int resultCode, Intent intent) {":
+        "super.onActivityResult(requestCode, resultCode, intent);",
+    "protected void onNewIntent(Intent intent) {": "super.onNewIntent(intent);",
+}
+
+
+def patch_activity_callbacks(p4a: Path) -> bool:
+    """Pass activity results and new intents on to Qt's activity (idempotent).
+
+    The Qt bootstrap's ``PythonActivity`` overrides ``onActivityResult`` (and
+    ``onNewIntent``) for python-for-android listeners without calling ``super``. Qt's file
+    dialogs on Android are the system's storage picker, whose answer arrives through
+    ``onActivityResult`` – Qt never got it, so every *Save … / Open …* left a modal
+    dialog waiting forever: the app still drew but no button reacted after returning.
+    """
+    java = (p4a / "pythonforandroid" / "bootstraps" / "qt" / "build" / "src" / "main" / "java" / "org"
+            / "kivy" / "android" / "PythonActivity.java")
+    if not java.exists():
+        log.warning("no Qt bootstrap activity at %s: activity callbacks not patched", java)
+        return False
+    text = java.read_text(encoding="utf-8")
+    if CALLBACK_MARK in text:
+        return True
+    for header, call in CALLBACKS.items():
+        i = text.find(header)
+        if i < 0:
+            log.warning("%s not found in %s", header, java)
+            return False
+        end = i + len(header)
+        text = text[:end] + f"\n        {call}  // {CALLBACK_MARK}" + text[end:]
+    java.write_text(text, encoding="utf-8")
+    log.info("activity results handed to Qt in %s", java)
+    return True

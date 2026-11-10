@@ -92,3 +92,22 @@ def test_back_key_patch_hands_keys_to_qt(build_android, tmp_path):
     assert statements[0] == "if (true) return super.onKeyDown(keyCode, event);"
     assert "Click again to close the app" in body           # original code kept (not reached)
     assert build_android.patch_back_key(tmp_path / "missing") is False
+
+
+def test_activity_results_reach_qt(build_android, tmp_path):
+    """The storage picker's answer (onActivityResult) must reach Qt's activity."""
+    jdir = tmp_path / "pythonforandroid/bootstraps/qt/build/src/main/java/org/kivy/android"
+    jdir.mkdir(parents=True)
+    java = jdir / "PythonActivity.java"
+    shutil.copy(DATA / "p4a_qt_PythonActivity.java", java)
+    original = java.read_text(encoding="utf-8")
+    assert "super.onActivityResult" not in original               # the bug at the pinned commit
+    assert build_android.patch_activity_callbacks(tmp_path)
+    assert build_android.patch_activity_callbacks(tmp_path)       # idempotent
+    text = java.read_text(encoding="utf-8")
+    for header, call in build_android.CALLBACKS.items():
+        body = text[text.index(header) + len(header):]
+        first = body.strip().splitlines()[0].strip()
+        assert first.startswith(call), first                     # before the early return
+        assert text.count(call) == 1
+    assert build_android.patch_activity_callbacks(tmp_path / "missing") is False

@@ -503,13 +503,15 @@ def save_plot_data(parent: QWidget, curves: list[Curve], title: str, x_name: str
 class GraphExplorer(QWidget):
     """One plot over the whole window: Live / Fit / Image / Data / Close.
 
-    ``open_live`` follows a running recording (the last ``window_s`` seconds) until the
-    plot is touched, then freezes so it can be explored; *Live* returns to following.
-    ``open_static`` shows fixed curves (experiment results).
+    ``open_live`` follows a running recording while the *Live* button is on: the right
+    edge stays at the newest sample, pinching changes the time span and the value range
+    (both kept while following), a tap reads values. *Live* off freezes the data for
+    free panning and zooming; only the button switches. ``open_static`` shows fixed curves
+    (experiment results).
     """
 
     closed = Signal()
-    LIVE_INTERVAL_MS = 100
+    LIVE_INTERVAL_MS = 33          # following at ~30 Hz
 
     def __init__(self, parent: QWidget, message: Callable[[str], None] | None = None) -> None:
         super().__init__(parent)
@@ -530,7 +532,7 @@ class GraphExplorer(QWidget):
         self.title_label = QLabel()
         self.title_label.setStyleSheet(f"QLabel {{ font-weight: 600; font-size: {theme.BODY_PX + 1}px; }}")
         bar.addWidget(self.title_label, 1)
-        self.live_btn = push_button("Live", "live")
+        self.live_btn = push_button("Live: on", "live")
         self.live_btn.setCheckable(True)
         self.live_btn.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         self.fit_btn = tool_button("fit", "Fit", tip="Show all data")
@@ -543,7 +545,7 @@ class GraphExplorer(QWidget):
         self.plot = PlotView(self, interactive=True)
         v.addWidget(self.plot, 1)
         self.hint = QLabel("Pinch to zoom (sideways: time, up/down: values) · drag to move · "
-                           "double-tap to fit · tap to read values")
+                           "double-tap to fit · tap to read values · Live: on/off follows the run")
         self.hint.setProperty("role", "secondary")
         self.hint.setWordWrap(True)
         v.addWidget(self.hint)
@@ -562,10 +564,12 @@ class GraphExplorer(QWidget):
     def open_live(self, title: str, unit: str, source: Callable[[], list[Curve]], window_s: float) -> None:
         self._source = source
         self.window_s = window_s
+        self.live_span = window_s              # time span shown while following (pinch changes it)
+        self.live_y: tuple[float, float] | None = None   # value range kept while following; None = fit
         self._open(title, unit)
         self.live_btn.show()
         self.live_btn.setChecked(True)
-        self._pull()
+        self._set_live(True)
 
     def open_static(self, title: str, unit: str, curves: list[Curve], hlines: list[float] | None = None,
                     marker_x: float | None = None) -> None:
@@ -603,8 +607,8 @@ class GraphExplorer(QWidget):
 
     # ---------------------------------------------------------------- live
     def _set_live(self, on: bool) -> None:
+        self.live_btn.setText("Live: on" if on else "Live: off")
         if on and self._source is not None:
-            self.plot.cursor_x = None
             self.timer.start()
             self._pull()
         else:
@@ -616,19 +620,33 @@ class GraphExplorer(QWidget):
         curves = self._source()
         self.plot.set_curves(curves, keep_view=True)
         _xl, xhi, _yl, _yh = curves_extent(curves)
-        if math.isfinite(xhi):
-            self.plot.set_x_range(xhi - self.window_s, xhi)
+        if not math.isfinite(xhi):
+            return
+        x0, x1 = xhi - self.live_span, xhi
+        if self.live_y is None:
+            self.plot.set_x_range(x0, x1)
+        else:
+            self.plot._view = [x0, x1, *self.live_y]
+            self.plot.update()
 
     def _user_moved(self) -> None:
+        """Zoom/pan while following: keep the new time span and value range, keep following."""
         if self.live_btn.isChecked():
-            self.live_btn.blockSignals(True)       # freeze: the data stop moving under the fingers
-            self.live_btn.setChecked(False)
-            self.live_btn.blockSignals(False)
-            self.timer.stop()
+            if self.plot.fitted:                   # double tap: back to the default view
+                self.live_span, self.live_y = self.window_s, None
+            else:
+                x0, x1, y0, y1 = self.plot.view_range()
+                self.live_span = max(x1 - x0, 1e-3)
+                self.live_y = (y0, y1)
+            self._pull()
 
     def _fit(self) -> None:
         self.plot.cursor_x = None
-        self.plot.fit()
+        if self.live_btn.isChecked():
+            self.live_span, self.live_y = self.window_s, None
+            self._pull()
+        else:
+            self.plot.fit()
 
     # ---------------------------------------------------------------- files
     def _save_image(self) -> None:
