@@ -313,6 +313,59 @@ class TouchPendulumView(GPUHost, PendulumView):
                     p.drawPolyline(part)
                 p.restore()
 
+    HUD_RATE_HZ = 15            # the state read-out is re-rendered at most this often
+
+    def _hud_font(self):
+        """The system's monospace font, resolved once.
+
+        The desktop read-out asks for ``QFont("Monospace")`` on every frame; Android has no
+        such family, so every measurement and every line went through font fallback:
+        ~15 ms of text measuring and ~9 ms of text drawing per frame on the Pad 6.
+        """
+        font = getattr(self, "_hud_font_cache", None)
+        if font is None:
+            from PySide6.QtGui import QFontDatabase
+
+            from . import theme
+
+            font = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
+            font.setPixelSize(max(11, theme.BODY_PX - 3))
+            self._hud_font_cache = font
+        return font
+
+    def _draw_hud(self, p: QPainter, f, fg: QColor) -> None:
+        """Same read-out as the desktop, rendered into a cached image ≤ 15 times a second."""
+        dpr = self.devicePixelRatioF()
+        key = (int(f.time * self.HUD_RATE_HZ), len(f.angles), f.has_cart, fg.rgba(), dpr,
+               self.palette().window().color().rgba())
+        if getattr(self, "_hud_key", None) != key or getattr(self, "_hud_image", None) is None:
+            from PySide6.QtCore import QRectF
+            from PySide6.QtGui import QFontMetricsF
+
+            lines = self.hud_lines(f)
+            font = self._hud_font()
+            fm = QFontMetricsF(font)
+            line_h = fm.height()
+            w = max(fm.horizontalAdvance(s) for s in lines) + 16
+            h = line_h * len(lines) + 10
+            img = QImage(max(1, int(w * dpr)), max(1, int(h * dpr)), QImage.Format.Format_ARGB32_Premultiplied)
+            img.setDevicePixelRatio(dpr)
+            img.fill(Qt.GlobalColor.transparent)
+            ip = QPainter(img)
+            ip.setRenderHint(QPainter.RenderHint.Antialiasing)
+            box = QColor(self.palette().window().color())
+            box.setAlpha(215)
+            ip.setPen(Qt.PenStyle.NoPen)
+            ip.setBrush(box)
+            ip.drawRoundedRect(QRectF(0, 0, w, h), 6, 6)
+            ip.setFont(font)
+            ip.setPen(fg)
+            for k, s in enumerate(lines):
+                ip.drawText(QPointF(8, 5 + line_h * (k + 1) - fm.descent()), s)
+            ip.end()
+            self._hud_image, self._hud_key = img, key
+        p.drawImage(QPointF(8, 8), self._hud_image)
+
     def _paint_overlay(self, p: QPainter) -> None:
         if not self.overlay_text:
             return

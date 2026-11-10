@@ -411,7 +411,9 @@ class PendulumView(QWidget):
         path.closeSubpath()
         p.fillPath(path, QBrush(color))
 
-    def _draw_hud(self, p: QPainter, f: FrameData, fg: QColor) -> None:
+    @staticmethod
+    def hud_lines(f: FrameData) -> list[str]:
+        """Text lines of the state read-out."""
         lines = [f"t = {f.time:7.2f} s"]
         for i, (a, w) in enumerate(zip(f.angles, f.velocities)):
             lines.append(f"θ{i + 1} = {math.degrees(wrap_angle(float(a))):+7.2f}°   ω{i + 1} = {math.degrees(w):+8.1f}°/s")
@@ -420,6 +422,10 @@ class PendulumView(QWidget):
             lines.append(f"F = {f.applied:+7.2f} N")
         else:
             lines.append(f"τ = {f.applied:+7.3f} N·m")
+        return lines
+
+    def _draw_hud(self, p: QPainter, f: FrameData, fg: QColor) -> None:
+        lines = self.hud_lines(f)
         font = QFont("Monospace")
         font.setStyleHint(QFont.StyleHint.TypeWriter)
         font.setPointSizeF(max(8.0, self.font().pointSizeF() * 0.9))

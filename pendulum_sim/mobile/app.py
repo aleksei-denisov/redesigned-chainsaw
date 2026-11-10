@@ -110,6 +110,8 @@ def main(argv: list[str] | None = None) -> int:
         window = _error_screen(app, text)
 
     shell.present(window)
+    if hasattr(window, "stats"):
+        shell.on_update = window.stats.add_update
     TIMER.mark("main window shown")
     QTimer.singleShot(0, lambda: TIMER.mark("first frame"))
 

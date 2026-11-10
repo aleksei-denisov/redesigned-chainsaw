@@ -15,9 +15,11 @@ The geometry (in dp) matches ``android/splash/splash_logo.png``: a 160 dp logo, 
 
 from __future__ import annotations
 
+import sys
+import time
 from pathlib import Path
 
-from PySide6.QtCore import QByteArray, QEventLoop, QRectF, Qt, QTimer
+from PySide6.QtCore import QByteArray, QEvent, QEventLoop, QRectF, Qt, QTimer
 from PySide6.QtGui import QColor, QFont, QPainter, QPixmap
 from PySide6.QtWidgets import QApplication, QStackedLayout, QWidget
 
@@ -162,6 +164,18 @@ class AppShell(QWidget):
         else:
             super().keyPressEvent(event)
 
+    on_update = None              # callable(ms): times each screen update (performance figures)
+
+    def _timed_event(self, event) -> bool:
+        """``event()`` override on Python ≥ 3.11 (see ``MobileWindow._timed_event``): the
+        top-level window receives the screen updates, so they are timed here."""
+        if event.type() == QEvent.Type.UpdateRequest and self.on_update is not None:
+            started = time.perf_counter()
+            result = super().event(event)
+            self.on_update((time.perf_counter() - started) * 1000.0)
+            return result
+        return super().event(event)
+
     def closeEvent(self, event) -> None:  # noqa: N802 - the content's shutdown (workers, files)
         if self.content is not None and not self.content.close():
             event.ignore()
@@ -255,3 +269,6 @@ class BusyOverlay(QWidget):
         p.drawRoundedRect(QRectF(r.left(), r.top(), r.width() * 0.4, r.height()), 3, 3)
         p.end()
 
+
+if sys.version_info >= (3, 11):
+    AppShell.event = AppShell._timed_event

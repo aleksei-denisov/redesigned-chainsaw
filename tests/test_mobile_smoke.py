@@ -537,6 +537,20 @@ def test_no_widget_flashes_as_a_window(app):
     app.processEvents()
 
 
+def test_state_readout_is_cached(win, app):
+    """The read-out text is rendered into an image at most 15 times a second."""
+    win.view.settings.show_hud = True
+    win.start()
+    frames(win, app, 3)
+    img = win.view._hud_image
+    assert img is not None and img.width() > 50
+    win.pause()
+    key = win.view._hud_key
+    win.view.repaint()
+    win.view.repaint()
+    assert win.view._hud_key == key and win.view._hud_image is not None
+
+
 def test_pages_scroll_from_anywhere_even_on_sliders(app):
     """A vertical drag starting on a slider, label or button scrolls the page; a
     horizontal drag on a slider moves the slider; a tap still clicks."""
@@ -879,6 +893,7 @@ def test_performance_test_reports_every_phase(win, app, monkeypatch):
     for label, *_ in phases:
         assert label.split(" (not available")[0] in report
     assert "fps" in report and "graph paint" in report and "tottime" in report
+    assert "Text cost" in report and "system monospace" in report and "GPU drawing errors" in report
     win._report_dialog.copy()
     assert QApplication.clipboard().text() == report or True   # offscreen clipboards may be stubs
     win._report_dialog.accept()

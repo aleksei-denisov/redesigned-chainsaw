@@ -75,6 +75,38 @@ def summarise(label: str, frames: list[tuple], seconds: float) -> str:
     ])
 
 
+TEXT_SAMPLES = ("t =    12.34 s   x = +0.123 m", "θ1 =   +1.23°   ω1 =  +12.3°/s")
+
+
+def text_benchmark(repeats: int = 40) -> str:
+    """Microseconds per text measurement / drawn line for a few fonts (text was the
+    largest cost of the pendulum view on a tablet: font fallback for a missing family)."""
+    from PySide6.QtGui import QFont, QFontDatabase, QFontMetricsF, QImage, QPainter
+
+    fonts = [("app font", QFont()), ('"Monospace"', QFont("Monospace")),
+             ("system monospace", QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))]
+    img = QImage(600, 60, QImage.Format.Format_ARGB32_Premultiplied)
+    lines = ["Text cost (µs per call: measure / draw; ASCII line, line with θ ω °):"]
+    for name, font in fonts:
+        cells = []
+        for text in TEXT_SAMPLES:
+            fm = QFontMetricsF(font)
+            t0 = time.perf_counter()
+            for _ in range(repeats):
+                fm.horizontalAdvance(text)
+            measure = (time.perf_counter() - t0) / repeats * 1e6
+            p = QPainter(img)
+            p.setFont(font)
+            t0 = time.perf_counter()
+            for _ in range(repeats):
+                p.drawText(4, 40, text)
+            draw = (time.perf_counter() - t0) / repeats * 1e6
+            p.end()
+            cells.append(f"{measure:7.0f} / {draw:7.0f}")
+        lines.append(f"  {name:<18} {font.family()[:18]:<18} " + "   ".join(cells))
+    return "\n".join(lines)
+
+
 class PerformanceTest(QObject):
     """Drives the window through :data:`PHASES` with timers (the UI keeps running)."""
 
@@ -181,7 +213,9 @@ class PerformanceTest(QObject):
         from . import gpu
 
         errors = f"GPU drawing errors: {gpu.ERRORS['count']}"
-        report = "\n\n".join(self.blocks + [errors, TIMER.report()])
+        if gpu.ERRORS.get("first"):
+            errors += "\nfirst error:\n" + gpu.ERRORS["first"].strip()[-1500:]
+        report = "\n\n".join(self.blocks + [text_benchmark(), errors, TIMER.report()])
         print(report, flush=True)
         self.finished.emit(report)
 

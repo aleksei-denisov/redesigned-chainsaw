@@ -89,7 +89,9 @@ if QOpenGLWidget is not None:
                 if ERRORS["count"] <= 3:
                     import traceback
 
-                    print("GPU drawing error:\n" + traceback.format_exc(), flush=True)
+                    text = traceback.format_exc()
+                    ERRORS.setdefault("first", text)      # shown in the performance report
+                    print("GPU drawing error:\n" + text, flush=True)
             finally:
                 p.end()
 

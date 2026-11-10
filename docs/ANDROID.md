@@ -293,6 +293,15 @@ shortened performance test). A tablet is slower in absolute terms; on the device
 | full graph redraw (range/size change only) | – | 3.7 / 5.3 ms for 2 / 4 graphs |
 | start-up (fresh process) | blank until everything, incl. pyqtgraph, Experiments and Auto-tune, was built | loading screen after 0.1–0.2 s, main window after 0.6–1.0 s (runner speeds vary); Experiments 0.06 s and Auto-tune 0.03 s on first use; icon rendering cut from 28 to ≤ 6 SVG renders per icon |
 
+**On the Xiaomi Pad 6** (performance test, 10 Nov 2026): start-up to the main window dropped from
+12–19 s to **2.95 s** once no widget flashed up as a window of its own. The same report showed
+the pendulum view at 26–42 ms per frame, of which ~24 ms was text: the state read-out asked for
+`QFont("Monospace")` – a family Android does not have – on every frame, so every measurement and
+line went through font fallback (2.5 ms per measured line). The mobile view now uses the system
+monospace font, resolved once, and renders the read-out into a cached image at most 15 times a
+second. The report also lists the cost of text per font (*Text cost*), the first GPU drawing
+error, if any, and the screen-update time again (timed on the top-level shell).
+
 ### Start-up and loading screen
 
 1. **Native splash** (Android, before Python runs): the app logo and name centred on the app's
