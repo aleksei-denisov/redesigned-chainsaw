@@ -110,7 +110,14 @@ steppers, or by tapping the value and typing it; a change is applied when the fi
 lifted. Typed values accept "." and "," as decimal separator whatever the device language
 (a locale-bound validator rejected "30.408" on a Russian device and the field never closed);
 typing ends with *Done*/Enter or a touch anywhere else, text that is not a number keeps the
-old value. On/off settings are switches, choices are chips, long screens scroll with the
+old value.
+
+**Scrolling** starts anywhere on a page, also on sliders, buttons and texts (`DragScroller`
+in `controls.py`, replacing `QScroller`, which only scrolled where the finger landed on empty
+background). The press on a widget is held back for the first few pixels: a mostly vertical
+movement scrolls the page (with fling) and the widget never sees the touch, a sideways
+movement on a slider hands the touch to the slider, a tap or a hold (> 0.25 s) goes to the
+widget as usual. Views that handle their own gestures (pendulum, explorable plots) are left alone. On/off settings are switches, choices are chips, long screens scroll with the
 finger (no horizontal scrolling). All icons are bundled SVGs, so nothing depends on the
 device's fonts.
 
@@ -259,6 +266,7 @@ follows. **Live: off** (only the button switches) freezes the data for free pann
 | tap | read-out: cursor line with the value of every curve at that time |
 | double tap / *Fit* | all data |
 | *Live: on / off* | follow the simulation / freeze the data; *Fit* while live = last *time window* seconds, values fitted |
+| *Scroll* (option, while live) | a sideways drag looks back in time: the view keeps moving with the run, that far behind the newest sample; *Fit* returns to "now" |
 | *Image* / *Data* | save the graph as PNG / its curves as CSV (time + one column per curve) |
 | *Close* / Android back | back to *Graphs* |
 
@@ -468,6 +476,8 @@ API 28 or newer (e.g. *Pixel 7, API 35, Google APIs ARM 64*). Start it, then
 - *Settings → Performance*: the presets switch the rows below them, any manual change shows
   *Custom*; *Diagnostics → Drawing method* switches to Software (slower) and shows *Software
   drawing resolution* only then;
+- scroll Controller and Settings by dragging on sliders, texts and buttons; sideways on a slider
+  still moves it; taps on buttons and values still work;
 - tap a number, type it with "." or "," and tap anywhere else (slider, −/+, another row) or press
   *Done*: the value is taken, the field closes and the slider works again;
 - *Graphs*: tap a graph → full window, it follows the run; pinch sideways/up-down, drag, tap for

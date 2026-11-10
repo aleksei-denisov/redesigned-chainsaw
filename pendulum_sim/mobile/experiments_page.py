@@ -147,6 +147,10 @@ class ExperimentWorker:
 class ReplayView(TouchPendulumView):
     """Pendulum view of a recorded run: one finger pans, pinch zooms, no pushes."""
 
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.setProperty("noDragScroll", True)          # pans itself (page scrolling elsewhere)
+
     def one_down(self, pos: QPointF) -> None:
         self._pan = (QPointF(pos), self.camera.copy())
 

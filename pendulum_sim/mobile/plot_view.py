@@ -103,6 +103,7 @@ class PlotView(QWidget):
             f.setPixelSize(13 if compact else 15)
             self.setFont(f)
         if interactive:
+            self.setProperty("noDragScroll", True)     # its own drags, not the page's (DragScroller)
             self.setAttribute(Qt.WidgetAttribute.WA_AcceptTouchEvents, True)
             # touch through an event filter, not an ``event()`` override (a Python event()
             # that calls back into Qt crashed PySide6 on Python 3.10 with busy threads)
@@ -515,7 +516,7 @@ class GraphExplorer(QWidget):
 
     def __init__(self, parent: QWidget, message: Callable[[str], None] | None = None) -> None:
         super().__init__(parent)
-        from .controls import push_button, tool_button
+        from .controls import FlowLayout, push_button, tool_button
 
         self.setAutoFillBackground(True)
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
@@ -529,23 +530,34 @@ class GraphExplorer(QWidget):
         v.setSpacing(6)
         bar = QHBoxLayout()
         bar.setSpacing(6)
+        tools = QWidget()                          # wraps onto a second line on narrow phones
+        tools_flow = FlowLayout(tools, spacing=6)
         self.title_label = QLabel()
         self.title_label.setStyleSheet(f"QLabel {{ font-weight: 600; font-size: {theme.BODY_PX + 1}px; }}")
         bar.addWidget(self.title_label, 1)
         self.live_btn = push_button("Live: on", "live")
         self.live_btn.setCheckable(True)
         self.live_btn.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        # option: while live, a sideways drag looks back in time (the view keeps moving with
+        # the run, that far behind the newest sample); off: the right edge stays at "now"
+        self.scroll_btn = push_button("Scroll", "expand")
+        self.scroll_btn.setCheckable(True)
+        self.scroll_btn.setToolTip("While live: drag sideways to look back in time")
+        self.scroll_btn.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         self.fit_btn = tool_button("fit", "Fit", tip="Show all data")
         self.image_btn = tool_button("image", "Image", tip="Save the graph as PNG")
         self.data_btn = tool_button("table", "Data", tip="Save the graph's data as CSV")
         self.close_btn = tool_button("close", tip="Close")
-        for b in (self.live_btn, self.fit_btn, self.image_btn, self.data_btn, self.close_btn):
-            bar.addWidget(b)
+        for b in (self.live_btn, self.scroll_btn, self.fit_btn, self.image_btn, self.data_btn):
+            tools_flow.addWidget(b)
+        bar.addWidget(self.close_btn, 0, Qt.AlignmentFlag.AlignTop)
         v.addLayout(bar)
+        v.addWidget(tools)
         self.plot = PlotView(self, interactive=True)
         v.addWidget(self.plot, 1)
         self.hint = QLabel("Pinch to zoom (sideways: time, up/down: values) · drag to move · "
-                           "double-tap to fit · tap to read values · Live: on/off follows the run")
+                           "double-tap to fit · tap to read values · Live: on/off follows the run · "
+                           "Scroll (while live): drag sideways to look back")
         self.hint.setProperty("role", "secondary")
         self.hint.setWordWrap(True)
         v.addWidget(self.hint)
@@ -565,6 +577,7 @@ class GraphExplorer(QWidget):
         self._source = source
         self.window_s = window_s
         self.live_span = window_s              # time span shown while following (pinch changes it)
+        self.live_offset = 0.0                 # how far behind the newest sample (Scroll option)
         self.live_y: tuple[float, float] | None = None   # value range kept while following; None = fit
         self._open(title, unit)
         self.live_btn.show()
@@ -577,6 +590,7 @@ class GraphExplorer(QWidget):
         self._open(title, unit)
         self.live_btn.hide()
         self.live_btn.setChecked(False)
+        self.scroll_btn.hide()
         self.plot.hlines = list(hlines or [])
         self.plot.marker_x = marker_x
         self.plot.set_curves(curves)
@@ -608,6 +622,7 @@ class GraphExplorer(QWidget):
     # ---------------------------------------------------------------- live
     def _set_live(self, on: bool) -> None:
         self.live_btn.setText("Live: on" if on else "Live: off")
+        self.scroll_btn.setVisible(on and self._source is not None)
         if on and self._source is not None:
             self.timer.start()
             self._pull()
@@ -622,7 +637,8 @@ class GraphExplorer(QWidget):
         _xl, xhi, _yl, _yh = curves_extent(curves)
         if not math.isfinite(xhi):
             return
-        x0, x1 = xhi - self.live_span, xhi
+        x1 = xhi - self.live_offset
+        x0 = x1 - self.live_span
         if self.live_y is None:
             self.plot.set_x_range(x0, x1)
         else:
@@ -633,17 +649,24 @@ class GraphExplorer(QWidget):
         """Zoom/pan while following: keep the new time span and value range, keep following."""
         if self.live_btn.isChecked():
             if self.plot.fitted:                   # double tap: back to the default view
-                self.live_span, self.live_y = self.window_s, None
+                self.live_span, self.live_y, self.live_offset = self.window_s, None, 0.0
             else:
                 x0, x1, y0, y1 = self.plot.view_range()
                 self.live_span = max(x1 - x0, 1e-3)
                 self.live_y = (y0, y1)
+                if self.scroll_btn.isChecked():
+                    newest = self._newest()
+                    if math.isfinite(newest):
+                        self.live_offset = max(0.0, newest - x1)
             self._pull()
+
+    def _newest(self) -> float:
+        return curves_extent(self.plot.curves)[1] if self.plot.curves else math.nan
 
     def _fit(self) -> None:
         self.plot.cursor_x = None
         if self.live_btn.isChecked():
-            self.live_span, self.live_y = self.window_s, None
+            self.live_span, self.live_y, self.live_offset = self.window_s, None, 0.0
             self._pull()
         else:
             self.plot.fit()

@@ -537,6 +537,56 @@ def test_no_widget_flashes_as_a_window(app):
     app.processEvents()
 
 
+def test_pages_scroll_from_anywhere_even_on_sliders(app):
+    """A vertical drag starting on a slider, label or button scrolls the page; a
+    horizontal drag on a slider moves the slider; a tap still clicks."""
+    from PySide6.QtTest import QTest
+
+    from pendulum_sim.mobile.controls import DragScroller, NumberRow, ScrollPage, label, push_button
+
+    page = ScrollPage()
+    rows = [page.add(NumberRow(f"Gain {i}", 0.0, 100.0, 50.0, 2)) for i in range(25)]
+    texts = [page.add(label("Some explanation text " * 3, "secondary")) for _ in range(5)]
+    clicks = []
+    btn = page.add(push_button("Press me"))
+    btn.clicked.connect(lambda: clicks.append(1))
+    page.resize(400, 600)
+    page.show()
+    app.processEvents()
+    bar = page.verticalScrollBar()
+    assert bar.maximum() > 0
+    left = Qt.MouseButton.LeftButton
+    none = Qt.KeyboardModifier.NoModifier
+
+    def drag(widget, delta, steps=6):
+        start = widget.rect().center()
+        QTest.mousePress(widget, left, none, start)
+        for i in range(1, steps + 1):
+            QTest.mouseMove(widget, start + QPoint(delta.x() * i // steps, delta.y() * i // steps))
+        QTest.mouseRelease(widget, left, none, start + delta)
+        app.processEvents()
+
+    slider = rows[1].slider
+    before_value, before_scroll = rows[1].value(), bar.value()
+    drag(slider, QPoint(0, -150))                            # vertical on a slider: page scrolls
+    assert bar.value() > before_scroll + 100 and rows[1].value() == before_value
+    DragScroller._instance.fling.stop()
+    page.ensureWidgetVisible(rows[2])
+    app.processEvents()
+    drag(rows[2].slider, QPoint(120, 0))                     # horizontal on a slider: slider moves
+    assert rows[2].value() != 50.0
+    drag(rows[3], QPoint(0, 120))
+    DragScroller._instance.fling.stop()
+    page.ensureWidgetVisible(btn)
+    app.processEvents()
+    QTest.mouseClick(btn, left, none, btn.rect().center())  # tap: still a click
+    assert clicks == [1]
+    assert texts
+    page.close()
+    page.deleteLater()
+    app.processEvents()
+
+
 def test_typed_numbers_ignore_the_device_language(app, monkeypatch):
     """Russian keyboards/locales use a decimal comma; '30.408' must still be accepted."""
     from PySide6.QtCore import QLocale
@@ -635,6 +685,23 @@ def test_tapping_a_graph_opens_the_explorer(win, app, tmp_path, monkeypatch):
     assert (y0, y1) == pytest.approx(kept_y)
     ex.fit_btn.click()                                          # live fit: default span, values fitted
     assert ex.live_span == win.telemetry.window_s and ex.live_y is None
+    # option: scroll while live – a sideways drag looks back, the view keeps moving with the run
+    assert ex.scroll_btn.isVisible() and not ex.scroll_btn.isChecked()
+    x0, x1, y0, y1 = plot.view_range()
+    plot._view = [x0 - 2.0, x1 - 2.0, y0, y1]
+    plot.viewChanged.emit()
+    assert ex.live_offset == 0.0                                 # option off: right edge stays at "now"
+    ex.scroll_btn.click()
+    x0, x1, y0, y1 = plot.view_range()
+    plot._view = [x0 - 2.0, x1 - 2.0, y0, y1]
+    plot.viewChanged.emit()
+    assert ex.live_offset == pytest.approx(2.0, abs=0.05)
+    frames(win, app, 10)
+    ex._pull()
+    assert plot.view_range()[1] == pytest.approx(plot.curves[0].x[-1] - ex.live_offset)
+    ex.fit_btn.click()
+    assert ex.live_offset == 0.0
+    ex.scroll_btn.click()
     # only the button switches live off; then the data stay put for free exploring
     ex.live_btn.click()
     assert not ex.live_btn.isChecked() and not ex.timer.isActive() and ex.live_btn.text() == "Live: off"

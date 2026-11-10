@@ -13,6 +13,7 @@ further out).
 from __future__ import annotations
 
 import math
+import time
 from typing import Callable
 
 from PySide6.QtCore import (
@@ -21,6 +22,7 @@ from PySide6.QtCore import (
     QEvent,
     QObject,
     QPoint,
+    QPointF,
     QPropertyAnimation,
     QRect,
     QRectF,
@@ -35,6 +37,7 @@ from PySide6.QtWidgets import (
     QAbstractButton,
     QApplication,
     QAbstractScrollArea,
+    QAbstractSlider,
     QButtonGroup,
     QFrame,
     QHBoxLayout,
@@ -43,8 +46,6 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QPushButton,
     QScrollArea,
-    QScroller,
-    QScrollerProperties,
     QSizePolicy,
     QSlider,
     QStackedLayout,
@@ -762,18 +763,188 @@ class Section(QWidget):
         return self.title_label.text()
 
 
+class DragScroller(QObject):
+    """Finger scrolling that starts anywhere on a page – on sliders, buttons and texts too.
+
+    ``QScroller`` only scrolled where the finger landed on empty background: sliders,
+    buttons and labels took the touch first, and the pages are full of them. This
+    application-wide filter holds back the press on any widget inside a kinetic scroll
+    area and decides from the first few pixels of movement:
+
+    * mostly **vertical** → the page scrolls (and flings on release); the widget never
+      sees the touch, so a slider under the finger does not move;
+    * mostly **horizontal** on a slider → the press is handed to the slider, which is
+      dragged as usual;
+    * **no movement** (tap) or a **hold** (> 0.25 s) → the press (and release) is handed
+      to the widget: buttons, chips, value fields work as before.
+
+    Only mouse events pass through here (Android delivers touches to these widgets as
+    synthesised mouse events); widgets that handle touch themselves (pendulum view,
+    explorable plots) are unaffected.
+    """
+
+    SLOP_PX = 10
+    HOLD_S = 0.25
+    FRICTION = 0.0035            # fling deceleration, 1/ms (exponential)
+    _instance: "DragScroller | None" = None
+
+    @classmethod
+    def install(cls) -> None:
+        app = QApplication.instance()
+        if app is not None and cls._instance is None:
+            cls._instance = cls()
+            app.installEventFilter(cls._instance)
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.mode = ""                      # "", "pending", "scroll", "pass"
+        self.target: QWidget | None = None
+        self.area: QAbstractScrollArea | None = None
+        self.start = QPointF()
+        self.start_value = 0
+        self.samples: list[tuple[float, float]] = []
+        self.replaying = False
+        self.hold = QTimer(self)
+        self.hold.setSingleShot(True)
+        self.hold.timeout.connect(self._on_hold)
+        self.fling = QTimer(self)
+        self.fling.setInterval(16)
+        self.fling.timeout.connect(self._fling_step)
+        self.velocity = 0.0                 # px/ms, positive = content moves up (value grows)
+        self._fling_last = 0.0
+
+    @staticmethod
+    def _area_of(widget: QWidget) -> QAbstractScrollArea | None:
+        w = widget
+        while w is not None:
+            if w.property("noDragScroll"):
+                return None
+            parent = w.parentWidget()
+            if isinstance(parent, QAbstractScrollArea) and parent.viewport() is w and w.property("kinetic"):
+                return parent
+            w = parent
+        return None
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802 - Qt API
+        t = event.type()
+        if t not in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseMove, QEvent.Type.MouseButtonRelease,
+                     QEvent.Type.MouseButtonDblClick) or self.replaying or not isinstance(obj, QWidget):
+            return False
+        if t == QEvent.Type.MouseButtonPress:
+            if event.button() != Qt.MouseButton.LeftButton:
+                return False
+            area = self._area_of(obj)
+            if area is None or area.verticalScrollBar().maximum() <= 0 and not self.fling.isActive():
+                return False
+            self.fling.stop()
+            self.mode, self.target, self.area = "pending", obj, area
+            self.start = event.globalPosition()
+            self.start_value = area.verticalScrollBar().value()
+            self.samples = [(time.monotonic() * 1000.0, self.start.y())]
+            self.hold.start(int(self.HOLD_S * 1000))
+            return True                      # held back until we know what the finger does
+        if obj is not self.target or self.mode in ("", "pass"):
+            if t == QEvent.Type.MouseButtonRelease and obj is self.target:
+                self.mode, self.target = "", None
+            return False
+        pos = event.globalPosition()
+        if t == QEvent.Type.MouseButtonDblClick:
+            return True
+        if t == QEvent.Type.MouseMove:
+            dx, dy = pos.x() - self.start.x(), pos.y() - self.start.y()
+            if self.mode == "pending":
+                if max(abs(dx), abs(dy)) < self.SLOP_PX:
+                    return True
+                self.hold.stop()
+                if abs(dx) > abs(dy) and self._horizontal_target():
+                    self._replay_press()
+                    self.mode = "pass"
+                    return False             # this move goes to the slider
+                self.mode = "scroll"
+            self.samples.append((time.monotonic() * 1000.0, pos.y()))
+            self.samples = self.samples[-6:]
+            if self.area is not None:
+                self.area.verticalScrollBar().setValue(int(round(self.start_value - dy)))
+            return True
+        # release
+        self.hold.stop()
+        mode, self.mode = self.mode, ""
+        if mode == "pending":                # a tap: the widget gets press and release
+            self._replay_press()
+            self.target = None
+            return False
+        self.target = None
+        self._start_fling()
+        return True
+
+    def _horizontal_target(self) -> bool:
+        w = self.target
+        while w is not None and w is not self.area:
+            if isinstance(w, QAbstractSlider) and w.orientation() == Qt.Orientation.Horizontal:
+                return True
+            if w.property("hdrag"):
+                return True
+            w = w.parentWidget()
+        return False
+
+    def _on_hold(self) -> None:
+        if self.mode == "pending":
+            self._replay_press()
+            self.mode = "pass"
+
+    def _replay_press(self) -> None:
+        target = self.target
+        if target is None:
+            return
+        from PySide6.QtGui import QMouseEvent
+
+        local = QPointF(target.mapFromGlobal(self.start.toPoint()))
+        ev = QMouseEvent(QEvent.Type.MouseButtonPress, local, self.start, Qt.MouseButton.LeftButton,
+                         Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier)
+        self.replaying = True
+        try:
+            QApplication.sendEvent(target, ev)
+        except RuntimeError:                 # widget deleted meanwhile
+            pass
+        finally:
+            self.replaying = False
+
+    # ---------------------------------------------------------------- fling
+    def _start_fling(self) -> None:
+        if len(self.samples) < 2 or self.area is None:
+            return
+        (t0, y0), (t1, y1) = self.samples[0], self.samples[-1]
+        if t1 - t0 <= 0 or time.monotonic() * 1000.0 - t1 > 80:
+            return                           # finger stopped before lifting
+        self.velocity = -(y1 - y0) / (t1 - t0)
+        if abs(self.velocity) > 0.3:
+            self._fling_last = time.monotonic() * 1000.0
+            self._fling_pos = float(self.area.verticalScrollBar().value())
+            self.fling.start()
+
+    def _fling_step(self) -> None:
+        area = self.area
+        if area is None:
+            self.fling.stop()
+            return
+        now = time.monotonic() * 1000.0
+        dt = min(now - self._fling_last, 50.0)
+        self._fling_last = now
+        self._fling_pos += self.velocity * dt
+        self.velocity *= math.exp(-self.FRICTION * dt)
+        bar = area.verticalScrollBar()
+        bar.setValue(int(round(self._fling_pos)))
+        if abs(self.velocity) < 0.05 or bar.value() in (bar.minimum(), bar.maximum()):
+            self.fling.stop()
+
+
 def make_kinetic(area: QAbstractScrollArea) -> QAbstractScrollArea:
-    """Finger scrolling with a little overshoot for any scroll area (idempotent)."""
+    """Finger scrolling anywhere on the area's content (:class:`DragScroller`; idempotent)."""
     vp = area.viewport()
     if vp.property("kinetic"):
         return area
     vp.setProperty("kinetic", True)
-    QScroller.grabGesture(vp, QScroller.ScrollerGestureType.TouchGesture)
-    props = QScroller.scroller(vp).scrollerProperties()
-    props.setScrollMetric(QScrollerProperties.ScrollMetric.OvershootDragResistanceFactor, 0.3)
-    props.setScrollMetric(QScrollerProperties.ScrollMetric.OvershootScrollDistanceFactor, 0.1)
-    props.setScrollMetric(QScrollerProperties.ScrollMetric.DragStartDistance, 0.004)
-    QScroller.scroller(vp).setScrollerProperties(props)
+    DragScroller.install()
     return area
 
 
