@@ -351,10 +351,6 @@ def main() -> int:
     return 0
 
 
-if __name__ == "__main__":
-    sys.exit(main())
-
-
 CALLBACK_MARK = "Inverted Pendulum Simulator: Qt gets the result too"
 CALLBACKS = {  # method header → call of the overridden method (QtActivity's)
     "protected void onActivityResult(int requestCode, int resultCode, Intent intent) {":
@@ -390,3 +386,7 @@ def patch_activity_callbacks(p4a: Path) -> bool:
     java.write_text(text, encoding="utf-8")
     log.info("activity results handed to Qt in %s", java)
     return True
+
+
+if __name__ == "__main__":
+    sys.exit(main())
