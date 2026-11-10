@@ -40,6 +40,8 @@ from .gpu import DRAWING_MODES
 from .icons import icon
 from .performance import FRAME_RATES, GRAPH_RATES_HZ, PRESETS, SOFTWARE_DRAWING_NOTE, PerformanceSettings
 
+SEED_MAX = 9999                   # slider range of the noise seed (typing allows the same)
+
 GAIN_RANGE = 1e6
 
 
@@ -420,7 +422,8 @@ class SystemPage(ScrollPage):
         self.noise_angle = sim.add(NumberRow("Angle noise", 0.0, 10.0, 0.0, 3, "°", "symlog"))
         self.noise_rate = sim.add(NumberRow("Angular-rate noise", 0.0, 100.0, 0.0, 2, "°/s", "symlog"))
         self.noise_pos = sim.add(NumberRow("Cart-position noise", 0.0, 0.1, 0.0, 4, "m", "symlog"))
-        self.seed = sim.add(NumberRow("Noise seed", 0, 2**31 - 1, 1, 0, "", slider=False))
+        self.seed = sim.add(NumberRow("Noise seed", 0, SEED_MAX, 1, 0, "", step=1,
+                                      hint="any whole number; the same seed gives the same noise"))
         self.add(sim)
         self.finish()
 

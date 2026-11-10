@@ -56,6 +56,10 @@ DOUBLE_TAP_S = 0.35
 PINCH_MIN_PX = 36          # finger separation along an axis needed to zoom that axis
 
 
+ON_OFF_STYLE = ("QPushButton { background: #8E2F2F; border: 1px solid #C0504D; color: #FFFFFF; } "
+                "QPushButton:checked { background: #23703A; border: 1px solid #3FAE5E; color: #FFFFFF; }")
+
+
 def fmt_value(v: float) -> str:
     """Compact value for the read-out (4 significant digits, no scientific notation for normal sizes)."""
     if not math.isfinite(v):
@@ -540,24 +544,28 @@ class GraphExplorer(QWidget):
         self.live_btn.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         # option: while live, a sideways drag looks back in time (the view keeps moving with
         # the run, that far behind the newest sample); off: the right edge stays at "now"
-        self.scroll_btn = push_button("Scroll", "expand")
+        self.scroll_btn = push_button("Scroll: off", "expand")
         self.scroll_btn.setCheckable(True)
         self.scroll_btn.setToolTip("While live: drag sideways to look back in time")
         self.scroll_btn.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
-        self.fit_btn = tool_button("fit", "Fit", tip="Show all data")
+        for b in (self.live_btn, self.scroll_btn):           # on = green, off = red
+            b.setStyleSheet(ON_OFF_STYLE)
+        self.fit_btn = tool_button("fit", "Fit", tip="Show the whole graph")
+        self.now_btn = tool_button("play", "Now", tip="Live: back to the present moment; "
+                                                       "not live: to the end of the recording")
         self.image_btn = tool_button("image", "Image", tip="Save the graph as PNG")
         self.data_btn = tool_button("table", "Data", tip="Save the graph's data as CSV")
         self.close_btn = tool_button("close", tip="Close")
-        for b in (self.live_btn, self.scroll_btn, self.fit_btn, self.image_btn, self.data_btn):
+        for b in (self.live_btn, self.scroll_btn, self.fit_btn, self.now_btn, self.image_btn, self.data_btn):
             tools_flow.addWidget(b)
         bar.addWidget(self.close_btn, 0, Qt.AlignmentFlag.AlignTop)
         v.addLayout(bar)
         v.addWidget(tools)
         self.plot = PlotView(self, interactive=True)
         v.addWidget(self.plot, 1)
-        self.hint = QLabel("Pinch to zoom (sideways: time, up/down: values) · drag to move · "
-                           "double-tap to fit · tap to read values · Live: on/off follows the run · "
-                           "Scroll (while live): drag sideways to look back")
+        self.hint = QLabel("Pinch to zoom (sideways: time, up/down: values) · drag to move · tap to read "
+                           "values · Live: follow the run · Scroll (while live): drag sideways to look back · "
+                           "Fit: whole graph · Now: to the newest data")
         self.hint.setProperty("role", "secondary")
         self.hint.setWordWrap(True)
         v.addWidget(self.hint)
@@ -566,6 +574,8 @@ class GraphExplorer(QWidget):
         self.timer.timeout.connect(self._pull)
         self.live_btn.toggled.connect(self._set_live)
         self.fit_btn.clicked.connect(self._fit)
+        self.now_btn.clicked.connect(self._now)
+        self.scroll_btn.toggled.connect(lambda on: self.scroll_btn.setText("Scroll: on" if on else "Scroll: off"))
         self.image_btn.clicked.connect(self._save_image)
         self.data_btn.clicked.connect(self._save_data)
         self.close_btn.clicked.connect(self.close_explorer)
@@ -576,7 +586,7 @@ class GraphExplorer(QWidget):
     def open_live(self, title: str, unit: str, source: Callable[[], list[Curve]], window_s: float) -> None:
         self._source = source
         self.window_s = window_s
-        self.live_span = window_s              # time span shown while following (pinch changes it)
+        self.live_span: float | None = window_s   # span shown while following (pinch); None = all data
         self.live_offset = 0.0                 # how far behind the newest sample (Scroll option)
         self.live_y: tuple[float, float] | None = None   # value range kept while following; None = fit
         self._open(title, unit)
@@ -638,7 +648,7 @@ class GraphExplorer(QWidget):
         if not math.isfinite(xhi):
             return
         x1 = xhi - self.live_offset
-        x0 = x1 - self.live_span
+        x0 = x1 - self.live_span if self.live_span is not None else curves_extent(curves)[0]
         if self.live_y is None:
             self.plot.set_x_range(x0, x1)
         else:
@@ -664,12 +674,24 @@ class GraphExplorer(QWidget):
         return curves_extent(self.plot.curves)[1] if self.plot.curves else math.nan
 
     def _fit(self) -> None:
+        """The whole graph (while live: everything recorded, still following)."""
         self.plot.cursor_x = None
         if self.live_btn.isChecked():
-            self.live_span, self.live_y, self.live_offset = self.window_s, None, 0.0
+            self.live_span, self.live_y, self.live_offset = None, None, 0.0
             self._pull()
         else:
             self.plot.fit()
+
+    def _now(self) -> None:
+        """Live: back to the present moment. Not live: to the end of the recording (same span)."""
+        if self.live_btn.isChecked():
+            self.live_offset = 0.0
+            self._pull()
+            return
+        newest = self._newest()
+        if math.isfinite(newest):
+            x0, x1, _y0, _y1 = self.plot.view_range()
+            self.plot.set_x_range(newest - (x1 - x0), newest)
 
     # ---------------------------------------------------------------- files
     def _save_image(self) -> None:

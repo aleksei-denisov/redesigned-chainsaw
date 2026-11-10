@@ -683,15 +683,20 @@ def test_tapping_a_graph_opens_the_explorer(win, app, tmp_path, monkeypatch):
     x0, x1, y0, y1 = plot.view_range()
     assert x1 == pytest.approx(plot.curves[0].x[-1]) and x1 - x0 == pytest.approx(ex.live_span)
     assert (y0, y1) == pytest.approx(kept_y)
-    ex.fit_btn.click()                                          # live fit: default span, values fitted
-    assert ex.live_span == win.telemetry.window_s and ex.live_y is None
+    ex.fit_btn.click()                                          # Fit while live: the whole recording
+    assert ex.live_span is None and ex.live_y is None
+    x0, x1, _y0, _y1 = plot.view_range()
+    assert x0 == pytest.approx(plot.curves[0].x[0]) and x1 == pytest.approx(plot.curves[0].x[-1])
+    plot.zoom(2.0, 1.0)                                         # back to a span
+    assert ex.live_span == pytest.approx(0.5 * (x1 - x0))
     # option: scroll while live – a sideways drag looks back, the view keeps moving with the run
-    assert ex.scroll_btn.isVisible() and not ex.scroll_btn.isChecked()
+    assert ex.scroll_btn.isVisible() and not ex.scroll_btn.isChecked() and ex.scroll_btn.text() == "Scroll: off"
     x0, x1, y0, y1 = plot.view_range()
     plot._view = [x0 - 2.0, x1 - 2.0, y0, y1]
     plot.viewChanged.emit()
     assert ex.live_offset == 0.0                                 # option off: right edge stays at "now"
     ex.scroll_btn.click()
+    assert ex.scroll_btn.text() == "Scroll: on"
     x0, x1, y0, y1 = plot.view_range()
     plot._view = [x0 - 2.0, x1 - 2.0, y0, y1]
     plot.viewChanged.emit()
@@ -699,8 +704,10 @@ def test_tapping_a_graph_opens_the_explorer(win, app, tmp_path, monkeypatch):
     frames(win, app, 10)
     ex._pull()
     assert plot.view_range()[1] == pytest.approx(plot.curves[0].x[-1] - ex.live_offset)
-    ex.fit_btn.click()
-    assert ex.live_offset == 0.0
+    span = ex.live_span
+    ex.now_btn.click()                                          # Now (live): back to the present, same span
+    assert ex.live_offset == 0.0 and ex.live_span == span
+    assert plot.view_range()[1] == pytest.approx(plot.curves[0].x[-1])
     ex.scroll_btn.click()
     # only the button switches live off; then the data stay put for free exploring
     ex.live_btn.click()
@@ -721,6 +728,11 @@ def test_tapping_a_graph_opens_the_explorer(win, app, tmp_path, monkeypatch):
     assert img.width() > 100
     ex.fit_btn.click()
     assert plot.fitted
+    plot.zoom(4.0, 1.0)
+    x0, x1, _y0, _y1 = plot.view_range()
+    ex.now_btn.click()                                          # Now (not live): the end of the recording
+    n0, n1, _y0, _y1 = plot.view_range()
+    assert n1 == pytest.approx(plot.curves[0].x[-1]) and n1 - n0 == pytest.approx(x1 - x0)
     # files: data (CSV) and image (PNG), each on its own
     monkeypatch.setattr(file_io, "save_file_name", lambda parent, title, name, flt, suffix=None: tmp_path / name)
     ex.data_btn.click()
