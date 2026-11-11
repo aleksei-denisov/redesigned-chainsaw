@@ -49,13 +49,26 @@ def polygon(xs: np.ndarray, ys: np.ndarray) -> QPolygonF:
     return poly
 
 
+_NUMPY_SERIES = [True]       # PySide6 built without NumPy support (the Android wheel) takes lists
+
+
 def fill_series(series: QObject, xs: np.ndarray, ys: np.ndarray) -> None:
-    """Replace the points of a Qt Graphs line series (NumPy fast path where PySide has it)."""
+    """Replace the points of a Qt Graphs line series in one call.
+
+    ``replaceNp`` takes NumPy arrays where PySide6 was built with NumPy support and plain
+    sequences otherwise (as on Android); without ``replaceNp`` the points go as a polygon.
+    """
     replace_np = getattr(series, "replaceNp", None)
-    if replace_np is not None:
-        replace_np(np.ascontiguousarray(xs, dtype=np.float64), np.ascontiguousarray(ys, dtype=np.float64))
-    else:
+    if replace_np is None:
         series.replace(polygon(xs, ys))
+        return
+    if _NUMPY_SERIES[0]:
+        try:
+            replace_np(np.ascontiguousarray(xs, dtype=np.float64), np.ascontiguousarray(ys, dtype=np.float64))
+            return
+        except TypeError:
+            _NUMPY_SERIES[0] = False
+    replace_np(xs.tolist(), ys.tolist())
 
 
 def percentile(values: list[float], q: float) -> float:

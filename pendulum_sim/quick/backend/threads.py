@@ -29,6 +29,45 @@ def _cpu_seconds(task: Path) -> float:
     return (int(fields[11]) + int(fields[12])) / os.sysconf("SC_CLK_TCK")   # utime + stime
 
 
+def thread_table() -> dict[int, tuple[str, float]]:
+    """``{thread id: (name, CPU seconds so far)}`` for every thread of this process.
+
+    The GUI thread (Python's main thread) is named ``GUI`` whatever the kernel calls it.
+    Empty where ``/proc`` is not available.
+    """
+    out: dict[int, tuple[str, float]] = {}
+    gui = threading.main_thread().native_id
+    try:
+        tasks = list(TASKS.iterdir())
+    except OSError:
+        return out
+    for task in tasks:
+        try:
+            tid = int(task.name)
+            seconds = _cpu_seconds(task)
+            name = (task / "comm").read_text(encoding="utf-8", errors="replace").strip()
+        except (OSError, ValueError, IndexError):
+            continue                                       # the thread ended meanwhile
+        out[tid] = ("GUI" if tid == gui else name, seconds)
+    return out
+
+
+def busiest_threads(before: dict[int, tuple[str, float]], after: dict[int, tuple[str, float]],
+                    seconds: float, limit: int = 8) -> list[tuple[str, int, float]]:
+    """``(name, thread id, % of one core)`` between two :func:`thread_table` readings, busiest first.
+
+    Threads that started in between count from zero; threads below 0.5 % are left out.
+    """
+    rows = []
+    for tid, (name, cpu) in after.items():
+        start = before.get(tid, (name, 0.0))[1]
+        share = 100.0 * (cpu - start) / max(seconds, 1e-9)
+        if share >= 0.5:
+            rows.append((name, tid, share))
+    rows.sort(key=lambda r: -r[2])
+    return rows[:limit]
+
+
 def thread_times() -> dict[str, float]:
     """CPU seconds so far: ``gui`` (main thread), ``render`` (if it exists) and ``other``.
 

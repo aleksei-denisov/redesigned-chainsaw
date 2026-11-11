@@ -16,13 +16,25 @@ import os
 import time
 
 
+def _seconds_since_boot() -> float:
+    """Uptime from ``/proc/uptime``, or the boot-time clock where that file is not readable
+    (Android apps may not read it; ``CLOCK_BOOTTIME`` counts the same way, suspend included)."""
+    try:
+        with open("/proc/uptime", encoding="ascii") as f:
+            return float(f.read().split()[0])
+    except (OSError, ValueError, IndexError):
+        clock = getattr(time, "CLOCK_BOOTTIME", None)
+        if clock is None:
+            raise OSError("no boot-time clock") from None
+        return time.clock_gettime(clock)
+
+
 def process_age() -> float | None:
     """Seconds since this process started, or ``None`` where /proc is not available."""
     try:
         with open("/proc/self/stat", encoding="ascii") as f:
             stat = f.read()
-        with open("/proc/uptime", encoding="ascii") as f:
-            uptime = float(f.read().split()[0])
+        uptime = _seconds_since_boot()
         # field 22 (starttime, clock ticks since boot); the command name in field 2
         # may contain spaces, so split after its closing parenthesis
         fields = stat[stat.rindex(")") + 2:].split()

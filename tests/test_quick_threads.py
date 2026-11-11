@@ -57,3 +57,30 @@ def test_cpu_frequencies_from_sysfs(tmp_path):
     assert threads.cpu_frequencies(tmp_path) == (
         "cpu 0-3: 1.80 of 1.80 GHz · cpu 4-6: 1.90 of 2.42 GHz (limit 2.00) · cpu 7: 3.19 of 3.19 GHz")
     assert threads.cpu_frequencies(tmp_path / "missing") == ""
+
+
+def test_thread_table_names_the_gui_thread_and_lists_workers():
+    stop = threading.Event()
+
+    def spin() -> None:
+        while not stop.is_set():
+            sum(range(1000))
+
+    worker = threading.Thread(target=spin, name="spinner", daemon=True)
+    before = threads.thread_table()
+    started = time.perf_counter()
+    worker.start()
+    time.sleep(0.25)
+    after = threads.thread_table()
+    stop.set()
+    worker.join()
+    assert any(name == "GUI" for name, _cpu in after.values())
+    rows = threads.busiest_threads(before, after, time.perf_counter() - started)
+    assert rows and rows[0][2] > 10.0                    # the spinner is the busiest thread
+    assert worker.native_id in {tid for _name, tid, _share in rows}
+
+
+def test_busiest_threads_counts_new_threads_from_zero():
+    before = {1: ("GUI", 1.0)}
+    after = {1: ("GUI", 1.5), 7: ("QSGRenderThread", 0.25), 9: ("idle", 0.001)}
+    assert threads.busiest_threads(before, after, 1.0) == [("GUI", 1, 50.0), ("QSGRenderThread", 7, 25.0)]

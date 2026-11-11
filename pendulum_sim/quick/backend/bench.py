@@ -56,7 +56,7 @@ class Benchmark(QObject):
         self._progress = ""
         self._copied = False
         self._saved: tuple[str, str, str, bool] | None = None
-        self._start = (0.0, 0, {}, {})
+        self._start = (0.0, 0, {}, {}, {})
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
         self._timer.timeout.connect(self._step)
@@ -122,15 +122,19 @@ class Benchmark(QObject):
             self.sim.recorder.recording = []
             self.graph.recording = []
             swaps = int(self.window.property("swaps")) if self.window is not None else 0
-            self._start = (time.perf_counter(), swaps, self.sim.source.stats(), threads.thread_times())
+            self._start = (time.perf_counter(), swaps, self.sim.source.stats(), threads.thread_times(),
+                           threads.thread_table())
             self._timer.start(int(RECORD_S * 1000))
             return
         frames, graph_ms = self._stop_recording()
-        started, swaps0, stats0, cpu0 = self._start
+        started, swaps0, stats0, cpu0, table0 = self._start
         seconds = time.perf_counter() - started
         swaps = (int(self.window.property("swaps")) if self.window is not None else 0) - swaps0
         block = summarise(PHASES[self._phase][0], frames, seconds, graph_ms, swaps, stats0,
                           self.sim.source.stats(), cpu0, threads.thread_times())
+        busiest = threads.busiest_threads(table0, threads.thread_table(), seconds, limit=6)
+        if busiest:
+            block += "\n  threads (% of one core): " + ", ".join(f"{name} {share:.0f}" for name, _tid, share in busiest)
         if self.graph.error:
             block += f"\n  note: {self.graph.error}"
         self._blocks.append(block)
