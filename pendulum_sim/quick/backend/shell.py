@@ -21,6 +21,7 @@ class AppBridge(QObject):
     shellLoaded = Signal()           # the shell and the Simulate screen are built
     shellShown = Signal()            # … and their first frame is on screen
     exitRequested = Signal()
+    failed = Signal()                # the shell could not be built (QML error)
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -64,6 +65,11 @@ class AppBridge(QObject):
         if not self._shell_loaded:
             self._shell_loaded = True
             self.shellLoaded.emit()
+
+    @Slot()
+    def shellFailed(self) -> None:  # noqa: N802 - QML API
+        self.set_status("The app's screens could not be loaded (QML error; see the log).", 0.0)
+        self.failed.emit()
 
     @Slot()
     def shellFrame(self) -> None:  # noqa: N802 - QML API

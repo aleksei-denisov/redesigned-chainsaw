@@ -5,8 +5,8 @@ import PendulumApp 1.0
 import Instrument 1.0
 
 // App shell: the screens (each built when first opened) and the bottom dock with the
-// navigation tabs and the run controls. Drives the frame loop: every vsync goes to
-// Frames.vsync(), which decides (frame pacing) whether a new frame is shown.
+// navigation tabs and the run controls. Every vsync goes to Frames.vsync() (frame
+// pacing decides whether a new frame is shown).
 Item {
     id: shell
     focus: true
@@ -21,10 +21,9 @@ Item {
             App.back()
     }
 
-    FrameAnimation {
-        running: Frames.enabled
-        onTriggered: Frames.vsync()
-    }
+    // the frame loop (Main.qml's FrameAnimation calls these)
+    readonly property bool framesEnabled: Frames.enabled
+    function vsync() { Frames.vsync() }
 
     ColumnLayout {
         anchors.fill: parent

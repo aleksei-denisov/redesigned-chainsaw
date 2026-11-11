@@ -152,6 +152,7 @@ class QuickApp:
         self.shell.shellLoaded.connect(lambda: TIMER.mark("app shell and Simulate screen built"))
         self.shell.shellShown.connect(self._on_shell_shown)
         self.shell.exitRequested.connect(self._on_exit_requested)
+        self.shell.failed.connect(self._on_shell_failed)
         self.engine.load(QUrl.fromLocalFile(str(HERE / "qml" / "Main.qml")))
         roots = self.engine.rootObjects()
         if not roots:
@@ -161,6 +162,10 @@ class QuickApp:
         if IS_ANDROID:
             self.window.showMaximized()
         TIMER.mark("loading screen created")
+        if self._unattended:                          # CI: never hang
+            from PySide6.QtCore import QTimer
+
+            QTimer.singleShot(90_000, self._watchdog)
         self.sim = self.frames = self.graphs = self.bench = self.autotune = None
         app.applicationStateChanged.connect(self._on_application_state)
 
@@ -182,7 +187,7 @@ class QuickApp:
             print(self.backend_error, file=sys.stderr, flush=True)
             self.shell.set_status("The app could not start:\n\n" + self.backend_error, 0.0)
             self.result = 1
-            if self.args.smoke_test is not None or self.args.benchmark or self.args.screenshot:
+            if self._unattended:
                 self.app.quit()
 
     def _create_backend(self) -> None:
@@ -242,6 +247,15 @@ class QuickApp:
         self.frames.start_threads()
         self.frames.collector.start(time.perf_counter())
         self._start_mode()
+
+    def _on_shell_failed(self) -> None:
+        print("The app shell could not be loaded:\n" + "\n".join(self.warnings), file=sys.stderr, flush=True)
+        if self._unattended:
+            self._done(False)
+
+    @property
+    def _unattended(self) -> bool:
+        return self.args.smoke_test is not None or self.args.benchmark or bool(self.args.screenshot)
 
     def _on_exit_requested(self) -> None:
         self.window.setProperty("askExit", True)
@@ -306,6 +320,10 @@ class QuickApp:
         print(f"screenshot {self.args.screenshot}: {image.width()}×{image.height()} {'saved' if ok else 'NOT saved'}",
               flush=True)
         self._done(ok and (not self.args.strict or not self.warnings))
+
+    def _watchdog(self) -> None:
+        print("Watchdog: the run did not finish within 90 s.\n" + "\n".join(self.warnings), file=sys.stderr, flush=True)
+        self._done(False)
 
     def _done(self, ok: bool) -> None:
         self.result = 0 if ok else 1

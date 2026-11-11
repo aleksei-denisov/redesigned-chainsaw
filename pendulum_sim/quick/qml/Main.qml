@@ -35,6 +35,12 @@ Window {
         }
     }
 
+    // vsync-driven frame loop; lives here because this file is loaded synchronously
+    FrameAnimation {
+        running: shell.status === Loader.Ready && shell.item.framesEnabled
+        onTriggered: shell.item.vsync()
+    }
+
     Loader {
         id: shell
         anchors.fill: parent
@@ -47,6 +53,7 @@ Window {
             item.forceActiveFocus()
             App.shellReady()
         }
+        onStatusChanged: if (status === Loader.Error) App.shellFailed()
     }
 
     // ------------------------------------------------------------ loading screen
