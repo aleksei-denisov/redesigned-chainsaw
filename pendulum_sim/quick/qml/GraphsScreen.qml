@@ -1,6 +1,5 @@
 import QtQuick
 import QtQuick.Layouts
-import Pendulum 1.0
 import Instrument 1.0
 
 // Graphs screen: choose up to four graphs (remembered) and the time window; one card
@@ -24,22 +23,22 @@ Item {
                 width: parent.width - 24
                 spacing: 6
                 Repeater {
-                    model: Graphs.available
+                    model: graphs.available
                     Btn {
                         required property var modelData
                         text: modelData.title
                         implicitHeight: Theme.touch
                         textSize: 14
-                        active: Graphs.selection.indexOf(modelData.key) >= 0
-                        onClicked: Graphs.select(modelData.key, !active)
+                        active: graphs.selection.indexOf(modelData.key) >= 0
+                        onClicked: graphs.select(modelData.key, !active)
                     }
                 }
                 Item { width: 12; height: 1 }
                 Seg {
                     title: "Window"
-                    options: Graphs.windows.map(w => [w, w + " s"])
-                    value: Graphs.windowS
-                    onPicked: (v) => Graphs.windowS = v
+                    options: graphs.windows.map(w => [w, w + " s"])
+                    value: graphs.windowS
+                    onPicked: (v) => graphs.windowS = v
                 }
             }
         }
@@ -48,18 +47,18 @@ Item {
             id: grid
             Layout.fillWidth: true
             Layout.fillHeight: true
-            readonly property int count: Graphs.selection.length
+            readonly property int count: graphs.selection.length
             columns: screen.wide && count > 1 ? 2 : 1
             columnSpacing: Theme.gap
             rowSpacing: Theme.gap
             Repeater {
-                model: Graphs.selection
+                model: graphs.selection
                 GraphCard {
                     required property string modelData
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     Layout.minimumHeight: 120
-                    view: Graphs.view(modelData)
+                    view: graphs.view(modelData)
                     colors: modelData === "angle" || modelData === "angular_velocity" ? Theme.segments : Theme.palette
                     active: screen.shown
                 }

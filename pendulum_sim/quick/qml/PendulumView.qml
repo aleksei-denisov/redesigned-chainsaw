@@ -1,18 +1,17 @@
 import QtQuick
-import Pendulum 1.0
 import Instrument 1.0
 
 // The pendulum as plain QML items. Python only changes four numbers per frame
-// (Sim.cartX, Sim.th1..3); place() turns them into item positions and rotations, and
+// (sim.cartX, sim.th1..3); place() turns them into item positions and rotations, and
 // the scene graph renders them without calling Python. One-finger drag pulls the tip
-// towards the finger (same force law as the Widgets app: Sim.drag(offset)).
+// towards the finger (same force law as the Widgets app: sim.drag(offset)).
 // Geometry follows the Widgets view: cart 0.30 × 0.12 m, rail 0.17 m below the pivot,
 // wheels 0.09 m either side, camera centred 42 % of the pendulum length above the pivot.
 Item {
     id: view
     clip: true
 
-    property var lens: Sim.lengths
+    property var lens: sim.lengths
     property real total: {
         var s = 0
         for (var i = 0; i < lens.length; i++)
@@ -48,15 +47,15 @@ Item {
     // track with end stops
     Rectangle {
         id: track
-        visible: Sim.hasCart
-        width: (Sim.trackLength + 0.30) * view.pxPerM
+        visible: sim.hasCart
+        width: (sim.trackLength + 0.30) * view.pxPerM
         height: 3
         x: view.width / 2 - width / 2
         y: view.originY + 0.17 * view.pxPerM - 1.5
         color: Theme.track
     }
     Repeater {
-        model: Sim.hasCart ? 2 : 0
+        model: sim.hasCart ? 2 : 0
         Rectangle {
             width: 4
             height: 0.12 * view.pxPerM
@@ -68,7 +67,7 @@ Item {
 
     Item {
         id: cart
-        visible: Sim.hasCart
+        visible: sim.hasCart
         width: 0.30 * view.pxPerM
         height: 0.12 * view.pxPerM
         y: view.originY + 0.02 * view.pxPerM
@@ -97,7 +96,7 @@ Item {
 
     Repeater {
         id: links
-        model: Sim.segments
+        model: sim.segments
         Rectangle {
             width: view.linkW
             height: view.lens[index] * view.pxPerM
@@ -109,7 +108,7 @@ Item {
     }
     Repeater {
         id: joints
-        model: Sim.segments + 1
+        model: sim.segments + 1
         Rectangle {
             property real r: index === 0 ? view.linkW * 0.75 : view.linkW * 0.6
             width: 2 * r
@@ -124,9 +123,9 @@ Item {
 
     function place() {
         var s = pxPerM
-        var cx = width / 2 + Sim.cartX * s
+        var cx = width / 2 + sim.cartX * s
         cart.x = cx - cart.width / 2
-        var th = [Sim.th1, Sim.th2, Sim.th3]
+        var th = [sim.th1, sim.th2, sim.th3]
         var jx = cx
         var jy = originY
         var n = links.count
@@ -156,8 +155,8 @@ Item {
         id: drag
         target: null
         dragThreshold: 10
-        onCentroidChanged: if (active) Sim.drag((centroid.position.x - view.tipX) / (view.total * view.pxPerM))
-        onActiveChanged: if (!active) Sim.endDrag()
+        onCentroidChanged: if (active) sim.drag((centroid.position.x - view.tipX) / (view.total * view.pxPerM))
+        onActiveChanged: if (!active) sim.endDrag()
     }
     Rectangle {                                   // the finger's pull, while dragging
         visible: drag.active
@@ -170,7 +169,7 @@ Item {
     }
 
     Connections {
-        target: Sim
+        target: sim
         function onFrame() { view.place() }
     }
     onWidthChanged: place()

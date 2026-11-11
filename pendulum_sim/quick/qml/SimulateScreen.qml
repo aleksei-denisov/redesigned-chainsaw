@@ -1,6 +1,5 @@
 import QtQuick
 import QtQuick.Layouts
-import Pendulum 1.0
 import Instrument 1.0
 
 // Simulate screen: pendulum card, read-outs, compact trace (θ1 and cart x).
@@ -59,12 +58,12 @@ Item {
                     Rectangle {
                         width: 8; height: 8; radius: 4
                         anchors.verticalCenter: parent.verticalCenter
-                        color: Sim.running ? Theme.success : Theme.tick
+                        color: sim.running ? Theme.success : Theme.tick
                     }
-                    Mono { text: Sim.running ? "LIVE" : "PAUSED"; color: Sim.running ? Theme.success : Theme.textMuted }
-                    Mono { text: Sim.fpsText }
+                    Mono { text: sim.running ? "LIVE" : "PAUSED"; color: sim.running ? Theme.success : Theme.textMuted }
+                    Mono { text: sim.fpsText }
                 }
-                Mono { text: Sim.timeText }
+                Mono { text: sim.timeText }
             }
             Column {
                 anchors.right: parent.right
@@ -73,10 +72,10 @@ Item {
                 spacing: 4
                 Mono {
                     anchors.right: parent.right
-                    text: Sim.segments + (Sim.segments === 1 ? " SEGMENT" : " SEGMENTS") + (Sim.hasCart ? " · CART" : " · FIXED PIVOT")
+                    text: sim.segments + (sim.segments === 1 ? " SEGMENT" : " SEGMENTS") + (sim.hasCart ? " · CART" : " · FIXED PIVOT")
                     color: Theme.textMuted
                 }
-                Mono { anchors.right: parent.right; text: Sim.speedText; color: Theme.textMuted }
+                Mono { anchors.right: parent.right; text: sim.speedText; color: Theme.textMuted }
             }
         }
 
@@ -93,10 +92,10 @@ Item {
                 columnSpacing: Theme.gap
                 rowSpacing: Theme.gap
                 Layout.fillWidth: true
-                Readout { Layout.fillWidth: true; compact: !screen.wide; label: "Angle θ"; value: Sim.angleText; unit: "°"; valueColor: Theme.angle }
-                Readout { Layout.fillWidth: true; compact: !screen.wide; label: "Rate ω"; value: Sim.rateText; unit: "°/s" }
-                Readout { Layout.fillWidth: true; compact: !screen.wide; label: "Cart x"; value: Sim.cartText; unit: "m"; valueColor: Theme.accent }
-                Readout { Layout.fillWidth: true; compact: !screen.wide; label: "Force F"; value: Sim.forceText; unit: "N" }
+                Readout { Layout.fillWidth: true; compact: !screen.wide; label: "Angle θ"; value: sim.angleText; unit: "°"; valueColor: Theme.angle }
+                Readout { Layout.fillWidth: true; compact: !screen.wide; label: "Rate ω"; value: sim.rateText; unit: "°/s" }
+                Readout { Layout.fillWidth: true; compact: !screen.wide; label: "Cart x"; value: sim.cartText; unit: "m"; valueColor: Theme.accent }
+                Readout { Layout.fillWidth: true; compact: !screen.wide; label: "Force F"; value: sim.forceText; unit: "N" }
             }
 
             Card {
@@ -133,7 +132,7 @@ Item {
                     anchors.fill: parent
                     anchors.margins: 14
                     anchors.topMargin: 38
-                    view: Graphs.trace
+                    view: graphs.trace
                     colors: [Theme.angle, Theme.accent]
                     active: screen.shown && traceCard.visible
                 }

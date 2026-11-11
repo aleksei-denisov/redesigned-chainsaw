@@ -1,4 +1,4 @@
-"""QML singletons ``Settings`` and ``Scenarios``.
+"""QML singleton ``Settings`` and context object ``scenarios``.
 
 ``Settings`` keeps the app's own choices (remembered with ``QSettings``): theme
 (System / Light / Dark, applied at once), frame rate (Auto or a fixed 120/60/40/30),

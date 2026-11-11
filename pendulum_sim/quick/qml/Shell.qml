@@ -1,11 +1,10 @@
 import QtQuick
 import QtQuick.Layouts
-import Pendulum 1.0
 import PendulumApp 1.0
 import Instrument 1.0
 
 // App shell: the screens (each built when first opened) and the bottom dock with the
-// navigation tabs and the run controls. Every vsync goes to Frames.vsync() (frame
+// navigation tabs and the run controls. Every vsync goes to frames.vsync() (frame
 // pacing decides whether a new frame is shown).
 Item {
     id: shell
@@ -22,8 +21,8 @@ Item {
     }
 
     // the frame loop (Main.qml's FrameAnimation calls these)
-    readonly property bool framesEnabled: Frames.enabled
-    function vsync() { Frames.vsync() }
+    readonly property bool framesEnabled: frames.enabled
+    function vsync() { frames.vsync() }
 
     ColumnLayout {
         anchors.fill: parent
@@ -77,7 +76,7 @@ Item {
                             required property var modelData
                             text: modelData[1]
                             active: App.screen === modelData[0]
-                            enabled: !Bench.running && !Autotune.busy
+                            enabled: !bench.running && !autotune.busy
                             onClicked: App.screen = modelData[0]
                         }
                     }
@@ -87,24 +86,24 @@ Item {
                     spacing: 6
                     Layout.alignment: shell.wide ? Qt.AlignRight : Qt.AlignLeft
                     Caption { text: "Push"; anchors.verticalCenter: parent.verticalCenter; rightPadding: 2 }
-                    Btn { text: "Left"; onClicked: Sim.push(-1) }
-                    Btn { text: "Right"; onClicked: Sim.push(1) }
+                    Btn { text: "Left"; onClicked: sim.push(-1) }
+                    Btn { text: "Right"; onClicked: sim.push(1) }
                     Item { width: 6; height: 1 }
-                    Btn { text: "Reset"; onClicked: Sim.reset() }
-                    Btn { text: "Step"; onClicked: Sim.step() }
+                    Btn { text: "Reset"; onClicked: sim.reset() }
+                    Btn { text: "Step"; onClicked: sim.step() }
                     Btn {
-                        text: Sim.speed + "×"
+                        text: sim.speed + "×"
                         onClicked: {
-                            var s = Sim.speeds
-                            var i = s.indexOf(Sim.speed)
-                            Sim.speed = s[(i + 1) % s.length]
+                            var s = sim.speeds
+                            var i = s.indexOf(sim.speed)
+                            sim.speed = s[(i + 1) % s.length]
                         }
                     }
                     Btn {
-                        text: Sim.running ? "Pause" : "Play"
+                        text: sim.running ? "Pause" : "Play"
                         filled: true
                         implicitWidth: 96
-                        onClicked: Sim.toggle()
+                        onClicked: sim.toggle()
                     }
                 }
             }
@@ -136,7 +135,7 @@ Item {
         }
         Timer { id: toastTimer; onTriggered: toast.opacity = 0 }
         Connections {
-            target: Sim
+            target: sim
             function onMessage(kind, text) {
                 toast.text = text
                 toast.opacity = 1
@@ -163,13 +162,13 @@ Item {
             x: 8
             y: 6
             font.pixelSize: 11
-            text: Sim.fpsText + " · " + Frames.statsText
+            text: sim.fpsText + " · " + frames.statsText
         }
     }
 
     // -------------------------------------------------------- report sheet
     Connections {
-        target: Bench
+        target: bench
         function onFinished() { shell.reportOpen = true }
         function onShowRequested() { shell.reportOpen = true }
     }
@@ -192,7 +191,7 @@ Item {
                     font.weight: Font.DemiBold
                     Layout.fillWidth: true
                 }
-                Btn { text: Bench.copied ? "Copied" : "Copy report"; filled: true; onClicked: Bench.copy() }
+                Btn { text: bench.copied ? "Copied" : "Copy report"; filled: true; onClicked: bench.copy() }
                 Btn { text: "Close"; onClicked: shell.reportOpen = false }
             }
             Card {
@@ -205,7 +204,7 @@ Item {
                     contentWidth: reportText.implicitWidth
                     contentHeight: reportText.implicitHeight
                     boundsBehavior: Flickable.StopAtBounds
-                    Mono { id: reportText; text: Bench.report; font.pixelSize: 12 }
+                    Mono { id: reportText; text: bench.report; font.pixelSize: 12 }
                 }
             }
         }

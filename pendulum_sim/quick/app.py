@@ -5,8 +5,8 @@ Start-up order, built for a fast first frame:
 1. ``QGuiApplication``, the bundled fonts, ``Settings`` (theme) and ``App``;
 2. ``Main.qml`` – only the loading screen – is shown;
 3. after its first frame: NumPy and the simulation core, the physics process and the
-   backend singletons (``Sim``, ``Model``, ``Controller``, ``Graphs``, ``Autotune``,
-   ``Scenarios``, ``Frames``, ``Bench``);
+   backend objects, exposed to QML as context objects (``sim``, ``model``,
+   ``controller``, ``graphs``, ``autotune``, ``scenarios``, ``frames``, ``bench``);
 4. the app shell and the Simulate screen are built and fade in; other screens are
    built when first opened;
 5. once the Simulate screen is on screen: the frame loop's helpers start (Android
@@ -193,8 +193,6 @@ class QuickApp:
     def _create_backend(self) -> None:
         from ..mobile.startup import TIMER
 
-        from PySide6.QtQml import qmlRegisterSingletonInstance
-
         import numpy  # noqa: F401  - timed on its own: the biggest import
 
         from ..simulation import scenario
@@ -223,12 +221,13 @@ class QuickApp:
         self.bench = Benchmark(self.shell, self.sim, self.graphs, self.frames)
         self.bench.window = self.window
         self.bench.warnings = self.warnings
-        for cls, name, obj in ((SimulationBridge, "Sim", self.sim), (ModelBridge, "Model", self.model),
-                               (ControllerBridge, "Controller", self.controller),
-                               (GraphsBridge, "Graphs", self.graphs), (AutotuneBridge, "Autotune", self.autotune),
-                               (ScenarioBridge, "Scenarios", self.scenarios), (FrameDriver, "Frames", self.frames),
-                               (Benchmark, "Bench", self.bench)):
-            qmlRegisterSingletonInstance(cls, "Pendulum", 1, 0, name, obj)
+        # Context objects, not singleton types: QML types registered after the engine has
+        # started broke type checks in later files ("Cannot assign object of type …").
+        context = self.engine.rootContext()
+        for name, obj in (("sim", self.sim), ("model", self.model), ("controller", self.controller),
+                          ("graphs", self.graphs), ("autotune", self.autotune), ("scenarios", self.scenarios),
+                          ("frames", self.frames), ("bench", self.bench)):
+            context.setContextProperty(name, obj)
         s = self.settings
         s.frameRateChanged.connect(lambda: self.frames.set_mode(s.frameRate))
         s.graphRateChanged.connect(lambda: setattr(self.graphs, "rateHz", s.graphRate))

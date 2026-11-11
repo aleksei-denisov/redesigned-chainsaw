@@ -1,4 +1,4 @@
-"""QML singleton ``Graphs``: graph selection and the data of the graphs on screen.
+"""QML context object ``graphs``: graph selection and the data of the graphs on screen.
 
 A graph item in QML asks for its :class:`GraphView` (``Graphs.view("angle")``), tells it
 its size and whether it is visible, and draws the view's ``paths`` – per series a list of

@@ -1,4 +1,4 @@
-"""QML singleton ``Autotune``: the foreground robustness search (set-up → running → result).
+"""QML context object ``autotune``: the foreground robustness search (set-up → running → result).
 
 The same flow as the Widgets app's auto-tune screen, on the shared worker
 (:class:`~pendulum_sim.session.jobs.TuneWorker`, all CPU cores but one through the

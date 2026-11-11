@@ -1,4 +1,4 @@
-"""QML singleton ``Bench``: the built-in performance test (Run → report → Copy).
+"""QML context object ``bench``: the built-in performance test (Run → report → Copy).
 
 Runs the live app through a few situations – the Simulate screen at automatic and fixed
 frame rates, the Graphs screen with four graphs, the physics in a thread for

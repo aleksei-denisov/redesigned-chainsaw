@@ -40,8 +40,7 @@ Window {
         onTriggered: shell.item.vsync()
     }
 
-    // Built synchronously (asynchronous incubation cannot create QtQuick types here), but
-    // only after the loading screen's first frame is on screen.
+    // Built once the backend exists, i.e. after the loading screen's first frame.
     Loader {
         id: shell
         anchors.fill: parent

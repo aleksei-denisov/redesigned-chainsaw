@@ -1,6 +1,5 @@
 import QtQuick
 import QtQuick.Layouts
-import Pendulum 1.0
 import PendulumApp 1.0
 import Instrument 1.0
 
@@ -51,19 +50,19 @@ Item {
 
             Section {
                 title: "Scenario"
-                Body { width: parent.width; text: Sim.scenarioName; color: Theme.textMuted }
+                Body { width: parent.width; text: sim.scenarioName; color: Theme.textMuted }
                 Flow {
                     width: parent.width
                     spacing: 6
                     Repeater {
-                        model: Scenarios.items
+                        model: scenarios.items
                         Btn {
                             required property var modelData
                             text: modelData.name
                             textSize: 14
                             implicitHeight: Theme.touch
-                            active: modelData.name === Sim.scenarioName
-                            onClicked: Scenarios.load(modelData.key)
+                            active: modelData.name === sim.scenarioName
+                            onClicked: scenarios.load(modelData.key)
                         }
                     }
                 }
@@ -83,7 +82,7 @@ Item {
                     Mono {
                         height: Theme.touch
                         verticalAlignment: Text.AlignVCenter
-                        text: "now " + Frames.rate + " fps"
+                        text: "now " + frames.rate + " fps"
                         color: Theme.textMuted
                     }
                 }
@@ -95,9 +94,9 @@ Item {
                 }
                 Seg {
                     title: "Physics"
-                    options: Sim.processAvailable ? [["process", "Separate process"], ["thread", "Thread"]]
+                    options: sim.processAvailable ? [["process", "Separate process"], ["thread", "Thread"]]
                                                   : [["thread", "Thread"]]
-                    value: Sim.physics
+                    value: sim.physics
                     onPicked: (v) => Settings.physics = v
                 }
                 Seg {
@@ -119,17 +118,17 @@ Item {
                 Row {
                     spacing: 10
                     Btn {
-                        text: Bench.running ? "Cancel" : "Run performance test"
-                        filled: !Bench.running
-                        onClicked: Bench.running ? Bench.cancel() : Bench.start()
+                        text: bench.running ? "Cancel" : "Run performance test"
+                        filled: !bench.running
+                        onClicked: bench.running ? bench.cancel() : bench.start()
                     }
                     Btn {
                         text: "Show report"
-                        visible: Bench.report.length > 0 && !Bench.running
-                        onClicked: Bench.show()
+                        visible: bench.report.length > 0 && !bench.running
+                        onClicked: bench.show()
                     }
                 }
-                Mono { text: Bench.progress; color: Theme.textMuted; visible: Bench.running }
+                Mono { text: bench.progress; color: Theme.textMuted; visible: bench.running }
             }
         }
     }

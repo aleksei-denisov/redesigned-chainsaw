@@ -1,4 +1,4 @@
-"""QML singleton ``Frames``: the vsync-driven frame loop.
+"""QML context object ``frames``: the vsync-driven frame loop.
 
 QML's ``FrameAnimation`` calls :meth:`FrameDriver.vsync` on every vsync. The pacer
 (``pacing.py``) decides whether this vsync shows a new frame; if so the simulation

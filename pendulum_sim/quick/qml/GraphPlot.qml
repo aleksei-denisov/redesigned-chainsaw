@@ -1,7 +1,7 @@
 import QtQuick
 import QtQuick.Shapes
 
-// Curves of one graph view (Graphs.view(key) or Graphs.trace): per series a list of
+// Curves of one graph view (graphs.view(key) or graphs.trace): per series a list of
 // polylines, already decimated to the pixel width and in item pixels. Drawn by the
 // scene graph (Shape, curve renderer); Python only hands over the polygons.
 Item {

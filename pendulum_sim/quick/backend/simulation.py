@@ -1,4 +1,4 @@
-"""QML singleton ``Sim``: the running simulation – state per frame, read-outs, run control.
+"""QML context object ``sim``: the running simulation – state per frame, read-outs, run control.
 
 Owns the edited configuration (a shared :class:`~pendulum_sim.session.Session`) and the
 physics source (``sim_source.py``: a forked process by default). Every edit made

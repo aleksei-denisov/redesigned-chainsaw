@@ -1,4 +1,4 @@
-"""QML singletons ``Model`` and ``Controller``: the parameter screens' editors.
+"""QML context objects ``model`` and ``controller``: the parameter screens' editors.
 
 Both wrap shared editor forms (``pendulum_sim/session/forms.py``) in list models and
 turn each edit into a session edit (``Sim.session``), whose operations go to the physics
