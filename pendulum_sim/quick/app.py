@@ -7,8 +7,8 @@ Start-up order, built for a fast first frame:
 3. after its first frame: NumPy and the simulation core, the physics process and the
    backend singletons (``Sim``, ``Model``, ``Controller``, ``Graphs``, ``Autotune``,
    ``Scenarios``, ``Frames``, ``Bench``);
-4. the app shell and the Simulate screen are built asynchronously and fade in; other
-   screens are built when first opened;
+4. the app shell and the Simulate screen are built and fade in; other screens are
+   built when first opened;
 5. once the Simulate screen is on screen: the frame loop's helpers start (Android
    performance hints, render-thread measurement) and the garbage collector switches to
    idle-time collection.
@@ -188,7 +188,7 @@ class QuickApp:
             self.shell.set_status("The app could not start:\n\n" + self.backend_error, 0.0)
             self.result = 1
             if self._unattended:
-                self.app.quit()
+                self.app.exit(1)
 
     def _create_backend(self) -> None:
         from ..mobile.startup import TIMER
@@ -327,7 +327,7 @@ class QuickApp:
 
     def _done(self, ok: bool) -> None:
         self.result = 0 if ok else 1
-        self.app.quit()
+        self.app.exit(self.result)        # not quit(): that asks the window, which refuses (Back handling)
 
     def run(self) -> int:
         self.app.exec()

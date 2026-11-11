@@ -45,7 +45,6 @@ Item {
                     anchors.fill: parent
                     active: current || visited
                     visible: current
-                    asynchronous: modelData !== "simulate"
                     source: modelData === "simulate" ? "SimulateScreen.qml"
                           : modelData === "graphs" ? "GraphsScreen.qml" : "SettingsScreen.qml"
                     onCurrentChanged: if (current) visited = true

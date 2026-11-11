@@ -3,8 +3,7 @@ import PendulumApp 1.0
 import Instrument 1.0
 
 // Root window. Shows the loading screen on the very first frame; the app shell (and
-// with it the Simulate screen) is loaded asynchronously once the backend is ready and
-// fades in. Only App and Settings exist when this file loads.
+// with it the Simulate screen) is built once the backend is ready and fades in. Only App and Settings exist when this file loads.
 Window {
     id: root
     visible: true
@@ -41,10 +40,11 @@ Window {
         onTriggered: shell.item.vsync()
     }
 
+    // Built synchronously (asynchronous incubation cannot create QtQuick types here), but
+    // only after the loading screen's first frame is on screen.
     Loader {
         id: shell
         anchors.fill: parent
-        asynchronous: true
         active: App.ready
         source: "Shell.qml"
         opacity: status === Loader.Ready ? 1 : 0
