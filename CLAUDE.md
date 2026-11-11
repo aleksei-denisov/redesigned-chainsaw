@@ -25,6 +25,7 @@ Repository: https://github.com/aleksei-denisov/redesigned-chainsaw
 | `pendulum_sim/simulation` | Config, fixed-step engine, telemetry, experiments, metrics, scenarios | physics, control |
 | `pendulum_sim/ui` | PySide6 GUI, QPainter view, pyqtgraph plots | everything above |
 | `pendulum_sim/mobile` | Touch-first UI for Android (reuses `ui` view/plots) | everything above |
+| `pendulum_sim/quick` | Qt Quick (QML) UI for Android, in development (`docs/ANDROID_QTQUICK.md`); `quick/backend/sim_source.py` and `threads.py` stay Qt-free | physics, control, simulation, Qt-free helpers of `mobile` |
 
 - The physics/control/simulation layers must **never** import Qt. They are tested headless.
 - SciPy must stay optional in `control` (Android has none): import it with a NumPy fallback.
@@ -39,6 +40,8 @@ python -m pytest                  # run the test suite (GUI smoke test skips wit
 python scripts/export_examples.py # regenerate configs/*.json from built-in scenarios
 python -m pendulum_sim.mobile     # desktop preview of the Android interface
 python scripts/build_android.py   # build the APK (Linux/macOS, see docs/ANDROID.md)
+python -m pendulum_sim.quick      # desktop preview of the Qt Quick interface
+python scripts/build_android.py --ui quick   # build its APK (own application id)
 ```
 
 ## Code quality

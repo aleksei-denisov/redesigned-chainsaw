@@ -14,10 +14,17 @@ Android SDK (platform + build-tools for ``--api``) and NDK r28c.
 
     python scripts/build_android.py --sdk-path $ANDROID_HOME --ndk-path $ANDROID_HOME/ndk/28.2.13676358
     python scripts/build_android.py ... --release      # signed AAB, see docs/ANDROID.md
+    python scripts/build_android.py ... --ui quick     # the Qt Quick interface (own app id)
 
 The repository's desktop entry point (``main.py``) is not touched: the APK's
 ``main.py`` is ``android/main.py``, copied into a staging folder together with the
 shared ``pendulum_sim`` package.
+
+Two build targets (``--ui``) produce two apps that install side by side:
+
+* ``widgets`` (default) – the Qt Widgets mobile interface, ``com.adenisov.invertedpendulum``;
+* ``quick`` – the Qt Quick interface (``pendulum_sim/quick``), ``com.adenisov.invertedpendulumquick``,
+  staged without the Widgets UI packages so that only the Qt Quick libraries are loaded.
 """
 
 from __future__ import annotations
@@ -33,6 +40,7 @@ import sys
 import tomllib
 import urllib.request
 from pathlib import Path
+from typing import NamedTuple
 
 ROOT = Path(__file__).resolve().parents[1]
 BUILD = ROOT / "build" / "android"
@@ -56,6 +64,41 @@ REQUIREMENTS = ["numpy", "pyqtgraph==0.14.0", "colorama"]
 WHEEL_INDEX = "https://download.qt.io/official_releases/QtForPython/{package}/"
 # Not needed in the APK (desktop GUI internals stay: the mobile UI reuses ui/ widgets).
 STAGE_IGNORE = shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo")
+INCLUDE_EXTS = ["py", "png", "json", "svg"]
+
+
+class Target(NamedTuple):
+    """One Android app built from this repository."""
+
+    key: str
+    title: str
+    package_name: str                 # application id = PACKAGE_DOMAIN + "." + package_name
+    staging: Path                     # buildozer project directory (keeps its own build cache)
+    entry: str                        # file in android/ that becomes the APK's main.py
+    requirements: tuple[str, ...]
+    include_exts: tuple[str, ...]
+    # parts of pendulum_sim to stage: None = the whole package except ``exclude``;
+    # otherwise package names, or "package/module.py" for single modules
+    parts: tuple[str, ...] | None = None
+    exclude: tuple[str, ...] = ()
+    artifact: str = ""                # dist/<artifact>-<version>-debug.apk
+
+
+TARGETS = {
+    "widgets": Target(
+        key="widgets", title=APP_TITLE, package_name=PACKAGE_NAME, staging=STAGING, entry="main.py",
+        requirements=tuple(REQUIREMENTS), include_exts=tuple(INCLUDE_EXTS),
+        exclude=("quick",),           # its QML files would pull the Qt Quick libraries into this app
+        artifact=PACKAGE_NAME),
+    "quick": Target(
+        key="quick", title="Pendulum Quick", package_name="invertedpendulumquick",
+        staging=BUILD / "app-quick", entry="main_quick.py",
+        requirements=("numpy",), include_exts=(*INCLUDE_EXTS, "qml", "ttf", "txt"),
+        # the shared core, the Qt Quick UI and the Qt-free helpers it reuses from the mobile package
+        parts=("__init__.py", "physics", "control", "simulation", "quick",
+               "mobile/__init__.py", "mobile/plot_math.py", "mobile/startup.py", "mobile/cpu.py"),
+        artifact="invertedpendulumquick"),
+}
 
 log = logging.getLogger("build_android")
 
@@ -79,18 +122,30 @@ def project_version() -> str:
 
 
 # --------------------------------------------------------------------- staging
-def stage() -> None:
-    """Copy the APK contents into build/android/app (keeping buildozer's cache)."""
-    STAGING.mkdir(parents=True, exist_ok=True)
-    for item in STAGING.iterdir():
+def stage(target: Target = TARGETS["widgets"], staging: Path | None = None) -> Path:
+    """Copy the APK contents into the target's staging folder (keeping buildozer's cache)."""
+    staging = staging or target.staging
+    staging.mkdir(parents=True, exist_ok=True)
+    for item in staging.iterdir():
         if item.name in (".buildozer",):
             continue
         shutil.rmtree(item) if item.is_dir() else item.unlink()
-    shutil.copytree(ROOT / "pendulum_sim", STAGING / "pendulum_sim", ignore=STAGE_IGNORE)
-    shutil.copytree(ROOT / "configs", STAGING / "configs")
-    shutil.copy2(ANDROID_DIR / "main.py", STAGING / "main.py")
-    shutil.copy2(ANDROID_DIR / "icon.png", STAGING / "icon.png")
-    log.info("staged sources in %s", STAGING)
+    source, package = ROOT / "pendulum_sim", staging / "pendulum_sim"
+    if target.parts is None:
+        excluded = shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo", *target.exclude)
+        shutil.copytree(source, package, ignore=excluded)
+    else:
+        for part in target.parts:
+            if (source / part).is_dir():
+                shutil.copytree(source / part, package / part, ignore=STAGE_IGNORE)
+            else:
+                (package / part).parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source / part, package / part)
+    shutil.copytree(ROOT / "configs", staging / "configs")
+    shutil.copy2(ANDROID_DIR / target.entry, staging / "main.py")
+    shutil.copy2(ANDROID_DIR / "icon.png", staging / "icon.png")
+    log.info("staged sources of the '%s' target in %s", target.key, staging)
+    return staging
 
 
 # ---------------------------------------------------------------------- wheels
@@ -120,28 +175,29 @@ def find_wheel(package: str, version: str, arch: str) -> Path:
 
 
 # --------------------------------------------------------- deployment config
-def init_deployment(pyside_wheel: Path, shiboken_wheel: Path, sdk: Path, ndk: Path) -> None:
+def init_deployment(pyside_wheel: Path, shiboken_wheel: Path, sdk: Path, ndk: Path,
+                    target: Target = TARGETS["widgets"]) -> None:
     tool = Path(sys.executable).parent / "pyside6-android-deploy"
     run([str(tool), "--init", "--force", "--verbose", "--keep-deployment-files", "--no-install",
-         f"--name={PACKAGE_NAME}",
+         f"--name={target.package_name}",
          f"--wheel-pyside={pyside_wheel}", f"--wheel-shiboken={shiboken_wheel}",
          f"--sdk-path={sdk}", f"--ndk-path={ndk}"],
-        cwd=STAGING, env=build_env())
+        cwd=target.staging, env=build_env())
 
 
-def patch_buildozer_spec(version: str, release: bool) -> dict[str, str]:
-    spec_file = STAGING / "buildozer.spec"
+def patch_buildozer_spec(version: str, release: bool, target: Target = TARGETS["widgets"]) -> dict[str, str]:
+    spec_file = target.staging / "buildozer.spec"
     spec = configparser.ConfigParser(interpolation=None)
     spec.optionxform = str  # keep key case
     spec.read(spec_file, encoding="utf-8")
     app = spec["app"]
     reqs = [r for r in app.get("requirements", "").split(",") if r.strip()]
-    for r in REQUIREMENTS:
+    for r in target.requirements:
         if r.split("==")[0] not in {x.split("==")[0] for x in reqs}:
             reqs.append(r)
     app["requirements"] = ",".join(reqs)
-    app["title"] = APP_TITLE
-    app["package.name"] = PACKAGE_NAME
+    app["title"] = target.title
+    app["package.name"] = target.package_name
     app["package.domain"] = PACKAGE_DOMAIN
     app["version"] = version
     app.pop("version.regex", None)
@@ -159,7 +215,7 @@ def patch_buildozer_spec(version: str, release: bool) -> dict[str, str]:
     app["android.skip_update"] = "True"
     app["android.allow_backup"] = "False"
     app["source.include_exts"] = ",".join(sorted(set(
-        app.get("source.include_exts", "py").split(",") + ["py", "png", "json", "svg"])))
+        app.get("source.include_exts", "py").split(",") + list(target.include_exts))))
     app["source.exclude_dirs"] = "deployment,bin,.buildozer,tests"
     app["android.release_artifact"] = "aab" if release else "apk"
     app["android.debug_artifact"] = "apk"
@@ -296,24 +352,25 @@ def patch_splash(p4a: Path) -> bool:
 
 
 # ------------------------------------------------------------------- building
-def build(release: bool) -> list[Path]:
+def build(release: bool, target: Target = TARGETS["widgets"]) -> list[Path]:
     env = build_env()
+    staging = target.staging
     if release:
         missing = [v for v in ("P4A_RELEASE_KEYSTORE", "P4A_RELEASE_KEYSTORE_PASSWD",
                                "P4A_RELEASE_KEYALIAS", "P4A_RELEASE_KEYALIAS_PASSWD") if not env.get(v)]
         if missing:
             raise SystemExit("Release builds need the signing variables: " + ", ".join(missing))
     run([sys.executable, "-m", "buildozer", "android", "release" if release else "debug"],
-        cwd=STAGING, env=env)
+        cwd=staging, env=env)
     suffix = ".aab" if release else ".apk"
-    found = sorted((p for p in STAGING.rglob(f"*{suffix}") if ".buildozer" not in p.parts),
+    found = sorted((p for p in staging.rglob(f"*{suffix}") if ".buildozer" not in p.parts),
                    key=lambda p: p.stat().st_mtime)
     if not found:
-        found = sorted(STAGING.rglob(f"*{suffix}"), key=lambda p: p.stat().st_mtime)
+        found = sorted(staging.rglob(f"*{suffix}"), key=lambda p: p.stat().st_mtime)
     if not found:
-        raise SystemExit(f"buildozer finished but no {suffix} was found under {STAGING}")
+        raise SystemExit(f"buildozer finished but no {suffix} was found under {staging}")
     DIST.mkdir(exist_ok=True)
-    out = DIST / f"{PACKAGE_NAME}-{project_version()}-{'release' if release else 'debug'}{suffix}"
+    out = DIST / f"{target.artifact}-{project_version()}-{'release' if release else 'debug'}{suffix}"
     shutil.copy2(found[-1], out)
     log.info("built %s (%.1f MB)", out, out.stat().st_size / 1e6)
     return [out]
@@ -329,7 +386,10 @@ def main() -> int:
                         help="defaults to the installed PySide6 (the deploy tool must match)")
     parser.add_argument("--release", action="store_true", help="signed AAB instead of a debug APK")
     parser.add_argument("--stage-only", action="store_true", help="only stage and fetch wheels")
+    parser.add_argument("--ui", choices=sorted(TARGETS), default="widgets",
+                        help="which app to build: the Qt Widgets interface (default) or the Qt Quick one")
     args = parser.parse_args()
+    target = TARGETS[args.ui]
     logging.basicConfig(level=logging.INFO, format="%(name)s: %(message)s")
     if sys.platform not in ("linux", "darwin"):
         raise SystemExit("pyside6-android-deploy only runs on Linux or macOS hosts")
@@ -338,16 +398,16 @@ def main() -> int:
         import PySide6
 
         version = PySide6.__version__
-    stage()
+    stage(target)
     pyside = find_wheel("PySide6", version, args.arch)
     shiboken = find_wheel("shiboken6", version, args.arch)
     if args.stage_only:
         return 0
     if not args.sdk_path or not args.ndk_path:
         raise SystemExit("--sdk-path and --ndk-path are required (or ANDROID_HOME / ANDROID_NDK_HOME)")
-    init_deployment(pyside, shiboken, args.sdk_path.resolve(), args.ndk_path.resolve())
-    patch_buildozer_spec(project_version(), args.release)
-    build(args.release)
+    init_deployment(pyside, shiboken, args.sdk_path.resolve(), args.ndk_path.resolve(), target)
+    patch_buildozer_spec(project_version(), args.release, target)
+    build(args.release, target)
     return 0
 
 

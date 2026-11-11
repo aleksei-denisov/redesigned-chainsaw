@@ -23,11 +23,19 @@ env:
 
 jobs:
   apk:
-    name: Debug APK (arm64)
+    name: Debug APK (${{ matrix.ui }}, arm64)
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     permissions:
       contents: write          # publish the APK as the rolling "android-latest" pre-release
+    strategy:
+      fail-fast: false
+      matrix:
+        # widgets = the Qt Widgets app, quick = the Qt Quick app (own application id, see
+        # docs/ANDROID_QTQUICK.md). The qtquick-ui work branch only changes the Qt Quick app.
+        ui: ${{ fromJSON(github.ref_name == 'qtquick-ui' && '["quick"]' || '["widgets", "quick"]') }}
+    env:
+      STAGING: build/android/${{ matrix.ui == 'quick' && 'app-quick' || 'app' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -73,13 +81,13 @@ jobs:
           # no restore-keys: python-for-android does not rebuild changed recipes
           path: |
             ~/.buildozer
-            build/android/app/.buildozer
+            ${{ env.STAGING }}/.buildozer
             build/android/wheels
-          key: android-build-${{ hashFiles('scripts/build_android.py', 'android/requirements-build.txt') }}
+          key: android-build-${{ matrix.ui }}-${{ hashFiles('scripts/build_android.py', 'android/requirements-build.txt') }}
 
       - name: Build debug APK
         run: |
-          build/android-venv/bin/python scripts/build_android.py \
+          build/android-venv/bin/python scripts/build_android.py --ui ${{ matrix.ui }} \
             --sdk-path "$ANDROID_HOME" --ndk-path "$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION"
 
       - name: Inspect APK
@@ -89,10 +97,16 @@ jobs:
           AAPT="$ANDROID_HOME/build-tools/$ANDROID_API_LEVEL.0.0/aapt2"
           "$AAPT" dump badging "$APK" | grep -E "^package:|sdkVersion|targetSdkVersion|application-label:|native-code" || true
           unzip -l "$APK" | tail -n 1
+          echo "--- Qt modules and plugins chosen by pyside6-android-deploy"
+          grep -E "^(modules|plugins|local_libs|qml_files) *=" "$STAGING/pysidedeploy.spec" || true
+          grep -E "^p4a.extra_args" "$STAGING/buildozer.spec" || true
+          echo "--- largest native libraries"
+          unzip -l "$APK" "lib/*" | sort -k1 -n -r | head -n 25
+          echo "--- $(unzip -l "$APK" "lib/*" | grep -c '\.so$') native libraries, $(unzip -l "$APK" | grep -c 'assets/') asset files"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: inverted-pendulum-debug-apk
+          name: inverted-pendulum-${{ matrix.ui }}-debug-apk
           path: dist/*.apk
           if-no-files-found: error
           retention-days: 30
@@ -100,7 +114,7 @@ jobs:
       # A direct download link for phones/tablets (artifacts are zipped and need a GitHub login):
       # https://github.com/<owner>/<repo>/releases/download/android-latest/InvertedPendulumSimulator-debug.apk
       - name: Publish rolling pre-release
-        if: github.event_name == 'push' && (github.ref == 'refs/heads/android-apk' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/mobile-ux' || github.ref == 'refs/heads/mobile-polish')
+        if: matrix.ui == 'widgets' && github.event_name == 'push' && (github.ref == 'refs/heads/android-apk' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/mobile-ux' || github.ref == 'refs/heads/mobile-polish')
         env:
           GH_TOKEN: ${{ github.token }}
           # work-in-progress branches get their own link so android-latest stays stable
@@ -113,15 +127,29 @@ jobs:
             --title "Android debug APK (latest ${GITHUB_REF_NAME})" \
             --notes "Debug build of ${GITHUB_SHA::7} from ${GITHUB_REF_NAME}. Android 9+ (API 28), arm64-v8a. Open this page on the device, tap the .apk, allow installing from this source. See docs/ANDROID.md."
 
+      # The Qt Quick app installs next to the Widgets app (own application id), so both can be compared.
+      - name: Publish rolling pre-release (Qt Quick app)
+        if: matrix.ui == 'quick' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/qtquick-ui')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref == 'refs/heads/qtquick-ui' && 'android-qtquick-ui' || 'android-quick-latest' }}
+        run: |
+          cp dist/*.apk PendulumQuick-debug.apk
+          gh release delete "$TAG" --yes --cleanup-tag || true
+          gh release create "$TAG" PendulumQuick-debug.apk \
+            --prerelease --target "$GITHUB_SHA" \
+            --title "Android debug APK, Qt Quick app (latest ${GITHUB_REF_NAME})" \
+            --notes "Debug build of ${GITHUB_SHA::7} from ${GITHUB_REF_NAME}: the Qt Quick interface (application id com.adenisov.invertedpendulumquick, installs next to the Widgets app). Android 9+ (API 28), arm64-v8a. See docs/ANDROID_QTQUICK.md."
+
       - name: Build log on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: android-build-logs
+          name: android-build-logs-${{ matrix.ui }}
           path: |
-            build/android/app/buildozer.spec
-            build/android/app/pysidedeploy.spec
-            build/android/app/.buildozer/android/platform/build-*/dists/*/build.gradle
+            ${{ env.STAGING }}/buildozer.spec
+            ${{ env.STAGING }}/pysidedeploy.spec
+            ${{ env.STAGING }}/.buildozer/android/platform/build-*/dists/*/build.gradle
           if-no-files-found: ignore
 
   release:

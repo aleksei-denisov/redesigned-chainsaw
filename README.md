@@ -82,6 +82,7 @@ Or use the one-step launchers: `./start.sh` (macOS/Linux) or `start.bat` (Window
 - [docs/CONTROL.md](docs/CONTROL.md) – controller structure, multi-segment strategy, limitations.
 - [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) – architecture, tests, CI, extending the project.
 - [docs/ANDROID.md](docs/ANDROID.md) – the Android app: building the APK, installing, testing.
+- [docs/ANDROID_QTQUICK.md](docs/ANDROID_QTQUICK.md) – the Qt Quick version of the Android app (in development).
 - [CLAUDE.md](CLAUDE.md) – working rules for contributors and AI assistants.
 
 ## Project layout
@@ -94,6 +95,7 @@ pendulum_sim/
   simulation/              config/JSON, fixed-step engine, telemetry, experiments, metrics, scenarios
   ui/                      PySide6 window, QPainter view, panels, pyqtgraph plots
   mobile/                  touch-first interface for the Android app (reuses ui/ view and plots)
+  quick/                   Qt Quick (QML) interface for Android, in development (docs/ANDROID_QTQUICK.md)
 android/                   Android entry point, icon, build requirements, Dockerfile
 configs/                   example configurations (one per built-in scenario)
 scripts/                   export_examples.py, build_app.py, build_android.py, mobile_preview.py, make_figures.py
