@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Layouts
+import PendulumItems 1.0
 import Instrument 1.0
 
 // Simulate screen: pendulum card, read-outs, compact trace (θ1 and cart x).
@@ -127,7 +128,7 @@ Item {
                     height: 1
                     color: Theme.grid
                 }
-                GraphPlot {
+                GraphLines {
                     id: trace
                     anchors.fill: parent
                     anchors.margins: 14

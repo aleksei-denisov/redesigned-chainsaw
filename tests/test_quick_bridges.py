@@ -150,11 +150,11 @@ def test_graph_views_only_compute_when_active(bridges):
     view = graphs.view("angle")
     view.setSize(300.0, 120.0)
     graphs.refresh()
-    assert view.paths == []                               # not active: nothing computed
+    assert view.runs == []                                # not active: nothing computed
     view.setActive(True)
     graphs.refresh()
-    assert len(view.paths) == 3                           # θ1..θ3
-    assert all(poly.size() > 1 for runs in view.paths for poly in runs)
+    assert len(view.runs) == 3                            # θ1..θ3
+    assert all(xs.size > 1 and xs.size == ys.size for runs in view.runs for xs, ys in runs)
     assert view.ticks and all(0.0 <= t["y"] <= 120.0 for t in view.ticks)
 
 

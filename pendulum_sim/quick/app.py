@@ -142,7 +142,12 @@ class QuickApp:
 
         from PySide6.QtCore import QUrl
         from PySide6.QtGui import QFont, QFontDatabase
-        from PySide6.QtQml import QQmlApplicationEngine, qmlRegisterSingletonInstance, qmlRegisterSingletonType
+        from PySide6.QtQml import (
+            QQmlApplicationEngine,
+            qmlRegisterSingletonInstance,
+            qmlRegisterSingletonType,
+            qmlRegisterType,
+        )
 
         from .backend.settings import SettingsBridge
         from .backend.shell import AppBridge
@@ -173,6 +178,8 @@ class QuickApp:
         qmlRegisterSingletonInstance(SettingsBridge, "PendulumApp", 1, 0, "Settings", self.settings)
         qmlRegisterSingletonInstance(AppBridge, "PendulumApp", 1, 0, "App", self.shell)
         qmlRegisterSingletonType(QUrl.fromLocalFile(str(HERE / "qml" / "Theme.qml")), "Instrument", 1, 0, "Theme")
+        from .backend.lineitem import GraphLines        # registered before the engine starts (types
+        qmlRegisterType(GraphLines, "PendulumItems", 1, 0, "GraphLines")   # registered later break QML)
         TIMER.mark("fonts and settings ready")
 
         self.engine = QQmlApplicationEngine()
@@ -259,6 +266,9 @@ class QuickApp:
         refresh = screen.refreshRate() if screen is not None else 60.0
         self.frames = FrameDriver(self.sim, refresh, self.settings.frameRate)
         self.frames.hints_allowed = not self.safe_mode
+        from PySide6.QtCore import Qt
+
+        self.window.frameSwapped.connect(self.frames.swapped, Qt.ConnectionType.QueuedConnection)
         self.frames.journal = self.journal
         self.frames.attach_graphs(self.graphs)
         self.bench = Benchmark(self.shell, self.sim, self.graphs, self.frames)

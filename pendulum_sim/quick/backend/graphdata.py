@@ -1,9 +1,11 @@
 """Graph data for the Qt Quick screens: telemetry window → decimated pixel polylines (Qt-free).
 
-Uses the chart maths of the Widgets app (``mobile/plot_math.py``: graph catalogue, min/max
-decimation to the pixel width, automatic y range with a minimum span, nice ticks), so
-both apps show the same curves on the same axes. Each series becomes a list of *runs* –
-pieces without gaps or wrap-around jumps – which QML draws as one ``PathMultiline``.
+Uses the chart maths of the Widgets app (``mobile/plot_math.py``: graph catalogue,
+automatic y range with a minimum span, nice ticks), so both apps show the same axes. The
+curves are decimated with ``linegeom.decimate`` at the display's physical resolution
+(real samples, at most about one per physical pixel), which keeps them smooth on a
+high-density screen. Each series becomes a list of *runs* –
+pieces without gaps or wrap-around jumps – which ``GraphLines`` (``lineitem.py``) draws.
 """
 
 from __future__ import annotations
@@ -15,13 +17,13 @@ import numpy as np
 from ...mobile.plot_math import (
     GRAPHS,
     AxisRange,
-    downsample_minmax,
     finite_runs,
     graph_available,
     graph_series,
     nice_ticks,
     wrap_degrees,
 )
+from .linegeom import decimate
 
 Run = tuple[np.ndarray, np.ndarray]          # pixel x, pixel y
 
@@ -51,12 +53,18 @@ def columns(keys: list[str], n_segments: int, loop_labels: list[str], loop: int)
     return out
 
 
+def columns_for(width: float, dpr: float) -> int:
+    """Decimation columns for an item ``width`` wide: two samples per column, so about one
+    sample per physical pixel."""
+    return max(int(width * max(dpr, 1.0) / 2.0), 1)
+
+
 def _runs(t: np.ndarray, y: np.ndarray, wrap: bool, t0: float, t1: float, width: int) -> list[Run]:
     start = int(np.searchsorted(t, t0, side="left"))       # only the visible window
     t, y = t[start:], y[start:]
     runs = []
     for sl in finite_runs(y, wrap=wrap):
-        xs, ys = downsample_minmax(t[sl], y[sl], t0, t1, width)
+        xs, ys = decimate(t[sl], y[sl], t0, t1, width)
         if xs.size:
             runs.append((xs, ys))
     return runs
@@ -70,7 +78,8 @@ def _to_pixels(runs: list[Run], t0: float, window: float, lo: float, hi: float,
 
 
 def graph_frame(key: str, data: dict[str, np.ndarray], n_segments: int, loop_labels: list[str], loop: int,
-                window_s: float, width: float, height: float, axis: AxisRange, now: float) -> GraphFrame:
+                window_s: float, width: float, height: float, axis: AxisRange, now: float,
+                dpr: float = 1.0) -> GraphFrame:
     """Curves of graph ``key`` over the last ``window_s`` seconds of ``data``."""
     series = graph_series(key, n_segments, loop_labels, loop)
     t = data.get("t", np.zeros(0))
@@ -78,7 +87,7 @@ def graph_frame(key: str, data: dict[str, np.ndarray], n_segments: int, loop_lab
         return GraphFrame(series=[[] for _ in series])
     t1 = float(t[-1])
     t0 = t1 - window_s
-    columns_px = max(int(width), 1)
+    columns_px = columns_for(width, dpr)
     raw: list[list[Run]] = []
     lo, hi = np.inf, -np.inf
     for s in series:
@@ -102,7 +111,7 @@ TRACE = (("theta1", 180.0 / np.pi, True, 2.0), ("x", 1.0, False, 0.05))   # colu
 
 
 def trace_frame(data: dict[str, np.ndarray], window_s: float, width: float, height: float,
-                axes: list[AxisRange], now: float, has_cart: bool = True) -> GraphFrame:
+                axes: list[AxisRange], now: float, has_cart: bool = True, dpr: float = 1.0) -> GraphFrame:
     """The Simulate screen's compact trace: θ1 and cart x, each on its own scale."""
     t = data.get("t", np.zeros(0))
     frame = GraphFrame(series=[[], []])
@@ -116,7 +125,7 @@ def trace_frame(data: dict[str, np.ndarray], window_s: float, width: float, heig
         y = data[column] * scale
         if wrap:
             y = wrap_degrees(y)
-        runs = _runs(t, y, wrap, t0, t1, max(int(width), 1))
+        runs = _runs(t, y, wrap, t0, t1, columns_for(width, dpr))
         values = [ys[xs >= t0] for xs, ys in runs]
         values = [v for v in values if v.size]
         dmin = min((float(v.min()) for v in values), default=float("nan"))

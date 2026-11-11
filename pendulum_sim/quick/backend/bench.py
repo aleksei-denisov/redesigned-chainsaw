@@ -25,7 +25,7 @@ from PySide6.QtGui import QGuiApplication
 from PySide6.QtQuick import QQuickWindow
 
 from . import threads
-from .android_perf import thermal_status
+from .android_perf import api_level, thermal_status
 from .pacing import p95
 
 BENCH_GRAPHS = ["angle", "angular_velocity", "cart_position", "control"]
@@ -221,7 +221,9 @@ class Benchmark(QObject):
         from ...mobile.startup import TIMER
 
         parts = list(self._blocks)
-        notes = [f"  {self.frames.describe()}"]
+        from .lineitem import NOTES as LINE_NOTES
+
+        notes = [f"  {self.frames.describe()}"] + [f"  {k}: {v}" for k, v in LINE_NOTES.items()]
         if self._before["clocks"]:
             notes.append(f"  CPU clocks at the start: {self._before['clocks']}")
             notes.append(f"  CPU clocks now:          {threads.cpu_frequencies()}")
@@ -263,8 +265,9 @@ class Benchmark(QObject):
         cfg = self.sim.session.config
         return "\n".join([
             "Pendulum Quick – performance test",
-            f"Python {platform.python_version()} on {sys.platform} {platform.machine()}; "
-            f"PySide6 {PySide6.__version__}, Qt {qVersion()}",
+            f"Python {platform.python_version()} on {sys.platform} {platform.machine()}"
+            + (f" (Android API {api_level()})" if api_level() else "")
+            + f"; PySide6 {PySide6.__version__}, Qt {qVersion()}",
             geo,
             f"graphics: {self.graphics_api()}; render loop: {threads.render_loop()}",
             f"scenario '{cfg.name}', dt {cfg.simulation.dt * 1000:g} ms, telemetry "

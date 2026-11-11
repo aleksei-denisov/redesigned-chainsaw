@@ -19,7 +19,7 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
-from PySide6.QtCore import Property, QObject, QTimer, Signal, Slot
+from PySide6.QtCore import Property, QObject, Qt, QTimer, Signal, Slot
 
 from . import threads
 from .android_perf import PerformanceHints, gui_thread_id
@@ -33,6 +33,7 @@ class FrameDriver(QObject):
     statsChanged = Signal()
     rateChanged = Signal()
     enabledChanged = Signal()
+    continuousChanged = Signal()
 
     def __init__(self, sim: SimulationBridge, refresh_hz: float, mode: str = "auto",
                  parent: QObject | None = None) -> None:
@@ -63,6 +64,14 @@ class FrameDriver(QObject):
         self._render_timer = QTimer(self)
         self._render_timer.setInterval(1000)
         self._render_timer.timeout.connect(self._read_render_thread)
+        # below the display rate: the next frame is scheduled from the last swap (paced mode)
+        self._tick = QTimer(self)
+        self._tick.setSingleShot(True)
+        self._tick.setTimerType(Qt.TimerType.PreciseTimer)
+        self._tick.timeout.connect(self._paced_frame)
+        self._keepalive = QTimer(self)               # nothing rendered (no swap): tick anyway
+        self._keepalive.setSingleShot(True)
+        self._keepalive.timeout.connect(self._idle_frame)
 
     # ------------------------------------------------------------- set-up
     def attach_graphs(self, graphs) -> None:
@@ -119,9 +128,43 @@ class FrameDriver(QObject):
         if self.hints is not None:
             self.hints.set_target(self.pacer.interval_ms)
         self.rateChanged.emit()
+        self.continuousChanged.emit()
+        if not self.continuous and self._enabled:
+            self._keepalive.start(int(self.pacer.interval_ms))       # start the paced loop
 
     rate = Property(int, lambda self: self.pacer.rate, notify=rateChanged)
     mode = Property(str, lambda self: self.pacer.mode, notify=rateChanged)
+
+    @property
+    def _continuous(self) -> bool:
+        return self._enabled and self.pacer.divisor == 1
+
+    # At the display rate QML's FrameAnimation calls vsync() on every vsync. Below it the
+    # FrameAnimation stops (a running animation makes Qt render every vsync even when
+    # nothing changed) and each frame is scheduled from the previous frame's swap: the
+    # timer fires just before the k-th vsync after it, the state changes, Qt renders and
+    # the swap waits for that vsync.
+    continuous = Property(bool, lambda self: self._continuous, notify=continuousChanged)
+
+    @Slot()
+    def swapped(self) -> None:
+        """A frame was presented (``QQuickWindow.frameSwapped``, queued to the GUI thread)."""
+        if self._enabled and self.pacer.divisor > 1:
+            vsync_ms = 1000.0 / self.pacer.refresh_hz
+            self._tick.start(max(0, int((self.pacer.divisor - 1) * vsync_ms - 3.0)))
+
+    def _idle_frame(self) -> None:
+        """No swap came (nothing changed on screen, e.g. paused): not a missed frame."""
+        self.pacer.paused()
+        self._wall_last = 0.0
+        self._paced_frame()
+
+    def _paced_frame(self) -> None:
+        if not self._enabled or self.pacer.divisor == 1:
+            return
+        self._tick.stop()
+        self._keepalive.start(int(2 * self.pacer.interval_ms))
+        self._show_frame()
 
     def _set_enabled(self, on: bool) -> None:
         if bool(on) != self._enabled:
@@ -129,17 +172,25 @@ class FrameDriver(QObject):
             if not on:
                 self.pacer.paused()
                 self._wall_last = 0.0
+                self._tick.stop()
+                self._keepalive.stop()
                 self.collector.idle()
+            elif self.pacer.divisor > 1:
+                self._keepalive.start(int(self.pacer.interval_ms))
             self.enabledChanged.emit()
+            self.continuousChanged.emit()
 
     enabled = Property(bool, lambda self: self._enabled, _set_enabled, notify=enabledChanged)
 
     # ----------------------------------------------------------- per vsync
     @Slot()
     def vsync(self) -> None:
+        """Every vsync while running at the display rate (QML FrameAnimation)."""
         self.vsyncs += 1
-        if not self.pacer.vsync():
-            return
+        if self.pacer.vsync():
+            self._show_frame()
+
+    def _show_frame(self) -> None:
         now = time.perf_counter()
         cpu = time.thread_time()
         work = gap = 0.0
@@ -194,6 +245,8 @@ class FrameDriver(QObject):
     def shutdown(self) -> None:
         self._timer.stop()
         self._render_timer.stop()
+        self._tick.stop()
+        self._keepalive.stop()
         if self.hints is not None:
             self.hints.close()
         self.collector.stop()

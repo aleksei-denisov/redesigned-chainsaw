@@ -1,4 +1,5 @@
 import QtQuick
+import PendulumItems 1.0
 import Instrument 1.0
 
 // One graph: title and unit, legend, horizontal grid lines with monospace tick labels
@@ -58,7 +59,7 @@ Card {
                 }
             }
         }
-        GraphPlot {
+        GraphLines {
             anchors.fill: parent
             view: card.view
             colors: card.colors

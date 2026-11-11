@@ -2,21 +2,20 @@
 
 **Pacing.** The display refreshes at ``R`` Hz (120 on the Pad 6). The app shows a new
 frame on every ``k``-th vsync, so it runs at ``R / k`` fps with even frame spacing:
-120, 60, 40 and 30 fps on a 120 Hz display, 60 and 30 on a 60 Hz one. In *auto* mode
-the :class:`Pacer` keeps the highest rate whose recent frame cost fits:
+120, 60, 40 and 30 fps on a 120 Hz display, 60 and 30 on a 60 Hz one. A fixed rate is
+kept as chosen. In *auto* mode the :class:`Pacer` keeps the highest rate that holds,
+judged by **missed frames** (a gap of more than 1.5 intervals between shown frames):
 
-* **step down** when, over the last second, the 95th percentile of the frame cost
-  exceeds ``DOWN_FRACTION`` of the frame interval, or frames were missed (the gap between
-  shown frames exceeded 1.5 intervals in more than ``MISS_FRACTION`` of them);
-* **step up** after ``UP_HOLD_S`` seconds in which the p95 cost stayed below
-  ``UP_FRACTION`` of the *faster* rate's interval and nothing was missed. The cost
-  measured at the slower rate includes work that happens per second rather than per
-  frame (graph refreshes), so it slightly overstates the cost at the faster rate; a try
-  that fails (stepping down again within ``FAILED_TRY_S``) doubles the hold time.
+* **step down** when more than ``MISS_FRACTION`` of the frames in the last second were
+  missed, or when the 95th percentile of a frame's work exceeds the whole interval;
+* **step up** after ``UP_HOLD_S`` seconds without a missed frame. A try that fails
+  (stepping down again within ``FAILED_TRY_S``) doubles the hold time, up to
+  ``MAX_HOLD_S``; after ``MAX_FAILED_TRIES`` failures in a row the faster rate is not
+  tried again (until the mode changes).
 
-Skipped vsyncs change nothing in the scene, so Qt Quick does not render them: the GPU
-and the render thread rest as well. The simulation itself never depends on the frame
-rate (it runs at its fixed time step in the physics process).
+The work measured per frame is not used to step up: on a device where Qt renders on the
+GUI thread it includes the rendering, and at a slower rate it includes work that happens
+per second rather than per frame, so it says little about the faster rate.
 
 **Garbage collection.** :class:`IdleCollector` disables the automatic collector after
 start-up (start-up objects are frozen out of its view) and runs the young generation
@@ -29,13 +28,13 @@ from __future__ import annotations
 import gc
 from collections import deque
 
-WINDOW_S = 1.0               # cost statistics over the last second
-DOWN_FRACTION = 0.85         # p95 cost above this share of the interval → slower rate
-UP_FRACTION = 0.75           # p95 cost below this share of the faster interval …
-UP_HOLD_S = 3.0              # … for this long → faster rate (doubled after each failed try, up to MAX_HOLD_S)
-MAX_HOLD_S = 30.0
-FAILED_TRY_S = 5.0           # stepping down this soon after stepping up counts as a failed try
+WINDOW_S = 1.0               # statistics over the last second
+DOWN_FRACTION = 1.0          # p95 work above this share of the interval → slower rate
 MISS_FRACTION = 0.05         # more missed frames than this → slower rate
+UP_HOLD_S = 3.0              # this long without a missed frame → faster rate
+MAX_HOLD_S = 60.0            # (doubled after each failed try, up to this)
+FAILED_TRY_S = 5.0           # stepping down this soon after stepping up counts as a failed try
+MAX_FAILED_TRIES = 4
 MIN_SAMPLES = 20
 
 
@@ -71,6 +70,7 @@ class Pacer:
         self._last_shown: float | None = None
         self._hold = UP_HOLD_S
         self._stepped_up_at: float | None = None
+        self._failures: dict[int, int] = {}            # failed tries per rate (auto mode)
         self.changes = 0
         self.set_mode(mode)
 
@@ -89,6 +89,8 @@ class Pacer:
                 self._set_rate(next((r for r in self.rates if r <= wanted), self.rates[-1]))
         if mode == "auto" and self.mode != "auto":
             self._set_rate(self.rates[0])
+            self._failures.clear()
+            self._hold = UP_HOLD_S
         self.mode = mode
 
     def set_refresh(self, refresh_hz: float) -> None:
@@ -136,22 +138,24 @@ class Pacer:
             samples.popleft()
         if len(samples) < MIN_SAMPLES:
             return
-        costs = [c for _t, c, _m in samples]
-        cost95 = p95(costs)
+        cost95 = p95([c for _t, c, _m in samples])
         misses = sum(1 for _t, _c, m in samples if m) / len(samples)
         index = self.rates.index(self.rate)
-        if (cost95 > DOWN_FRACTION * self.interval_ms or misses > MISS_FRACTION) and index + 1 < len(self.rates):
+        if (misses > MISS_FRACTION or cost95 > DOWN_FRACTION * self.interval_ms) and index + 1 < len(self.rates):
             failed_try = self._stepped_up_at is not None and now - self._stepped_up_at < FAILED_TRY_S
-            self._hold = min(2.0 * self._hold, MAX_HOLD_S) if failed_try else UP_HOLD_S
+            if failed_try:
+                self._hold = min(2.0 * self._hold, MAX_HOLD_S)
+                self._failures[self.rate] = self._failures.get(self.rate, 0) + 1
             self._stepped_up_at = None
             self._set_rate(self.rates[index + 1])
             return
-        if index > 0 and cost95 < UP_FRACTION * 1000.0 / self.rates[index - 1] and misses == 0:
+        faster = self.rates[index - 1] if index > 0 else None
+        if faster is not None and misses == 0 and self._failures.get(faster, 0) < MAX_FAILED_TRIES:
             if self._good_since is None:
                 self._good_since = now
             elif now - self._good_since >= self._hold:
                 self._stepped_up_at = now
-                self._set_rate(self.rates[index - 1])
+                self._set_rate(faster)
         else:
             self._good_since = None
 

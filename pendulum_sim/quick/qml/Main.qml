@@ -34,9 +34,10 @@ Window {
         }
     }
 
-    // vsync-driven frame loop; lives here because this file is loaded synchronously
+    // vsync-driven frame loop at the display rate (below it, frames are scheduled from
+    // the last swap, see backend/frames.py); lives here because this file is loaded first
     FrameAnimation {
-        running: shell.status === Loader.Ready && shell.item.framesEnabled
+        running: shell.status === Loader.Ready && shell.item.framesContinuous
         onTriggered: shell.item.vsync()
     }
 

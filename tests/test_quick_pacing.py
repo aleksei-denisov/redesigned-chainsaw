@@ -40,50 +40,70 @@ def test_fixed_rates_show_every_kth_vsync():
     assert pacer.rate == 30
 
 
-def _run(pacer: Pacer, seconds: float, cost_ms: float, t0: float = 0.0) -> float:
-    """Simulate frames at the pacer's current rate with a constant cost."""
+def _run(pacer: Pacer, seconds: float, cost_ms: float = 3.0, t0: float = 0.0, late_every: int = 0) -> float:
+    """Frames at the pacer's current rate; every ``late_every``-th one arrives 1.5 intervals late."""
     t = t0
     end = t0 + seconds
+    i = 0
     while t < end:
+        i += 1
+        late = late_every and i % late_every == 0
+        t += (2.5 if late else 1.0) / pacer.rate
         pacer.frame_done(t, cost_ms)
-        t += 1.0 / pacer.rate
     return t
 
 
-def test_auto_steps_down_when_frames_are_too_expensive_and_back_up():
+def _miss_until_down(pacer: Pacer, t: float) -> float:
+    """Late frames until the pacer steps down once."""
+    rate = pacer.rate
+    while pacer.rate == rate:
+        t = _run(pacer, 0.05, late_every=5, t0=t)
+    return t
+
+
+def test_auto_keeps_the_display_rate_while_no_frame_is_missed():
     pacer = Pacer(120, "auto")
-    assert pacer.rate == 120
-    t = _run(pacer, 1.5, cost_ms=9.0)          # 9 ms > 0.85 · 8.33 ms
-    assert pacer.rate == 60
-    t = _run(pacer, 1.5, cost_ms=9.0, t0=t)    # fits 60 fps (16.7 ms): stays
-    assert pacer.rate == 60
-    t = _run(pacer, 2.0, cost_ms=4.0, t0=t)    # cheap, but not yet held long enough
-    assert pacer.rate == 60
-    _run(pacer, 3.0, cost_ms=4.0, t0=t)        # 4 ms < 0.75 · 8.33 ms for 3 s → back to 120
+    _run(pacer, 3.0, cost_ms=7.5)              # busy (as with rendering on the GUI thread) but on time
     assert pacer.rate == 120
 
 
-def test_failed_tries_back_off():
+def test_auto_steps_down_on_missed_frames_and_back_up():
     pacer = Pacer(120, "auto")
-    t = _run(pacer, 1.5, cost_ms=9.0)          # down to 60
+    t = _miss_until_down(pacer, 0.0)           # 20 % of the frames late
     assert pacer.rate == 60
-    t = _run(pacer, 4.0, cost_ms=5.0, t0=t)    # 5 ms fits 0.75 · 8.33 ms → up after 3 s
-    assert pacer.rate == 120
-    t = _run(pacer, 1.5, cost_ms=9.0, t0=t)    # too expensive at 120 after all → down: failed try
+    t = _run(pacer, 2.0, t0=t)                 # on time, but not yet held long enough
     assert pacer.rate == 60
-    t = _run(pacer, 4.5, cost_ms=5.0, t0=t)    # now it needs 6 s
-    assert pacer.rate == 60
-    _run(pacer, 2.5, cost_ms=5.0, t0=t)
+    _run(pacer, 1.5, t0=t)                     # 3 s without a miss → try 120 again
     assert pacer.rate == 120
 
 
-def test_auto_steps_down_on_missed_frames():
+def test_auto_steps_down_when_the_work_exceeds_the_interval():
     pacer = Pacer(120, "auto")
-    t = 0.0
-    for i in range(60):                        # every 5th frame arrives two intervals late
-        t += (2.5 if i % 5 == 0 else 1.0) / 120
-        pacer.frame_done(t, 2.0)
+    _run(pacer, 1.5, cost_ms=9.0)              # 9 ms > 8.33 ms
     assert pacer.rate == 60
+
+
+def test_failed_tries_back_off_and_stop():
+    pacer = Pacer(120, "auto")
+    t = _miss_until_down(pacer, 0.0)           # down to 60
+    t = _run(pacer, 3.5, t0=t)                 # up after 3 s
+    assert pacer.rate == 120
+    t = _miss_until_down(pacer, t)             # misses at 120 again → down: a failed try
+    assert pacer.rate == 60
+    t = _run(pacer, 4.5, t0=t)                 # now it needs 6 s
+    assert pacer.rate == 60
+    t = _run(pacer, 2.0, t0=t)
+    assert pacer.rate == 120
+    t = _miss_until_down(pacer, t)             # second failed try
+    for _ in range(2):                         # two more: up after the (longer) hold, misses at once
+        while pacer.rate != 120:
+            t = _run(pacer, 1.0, t0=t)
+        t = _miss_until_down(pacer, t)
+    t = _run(pacer, 200.0, t0=t)               # four failures: 120 is not tried again
+    assert pacer.rate == 60
+    pacer.set_mode("60")
+    pacer.set_mode("auto")                     # a new start of auto mode forgets the failures
+    assert pacer.rate == 120
 
 
 def test_fixed_mode_never_adapts():

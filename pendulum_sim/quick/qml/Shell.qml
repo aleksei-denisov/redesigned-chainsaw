@@ -21,7 +21,7 @@ Item {
     }
 
     // the frame loop (Main.qml's FrameAnimation calls these)
-    readonly property bool framesEnabled: frames.enabled
+    readonly property bool framesContinuous: frames.continuous     // at the display rate
     function vsync() { frames.vsync() }
 
     ColumnLayout {

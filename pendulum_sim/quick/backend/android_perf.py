@@ -33,8 +33,25 @@ THERMAL_STATUS = {
 
 
 def api_level() -> int:
-    get = getattr(sys, "getandroidapilevel", None)
-    return int(get()) if get else 0
+    """The device's Android API level (``ro.build.version.sdk``), 0 off Android.
+
+    ``sys.getandroidapilevel()`` is the level Python was *built* for (the app's minimum),
+    not the device's, so the system property is read through bionic's libc.
+    """
+    if not IS_ANDROID:
+        return 0
+    try:
+        libc = ctypes.CDLL("libc.so")
+        get = libc.__system_property_get
+        get.restype = ctypes.c_int
+        get.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
+        buf = ctypes.create_string_buffer(92)                     # PROP_VALUE_MAX
+        if get(b"ro.build.version.sdk", buf) > 0:
+            return int(buf.value.decode("ascii"))
+    except (OSError, AttributeError, ValueError):
+        pass
+    built = getattr(sys, "getandroidapilevel", None)
+    return int(built()) if built else 0
 
 
 def _library():
@@ -79,8 +96,11 @@ class PerformanceHints:
         self._update = _function(lib, "APerformanceHint_updateTargetWorkDuration", ctypes.c_int,
                                  [ctypes.c_void_p, ctypes.c_int64])
         self._close = _function(lib, "APerformanceHint_closeSession", None, [ctypes.c_void_p])
-        if None in (get_manager, create, self._report, self._update, self._close):
-            self.reason = f"API {api_level()}: performance hints need Android 13 (API 33)"
+        names = ("getManager", "createSession", "reportActualWorkDuration", "updateTargetWorkDuration", "closeSession")
+        missing = [n for n, f in zip(names, (get_manager, create, self._report, self._update, self._close)) if f is None]
+        if missing:
+            self.reason = (f"Android API {api_level()}: libandroid has no APerformanceHint_{', '.join(missing)} "
+                           "(performance hints need Android 13, API 33)")
             return
         manager = get_manager()
         if not manager or not self.tids:

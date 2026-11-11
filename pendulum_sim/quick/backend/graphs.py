@@ -1,49 +1,26 @@
 """QML context object ``graphs``: graph selection and the data of the graphs on screen.
 
-A graph item in QML asks for its :class:`GraphView` (``Graphs.view("angle")``), tells it
-its size and whether it is visible, and draws the view's ``paths`` – per series a list of
-polygons for a ``PathMultiline``. Only active views are computed, at the graph rate
-(20–30 Hz, a setting), from one telemetry read for all of them; the maths is
-``graphdata.py`` (Qt-free, shared chart maths with the Widgets app).
+A graph item in QML (``GraphLines``, ``lineitem.py``) is given its :class:`GraphView`
+(``graphs.view("angle")``), tells it its size and whether it is visible, and draws the
+view's ``runs`` – per series a list of pixel polylines. Only active views are computed,
+at the graph rate (20–30 Hz, a setting, driven by shown frames), from one telemetry read
+for all of them; the maths is ``graphdata.py`` (Qt-free).
 """
 
 from __future__ import annotations
 
 import time
 
-import numpy as np
-from PySide6.QtCore import Property, QObject, QPointF, QSettings, QTimer, Signal, Slot
-from PySide6.QtGui import QPolygonF
+from PySide6.QtCore import Property, QObject, QSettings, QTimer, Signal, Slot
 
 from ...mobile.plot_math import DEFAULT_SELECTION, GRAPHS, MAX_VISIBLE, format_tick, graph_series
 from ...session import rules
 from . import graphdata
 from .simulation import SimulationBridge
 
-try:
-    from shiboken6 import VoidPtr as _VoidPtr
-except ImportError:  # pragma: no cover
-    _VoidPtr = None
-
 WINDOWS_S = [5, 10, 20, 30]
 TRACE_WINDOW_S = 10.0
 DEFAULT_RATE_HZ = 25.0
-
-
-def polygon(xs: np.ndarray, ys: np.ndarray) -> QPolygonF:
-    """``QPolygonF`` filled from two arrays through its buffer (no per-point Python objects)."""
-    n = int(xs.size)
-    poly = QPolygonF()
-    poly.resize(n)
-    if n == 0:
-        return poly
-    ptr = poly.data()
-    if _VoidPtr is None or ptr is None:
-        return QPolygonF([QPointF(float(a), float(b)) for a, b in zip(xs, ys)])
-    buf = np.frombuffer(_VoidPtr(ptr, 16 * n, True), np.float64).reshape(n, 2)
-    buf[:, 0] = xs
-    buf[:, 1] = ys
-    return poly
 
 
 class GraphView(QObject):
@@ -59,14 +36,14 @@ class GraphView(QObject):
         self.height = 0.0
         self.active = False
         self.axis = graphdata.trace_axes() if key == "trace" else graphdata.graph_axis(key)
-        self._paths: list[list[QPolygonF]] = []
+        self.dpr = 1.0                                 # physical pixels per item pixel (set by the item)
+        self.runs: list[list[tuple]] = []              # per series: pixel polylines (drawn by GraphLines)
         self._ticks: list[dict] = []
         self._legend: list[dict] = []
         self.lo, self.hi = 0.0, 1.0
 
     title = Property(str, lambda self: GRAPHS[self.key].title if self.key in GRAPHS else "Trace", constant=True)
     unit = Property(str, lambda self: GRAPHS[self.key].unit if self.key in GRAPHS else "", constant=True)
-    paths = Property("QVariantList", lambda self: self._paths, notify=updated)
     ticks = Property("QVariantList", lambda self: self._ticks, notify=updated)
     legend = Property("QVariantList", lambda self: self._legend, notify=legendChanged)
     minimum = Property(float, lambda self: self.lo, notify=updated)
@@ -90,7 +67,7 @@ class GraphView(QObject):
             axis.reset()
 
     def show(self, frame: graphdata.GraphFrame) -> None:
-        self._paths = [[polygon(xs, ys) for xs, ys in runs] for runs in frame.series]
+        self.runs = frame.series
         if self.key != "trace" and self.height > 0 and frame.hi > frame.lo:
             scale = self.height / (frame.hi - frame.lo)
             self._ticks = [{"value": v, "text": format_tick(v, frame.step), "y": self.height - (v - frame.lo) * scale}
@@ -248,10 +225,11 @@ class GraphsBridge(QObject):
         now = time.monotonic()
         for v in active:
             v.show(graphdata.graph_frame(v.key, data, n, labels, self._loop, float(self._window),
-                                         v.width, v.height, v.axis, now))
+                                         v.width, v.height, v.axis, now, v.dpr))
         if trace:
             self._trace.show(graphdata.trace_frame(data, TRACE_WINDOW_S, self._trace.width, self._trace.height,
-                                                   self._trace.axis, now, self.sim.session.config.plant.has_cart))
+                                                   self._trace.axis, now, self.sim.session.config.plant.has_cart,
+                                                   self._trace.dpr))
         self.ms = (time.perf_counter() - started) * 1000.0
         if self.recording is not None:
             self.recording.append(self.ms)
