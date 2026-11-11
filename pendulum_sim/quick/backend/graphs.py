@@ -119,6 +119,9 @@ class GraphsBridge(QObject):
         self._trace = GraphView("trace", self)
         self.ms = 0.0                                  # last refresh, for reports
         self.recording: list[float] | None = None
+        self._due = 0.0
+        # Refreshed from the frame loop (on_frame) once a frame driver is attached, so a
+        # refresh never triggers a render between paced frames; the timer is the fallback.
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.refresh)
         self.timer.start(int(1000 / self._rate))
@@ -182,6 +185,19 @@ class GraphsBridge(QObject):
             self._rate = hz
             self.timer.setInterval(int(1000 / hz))
             self.rateChanged.emit()
+
+    def drive_from_frames(self) -> None:
+        """The frame loop calls :meth:`on_frame` from now on."""
+        self.timer.stop()
+
+    def on_frame(self, now: float) -> None:
+        """A frame is being shown: refresh if a refresh is due (graph rate)."""
+        if now >= self._due:
+            interval = 1.0 / self._rate
+            self._due += interval                        # keeps the average rate exact …
+            if self._due <= now:                         # … but no catching up after a pause
+                self._due = now + interval
+            self.refresh()
 
     rateHz = Property(float, lambda self: self._rate, _set_rate, notify=rateChanged)
 

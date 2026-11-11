@@ -5,7 +5,8 @@ QML's ``FrameAnimation`` calls :meth:`FrameDriver.vsync` on every vsync. The pac
 bridge reads the latest physics state (``Sim.advance``) and QML moves the pendulum.
 Skipped vsyncs change nothing, so Qt Quick does not render them.
 
-Per shown frame the driver measures the work it cost: the GUI thread's CPU time since
+Graph data is refreshed on shown frames too (at the graph rate), so nothing changes
+the scene between paced frames. Per shown frame the driver measures the work it cost: the GUI thread's CPU time since
 the previous shown frame (Python, QML bindings, event handling and – with Qt's basic
 render loop – the rendering itself) and the render thread's average CPU per frame
 (read once a second from ``/proc``). The larger of the two is the frame's critical
@@ -37,6 +38,7 @@ class FrameDriver(QObject):
                  parent: QObject | None = None) -> None:
         super().__init__(parent)
         self.sim = sim
+        self.graphs = None                        # attach_graphs(): refreshed on shown frames
         self.pacer = Pacer(refresh_hz, mode)
         self.collector = IdleCollector()
         self.hints: PerformanceHints | None = None
@@ -61,6 +63,11 @@ class FrameDriver(QObject):
         self._render_timer.timeout.connect(self._read_render_thread)
 
     # ------------------------------------------------------------- set-up
+    def attach_graphs(self, graphs) -> None:
+        """Refresh the graphs on shown frames (at the graph rate) instead of their timer."""
+        self.graphs = graphs
+        graphs.drive_from_frames()
+
     def start_threads(self) -> None:
         """After the first frame: find Qt's render thread, open the hint session."""
         table = threads.thread_table()
@@ -142,6 +149,8 @@ class FrameDriver(QObject):
         self._wall_last = now
         self._shown += 1
         self.sim.advance()
+        if self.graphs is not None:
+            self.graphs.on_frame(now)
         python_ms = (time.perf_counter() - now) * 1000.0
         if self.recording is not None and gap:
             self.recording.append((gap, python_ms, work))

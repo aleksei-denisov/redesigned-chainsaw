@@ -218,6 +218,7 @@ class QuickApp:
         screen = self.window.screen()
         refresh = screen.refreshRate() if screen is not None else 60.0
         self.frames = FrameDriver(self.sim, refresh, self.settings.frameRate)
+        self.frames.attach_graphs(self.graphs)
         self.bench = Benchmark(self.shell, self.sim, self.graphs, self.frames)
         self.bench.window = self.window
         self.bench.warnings = self.warnings
