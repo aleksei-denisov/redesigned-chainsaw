@@ -43,9 +43,23 @@ from PySide6.QtWidgets import (
 )
 
 from ..simulation import AppConfig, parallel
-from ..simulation.tuning import TuneProgress, TuningResult, TuningSettings, estimate_seconds
+from ..simulation.tuning import TuneProgress, TuningResult, TuningSettings
 from ..session.jobs import TuneWorker
-from ..session.texts import TUNE_PRESETS, fmt_duration, gains_text, loop_name  # noqa: F401 - loop_name re-exported
+from ..session.texts import (  # noqa: F401 - loop_name and fmt_duration re-exported
+    TUNE_PRESETS,
+    fmt_duration,
+    gains_text,
+    loop_name,
+    tune_activity,
+    tune_best,
+    tune_cores,
+    tune_estimate,
+    tune_fraction,
+    tune_headline,
+    tune_metric_rows,
+    tune_notes,
+    tune_times,
+)
 from .controls import ActionBar, ProgressBar, scroll_area
 from .plot_math import format_tick, nice_ticks
 
@@ -481,9 +495,7 @@ class AutotuneScreen(QWidget):
 
     def show_setup(self) -> None:
         self.pages.setCurrentIndex(0)
-        self.cores_label.setText(
-            f"Uses {self.workers} CPU core{'s' if self.workers != 1 else ''} in parallel "
-            f"({parallel.cpu_count()} available; one stays free for the display).")
+        self.cores_label.setText(tune_cores(self.workers, parallel.cpu_count()))
         self._update_estimates()
         if self.push_test_s is None and self.calibration is None and self.config is not None:
             self.calibration = TuneWorker(self.config, None, calibrate_only=True)
@@ -508,10 +520,7 @@ class AutotuneScreen(QWidget):
 
     def _update_estimates(self) -> None:
         for key, name, desc in PRESETS:
-            if self.push_test_s is None:
-                est = "measuring this device…"
-            else:
-                est = f"about {fmt_duration(estimate_seconds(TuningSettings.preset(key), self.push_test_s, self.workers))}"
+            est = tune_estimate(key, self.push_test_s, self.workers)
             self.preset_buttons[key].setText(f"{name}\n{desc}\n{est}")
 
     def _choose(self, key: str) -> None:
@@ -553,16 +562,13 @@ class AutotuneScreen(QWidget):
         self.last = u
         self._last_update_time = time.monotonic()
         self.phase_label.setText(u.message)
-        note = f" – {u.pool_note}" if u.pool_note else ""
-        self.cores_running.setText(
-            f"Working on {u.workers} CPU core{'s' if u.workers != 1 else ''}{note} · "
-            f"{u.simulations} simulations so far")
+        self.cores_running.setText(tune_activity(u))
         if u.best_push > 0:
-            before = f" (current controller: {u.baseline_push:.3g} N)" if u.baseline_push is not None else ""
-            self.best_label.setText(f"Recovers from a tip push of <b>{u.best_push:.3g} N</b>{before}")
-            self.best_gains.setText(gains_text(u.best_controller))
+            best, gains = tune_best(u)
+            self.best_label.setText(best)
+            self.best_gains.setText(gains)
         elif u.baseline_push is not None:
-            self.best_label.setText(f"Current controller recovers from {u.baseline_push:.3g} N")
+            self.best_label.setText(tune_best(u)[0])
         if u.history:
             n = np.arange(1, len(u.history) + 1)
             pushes = np.array(u.candidate_pushes, float)
@@ -586,33 +592,15 @@ class AutotuneScreen(QWidget):
             return
         elapsed = time.monotonic() - self._started
         u = self.last
-        if u is None or u.total == 0:
-            self.time_label.setText(f"Elapsed {fmt_duration(elapsed)}")
-            return
-        # smooth bar: extrapolate within the current unit, never past the next one
-        frac = u.fraction
-        if u.eta and u.eta > 0:
-            since = time.monotonic() - self._last_update_time
-            est = (u.elapsed + since) / (u.elapsed + u.eta)
-            frac = max(frac, min(est, (u.done + 1) / u.total * 0.999))
-        self.bar.setValue(int(frac * 1000))
-        remaining = None if u.eta is None else max(0.0, u.eta - (time.monotonic() - self._last_update_time))
-        rest = f" · about {fmt_duration(remaining)} left" if remaining is not None else " · estimating time left…"
-        self.time_label.setText(f"Elapsed {fmt_duration(elapsed)}{rest}")
+        since = time.monotonic() - self._last_update_time
+        if u is not None and u.total != 0:
+            self.bar.setValue(int(tune_fraction(u, since) * 1000))   # smooth between updates
+        self.time_label.setText(tune_times(elapsed, u, since))
 
     def _on_result(self, result: TuningResult, comparison) -> None:
         self.result = result
-        before, after = result.baseline_max_push, result.max_push
-        gain = f" (+{(after / before - 1) * 100:.0f} %)" if before > 0 and after > before else ""
-        self.headline.setText(f"Recoverable tip push: {before:.3g} N → {after:.3g} N{gain}")
-        notes = [f"{result.evaluations} candidates in {fmt_duration(result.elapsed)}."]
-        if result.cancelled:
-            notes.insert(0, "Cancelled – this is the best result found so far.")
-        if after <= before * 1.02:
-            notes.append("The current gains are already about as robust as this search can find; "
-                         "applying gives the normalised recommended settings.")
-        notes.append(f"Applying also sets the push force to {result.recommended_push:g} N for testing.")
-        self.result_note.setText(" ".join(notes))
+        self.headline.setText(tune_headline(result))
+        self.result_note.setText(tune_notes(result))
         self.old_gains.setText(gains_text(self.config.controller if self.config else None))
         self.new_gains.setText(gains_text(result.controller))
         self._fill_metrics(comparison)
@@ -627,16 +615,7 @@ class AutotuneScreen(QWidget):
             self.preview.set_series([])
             return
         old, new = comparison
-
-        def st(m):
-            return "did not settle" if m.settling_time is None else f"{m.settling_time:.2f} s"
-
-        rows = [("Settling time", st(old.metrics), st(new.metrics)),
-                ("Overshoot", f"{old.metrics.overshoot_pct:.0f} %", f"{new.metrics.overshoot_pct:.0f} %"),
-                ("Max angle", f"{old.metrics.max_deviation:.2f}°", f"{new.metrics.max_deviation:.2f}°"),
-                ("Peak force", f"{old.metrics.control_peak:.3g}", f"{new.metrics.control_peak:.3g}"),
-                ("Control energy ∫u²", f"{old.metrics.control_energy:.3g}", f"{new.metrics.control_energy:.3g}"),
-                ("Fell over", "yes" if old.metrics.fell else "no", "yes" if new.metrics.fell else "no")]
+        rows = tune_metric_rows(comparison)
         for c, text in enumerate(("", "before", "after")):
             lab = QLabel(f"<b>{text}</b>")
             self.metrics_grid.addWidget(lab, 0, c)

@@ -1111,3 +1111,97 @@ def test_mobile_edits_match_the_shared_session(win, app):
 
     passed = drive(win, app.processEvents, win._apply_plant)
     assert passed[-1] == "single step"
+
+
+def _widgets_row(page_kind, pages, key):
+    """The Widgets editor row behind a shared form field key."""
+    system, controller = pages
+    if page_kind == "plant":
+        if key.startswith("seg") and key[3:4].isdigit():
+            return getattr(system.seg_sections[int(key[3])], key.split(".")[1])
+        return getattr(system, {"cart_friction": "cart_friction", "track": "track", "max_out": "max_out"}.get(key, key))
+    if page_kind == "simulation":
+        return getattr(system, key)
+    if key.startswith("lqr."):
+        return controller.q[key[4:]]
+    if key.startswith("loop"):
+        k, name = int(key[4]), key.split(".")[1]
+        section = controller.loop_sections[k]
+        return section.terms.buttons[name] if name in ("p", "i", "d") else getattr(section, name)
+    return getattr(controller, key)
+
+
+def _row_text(row):
+    from PySide6.QtWidgets import QLabel
+
+    if isinstance(row, QAbstractButton):
+        return row.text()
+    for name in ("title", "label"):
+        attr = getattr(row, name, None)
+        if isinstance(attr, QLabel):
+            return attr.text()
+    return row.findChildren(QLabel)[0].text()
+
+
+def test_widgets_editors_match_the_shared_forms(win, app):
+    """Field definitions and editing rules of pendulum_sim/session/forms.py = the Widgets editors."""
+    import copy
+    from dataclasses import asdict
+
+    from pendulum_sim.session.forms import ControllerForm, PlantForm, SimulationForm
+
+    system, controller = win.system_page, win.controller_page
+    pages = (system, controller)
+    for key in ("triple_cart_lqr", "single_fixed_pid"):
+        cfg = scenario(key)
+        plant_form, sim_form, ctrl_form = PlantForm(), SimulationForm(), ControllerForm()
+        system.set_plant(cfg.plant)
+        system.set_simulation(cfg.simulation)
+        controller.set_config(cfg.controller)
+        plant_form.set_plant(copy.deepcopy(cfg.plant))
+        sim_form.set_simulation(copy.deepcopy(cfg.simulation))
+        ctrl_form.set_config(copy.deepcopy(cfg.controller))
+        assert asdict(system.plant()) == asdict(plant_form.plant()), key
+        assert asdict(system.simulation()) == asdict(sim_form.simulation()), key
+        assert asdict(controller.config()) == asdict(ctrl_form.config()), key
+        # every field: same label, range, decimals, unit and slider mapping as the Widgets row
+        for kind, form in (("plant", plant_form), ("simulation", sim_form), ("controller", ctrl_form)):
+            for field in form.fields.values():
+                row = _widgets_row(kind, pages, field.key)
+                assert _row_text(row) == field.label, (field.key, _row_text(row))
+                if field.kind == "number":
+                    assert (row.minimum, row.maximum, row.decimals, row.unit, row.mapping) == \
+                        (field.minimum, field.maximum, field.decimals, field.unit, field.mapping), field.key
+                elif field.kind == "stepper":
+                    assert (row.minimum, row.maximum) == (field.minimum, field.maximum), field.key
+                elif field.kind == "choice":
+                    assert list(row.buttons) == [v for v, _t in field.options], field.key
+        # the same edits give the same plant (spare segments, rod inertia, structure flag)
+        edits = [("seg0.mass", 0.37), ("seg1.rod", False), ("seg1.inertia", 0.123), ("segments", 1),
+                 ("gravity", 9.5), ("segments", 3), ("seg2.angle", 7.0), ("base", "fixed"), ("base", "cart")]
+        got = []
+
+        def collect(plant, structural):
+            got.append((plant, structural))
+
+        system.plantChanged.disconnect(win._on_plant_changed)      # compare the editors only
+        system.plantChanged.connect(collect)
+        for field_key, value in edits:
+            row = _widgets_row("plant", pages, field_key)
+            if field_key.endswith(".rod"):
+                row.setChecked(value)
+            else:
+                row.setValue(value)
+            sec = field_key.startswith("seg") and field_key[3:4].isdigit()
+            if sec:
+                system.seg_sections[int(field_key[3])]._changed()
+            system._emit_plant()
+            plant, structural = plant_form.set(field_key, value)
+            assert asdict(got[-1][0]) == asdict(plant), field_key
+            assert got[-1][1] == structural, field_key
+        system.plantChanged.disconnect(collect)
+        system.plantChanged.connect(win._on_plant_changed)
+        ctrl = ctrl_form.set("loop0.kp", 12.5)
+        controller.loop_sections[0].kp.setValue(12.5)
+        assert asdict(controller.config()) == asdict(ctrl), key
+    win.load(scenario("single_cart_full"))

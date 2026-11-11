@@ -40,6 +40,7 @@ from ..simulation import (
     scenario,
 )
 from ..session import IncompatibleRun, rules, texts
+from ..session.rules import SPEEDS
 from ..simulation.realtime import RealtimeStepper
 from . import file_io
 from .controller_panel import ControllerPanel
@@ -53,7 +54,6 @@ PHYSICS_BUDGET_S = 0.010          # max physics compute per frame (keeps the GUI
 PLOT_INTERVAL_S = 0.066           # ~15 Hz graph refresh (raised automatically if frames get slow)
 MAX_PLOT_INTERVAL_S = 0.3
 TARGET_FRAME_S = 0.020            # if frames take longer than this, graphs refresh less often
-SPEEDS = [0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0]
 
 
 class MainWindow(QMainWindow):

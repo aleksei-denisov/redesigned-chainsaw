@@ -22,6 +22,7 @@ from ..control import ControllerConfig, PIDLoopConfig, default_action
 from ..physics import PlantParams
 from ..simulation import AppConfig, ExperimentSettings
 
+SPEEDS = [0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0]   # simulation speed choices (× real time)
 DRAG_GAIN = 2.0          # drag force = DRAG_GAIN · push force · (offset / total length)
 DRAG_LIMIT = 4.0         # … clamped to ±DRAG_LIMIT · push force
 
