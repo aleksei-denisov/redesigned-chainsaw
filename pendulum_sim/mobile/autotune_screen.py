@@ -2,7 +2,7 @@
 
 The screen covers the whole window while it is open, so the rest of the app is
 locked until the search finishes or is cancelled. The search itself runs in a
-:class:`TuneWorker` thread that drives :func:`~pendulum_sim.simulation.tuning.robust_tune`
+:class:`~pendulum_sim.session.jobs.TuneWorker` thread that drives :func:`~pendulum_sim.simulation.tuning.robust_tune`
 with the shared worker pool (all CPU cores but one); the UI thread only receives
 small progress records, so it keeps animating and Android never reports the app
 as not responding.
@@ -22,9 +22,7 @@ If the app goes to the background the search is cancelled (see ``MobileWindow``)
 
 from __future__ import annotations
 
-import copy
 import math
-import threading
 import time
 
 import numpy as np
@@ -44,25 +42,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..control import ControllerConfig
 from ..simulation import AppConfig, parallel
-from ..simulation.tuning import (
-    CancelToken,
-    TuneProgress,
-    TuningCancelled,
-    TuningResult,
-    TuningSettings,
-    calibrate_push_test_seconds,
-    compare_responses,
-    estimate_seconds,
-    robust_tune,
-)
+from ..simulation.tuning import TuneProgress, TuningResult, TuningSettings, estimate_seconds
+from ..session.jobs import TuneWorker
+from ..session.texts import TUNE_PRESETS, fmt_duration, gains_text, loop_name  # noqa: F401 - loop_name re-exported
 from .controls import ActionBar, ProgressBar, scroll_area
 from .plot_math import format_tick, nice_ticks
 
-PRESETS = [("quick", "Quick", "Fewest candidates · fastest"),
-           ("normal", "Balanced", "Recommended"),
-           ("thorough", "Thorough", "Most candidates · best result")]
+PRESETS = TUNE_PRESETS
 ACCENT = QColor("#4FA3FF")
 MUTED = QColor("#9AA0A6")
 
@@ -77,28 +64,6 @@ def scaled_font(font: QFont, factor: float, bold: bool = False) -> QFont:
     if bold:
         f.setBold(True)
     return f
-
-
-def fmt_duration(seconds: float | None) -> str:
-    if seconds is None or not math.isfinite(seconds):
-        return "–"
-    seconds = max(0, int(round(seconds)))
-    if seconds >= 3600:
-        return f"{seconds // 3600} h {seconds % 3600 // 60:02d} min"
-    if seconds >= 60:
-        return f"{seconds // 60} min {seconds % 60:02d} s"
-    return f"{seconds} s"
-
-
-def loop_name(signal: str) -> str:
-    return "Cart x" if signal == "cart" else f"θ{signal[5:]}"
-
-
-def gains_text(ctrl: ControllerConfig | None) -> str:
-    if ctrl is None:
-        return "–"
-    return "\n".join(f"{loop_name(lp.signal)}:  Kp {lp.kp:.4g} · Ki {lp.ki:.4g} · Kd {lp.kd:.4g}"
-                     for lp in ctrl.loops if lp.enabled)
 
 
 # ------------------------------------------------------------------ widgets
@@ -284,76 +249,6 @@ def _big_button(text: str, primary: bool = False) -> QPushButton:
         f.setBold(True)
         b.setFont(f)
     return b
-
-
-# ------------------------------------------------------------------- worker
-class TuneWorker:
-    """Runs calibration or the search in a plain Python thread (no Qt in it).
-
-    Nothing crosses the thread boundary through Qt: the worker keeps its latest
-    progress snapshot and its outcome in attributes guarded by a lock, and the UI
-    polls them (and :meth:`done`) on a timer. Queued signals carrying Python objects,
-    and later a ``QThread`` running Python code next to a repainting progress bar,
-    crashed PySide6 with Python 3.10 on Windows.
-    """
-
-    def __init__(self, config: AppConfig, settings: TuningSettings | None, calibrate_only: bool = False) -> None:
-        self._thread = threading.Thread(target=self.run, name="autotune", daemon=True)
-        self.config = config.copy()
-        self.settings = settings
-        self.calibrate_only = calibrate_only
-        self.token = CancelToken()
-        self._lock = threading.Lock()
-        self._latest: TuneProgress | None = None
-        self.calibration: float | None = None
-        self.outcome: tuple[TuningResult, object] | None = None
-        self.error: str | None = None
-
-    def cancel(self) -> None:
-        self.token.cancel()
-
-    def start(self) -> None:
-        self._thread.start()
-
-    def done(self) -> bool:
-        return self._thread.ident is not None and not self._thread.is_alive()
-
-    def wait(self, timeout_ms: int) -> bool:
-        if self._thread.ident is not None:
-            self._thread.join(timeout_ms / 1000.0)
-        return not self._thread.is_alive()
-
-    def take_progress(self) -> TuneProgress | None:
-        with self._lock:
-            u, self._latest = self._latest, None
-        return u
-
-    def run(self) -> None:
-        try:
-            if self.calibrate_only:
-                self.calibration = calibrate_push_test_seconds(self.config)
-                return
-
-            def update(u: TuneProgress) -> bool:
-                snap = copy.copy(u)
-                snap.history = list(u.history)
-                snap.candidate_pushes = list(u.candidate_pushes)
-                with self._lock:
-                    self._latest = snap
-                return not self.token.cancelled
-
-            result = robust_tune(self.config, self.settings, on_update=update, cancel=self.token)
-            comparison = None
-            try:
-                comparison = compare_responses(self.config, self.config.controller, result.controller,
-                                               max(result.recommended_push, 1e-3), self.settings)
-            except Exception:  # noqa: BLE001 - the summary works without the preview
-                comparison = None
-            self.outcome = (result, comparison)
-        except TuningCancelled:
-            self.error = "Cancelled before any candidate was finished – nothing to apply."
-        except Exception as exc:  # noqa: BLE001 - shown on screen
-            self.error = str(exc)
 
 
 # ------------------------------------------------------------------- screen

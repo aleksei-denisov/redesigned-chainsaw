@@ -65,6 +65,7 @@ def test_quick_staging_holds_everything_the_app_needs(build_android, tmp_path):
     # the Qt-free part imports from the staged tree alone
     code = ("import pendulum_sim.quick.backend.sim_source, pendulum_sim.quick.backend.threads;"
             "import pendulum_sim.mobile.plot_math, pendulum_sim.mobile.startup, pendulum_sim.mobile.cpu;"
+            "import pendulum_sim.session, pendulum_sim.session.jobs, pendulum_sim.session.texts;"
             "from pendulum_sim.simulation import scenario; print(scenario('triple_cart_lqr').name)")
     out = subprocess.run([sys.executable, "-c", code], cwd=staged, capture_output=True, text=True, timeout=120)
     assert out.returncode == 0, out.stderr

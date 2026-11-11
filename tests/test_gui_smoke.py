@@ -207,3 +207,11 @@ def test_hint_text_has_enough_contrast(app):
                                                 (fg.blueF(), bg.blueF()))]
     lum = lambda r, g, b: 0.2126 * r + 0.7152 * g + 0.0722 * b  # noqa: E731
     assert abs(lum(*eff) - lum(bg.redF(), bg.greenF(), bg.blueF())) > 0.35
+
+
+def test_window_edits_match_the_shared_session(window, app):
+    """Desktop window and shared Session (the Qt Quick app's logic): same configuration, same states."""
+    from .window_session import drive
+
+    passed = drive(window, app.processEvents, window._on_plant_changed)
+    assert passed[-1] == "single step"

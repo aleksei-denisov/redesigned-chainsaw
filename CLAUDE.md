@@ -23,11 +23,14 @@ Repository: https://github.com/aleksei-denisov/redesigned-chainsaw
 | `pendulum_sim/physics` | Multibody dynamics, actuator, integrator | numpy |
 | `pendulum_sim/control` | PID, multi-loop controller, LQR gain seeding | numpy, scipy, physics |
 | `pendulum_sim/simulation` | Config, fixed-step engine, telemetry, experiments, metrics, scenarios | physics, control |
+| `pendulum_sim/session` | Qt-free application logic shared by all interfaces: edit rules, simulator operations, `Session`, auto-tune/experiment workers, texts | physics, control, simulation |
 | `pendulum_sim/ui` | PySide6 GUI, QPainter view, pyqtgraph plots | everything above |
 | `pendulum_sim/mobile` | Touch-first UI for Android (reuses `ui` view/plots) | everything above |
-| `pendulum_sim/quick` | Qt Quick (QML) UI for Android, in development (`docs/ANDROID_QTQUICK.md`); `quick/backend/sim_source.py` and `threads.py` stay Qt-free | physics, control, simulation, Qt-free helpers of `mobile` |
+| `pendulum_sim/quick` | Qt Quick (QML) UI for Android, in development (`docs/ANDROID_QTQUICK.md`); `quick/backend/sim_source.py` and `threads.py` stay Qt-free | physics, control, simulation, session, Qt-free helpers of `mobile` |
 
-- The physics/control/simulation layers must **never** import Qt. They are tested headless.
+- The physics/control/simulation/session layers must **never** import Qt. They are tested headless.
+- Logic that more than one interface needs belongs in `session`, not in a window or widget;
+  `tests/test_session_equivalence.py` pins it to the previous behaviour.
 - SciPy must stay optional in `control` (Android has none): import it with a NumPy fallback.
 - Physics runs with a fixed timestep (`SimulationConfig.dt`), decoupled from the GUI refresh rate.
 - Angles: absolute, measured from the upward vertical, radians internally, degrees in the UI/config.

@@ -97,7 +97,7 @@ TARGETS = {
         staging=BUILD / "app-quick", entry="main_quick.py",
         requirements=("numpy",), include_exts=(*INCLUDE_EXTS, "qml", "ttf", "txt"),
         # the shared core, the Qt Quick UI and the Qt-free helpers it reuses from the mobile package
-        parts=("__init__.py", "physics", "control", "simulation", "quick",
+        parts=("__init__.py", "physics", "control", "simulation", "session", "quick",
                "mobile/__init__.py", "mobile/plot_math.py", "mobile/startup.py", "mobile/cpu.py"),
         artifact="invertedpendulumquick",
         # Qt Graphs (and the Qt Quick 3D it links to) is only one of the graph variants the

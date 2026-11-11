@@ -34,8 +34,8 @@ from ..simulation import (
     run_experiment,
     save_experiments,
 )
+from ..session import rules
 from . import file_io
-from .controller_panel import ControllerPanel
 from .widgets import EXPERIMENT_COLORS, check, group, hint, scrollable, spin
 
 COLUMNS = ["Show", "Name", "Controller gains", "Settling [s]", "Max dev [°]", "Overshoot [%]",
@@ -211,14 +211,8 @@ class ExperimentPanel(QWidget):
 
     # --------------------------------------------------------------- run
     def build_config(self) -> AppConfig:
-        cfg = self.get_config().copy()
-        cfg.experiment = self.settings()
-        if self.reuse.isChecked() and self.results:
-            base = self.results[0].config
-            cfg.plant = base.copy().plant
-            cfg.simulation = base.copy().simulation
-            cfg.controller = ControllerPanel.complete_loops(cfg.controller, cfg.plant)
-        return cfg
+        reuse = self.results[0].config if self.reuse.isChecked() and self.results else None
+        return rules.experiment_config(self.get_config(), self.settings(), reuse)
 
     def run(self) -> None:
         if self.thread is not None:

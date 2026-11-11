@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
     QToolBar,
 )
 
-from ..control import ControllerConfig, default_action, lqr_controller
+from ..control import ControllerConfig, lqr_controller
 from ..physics import PlantParams
 from ..simulation import (
     SCENARIOS,
@@ -39,6 +39,7 @@ from ..simulation import (
     save_config,
     scenario,
 )
+from ..session import IncompatibleRun, rules, texts
 from ..simulation.realtime import RealtimeStepper
 from . import file_io
 from .controller_panel import ControllerPanel
@@ -245,8 +246,7 @@ class MainWindow(QMainWindow):
         """Replace the whole configuration (scenario, file)."""
         self.running = False
         try:
-            config.controller = ControllerPanel.complete_loops(config.controller, config.plant)
-            config.validate()
+            rules.prepare_config(config)
             self.sim = Simulator(config)
         except ValueError as exc:
             QMessageBox.critical(self, "Invalid configuration", str(exc))
@@ -287,12 +287,9 @@ class MainWindow(QMainWindow):
         self.controller_panel.show_output(out)
 
     def _configure_telemetry(self) -> None:
-        labels = ["cart" if loop.signal == "cart" else f"θ{loop.signal[5:]}"
-                  for loop in self.config.controller.loops]
+        labels = rules.loop_labels(self.config.controller)
         self.telemetry.configure(self.config.plant.n_segments, self.config.plant.has_cart, labels)
-        c = self.config.controller
-        self.telemetry.set_output_limit(max(self.config.plant.actuator.max_output,
-                                            abs(c.output_min), abs(c.output_max)))
+        self.telemetry.set_output_limit(rules.output_limit(self.config))
         self.telemetry.refresh(self.sim.telemetry, force=True)
 
     def _on_scenario_chosen(self, index: int) -> None:
@@ -361,7 +358,7 @@ class MainWindow(QMainWindow):
 
     def single_step(self) -> None:
         self.pause()
-        steps = max(1, int(round(self.sim.controller.period / self.config.simulation.dt)))
+        steps = rules.single_step_count(self.sim.controller.period, self.config.simulation.dt)
         self._run_steps(steps, deadline=None)
         self._update_view()
         self.telemetry.refresh(self.sim.telemetry)
@@ -395,27 +392,16 @@ class MainWindow(QMainWindow):
             self.show_message(f"⚠ {exc}")
             return
         if structural:
-            base_changed = plant.base_type != self.config.plant.base_type
-            ctrl = self._ui_controller()
-            if base_changed:
-                ctrl.action = default_action(plant)
-                ctrl.output_min, ctrl.output_max = -plant.actuator.max_output, plant.actuator.max_output
-                for loop in ctrl.loops:
-                    loop.kp, loop.ki, loop.kd, loop.enabled = 0.0, 0.0, 0.0, False
-            ctrl = ControllerPanel.complete_loops(ctrl, plant)
+            ctrl = rules.controller_for_structure(self._ui_controller(), plant, self.config.plant)
             self.config.plant = plant
             self.config.controller = ctrl
             self._show_controller(ctrl)
             self.sim.update_controller(ctrl)
             self._reset_sim()
             QTimer.singleShot(0, self.view.fit)
-            self.show_message("Structure changed – simulation reset. Use 'Seed gains from LQR' in the "
-                              "PID panel to obtain stabilising gains.", 10000)
+            self.show_message(texts.STRUCTURE_CHANGED, 10000)
             return
-        initial_changed = any(
-            a.initial_angle != b.initial_angle or a.initial_velocity != b.initial_velocity
-            for a, b in zip(plant.segments, self.config.plant.segments)
-        )
+        initial_changed = rules.initial_conditions_changed(plant, self.config.plant)
         self.sim.update_plant(plant)
         if initial_changed and not self.running and self.sim.time == 0.0:
             self._reset_sim()   # show the new initial pose right away
@@ -439,7 +425,7 @@ class MainWindow(QMainWindow):
         self._show_controller(ctrl)
         self.sim.update_controller(ctrl)
         self._configure_telemetry()
-        self.show_message("Gains seeded from LQR. Reset/Restart to try them from the initial conditions.")
+        self.show_message(texts.LQR_SEEDED)
 
     def _apply_controller(self, ctrl: ControllerConfig, message: str) -> None:
         self._show_controller(ctrl)
@@ -463,21 +449,16 @@ class MainWindow(QMainWindow):
 
     def _apply_tuning_result(self, result) -> None:
         """Use the gains of a :class:`TuningResult` and its recommended test push."""
-        self._apply_controller(
-            result.controller,
-            f"Robust gains applied: recoverable push {result.baseline_max_push:.3g} N → "
-            f"{result.max_push:.3g} N. Restart to try them; Push uses {result.recommended_push:g} N.")
+        self._apply_controller(result.controller, texts.tuning_applied(result))
         self.push_force.setValue(result.recommended_push)
 
     def _on_restore_gains(self) -> None:
-        plant = self.config.plant
-        ctrl = ControllerPanel.complete_loops(copy.deepcopy(self._original_controller), plant)
         try:
-            ctrl.validate()
+            ctrl = rules.restored_controller(self._original_controller, self.config.plant)
         except ValueError as exc:
             self.show_message(f"⚠ {exc}")
             return
-        self._apply_controller(ctrl, "Original gains restored")
+        self._apply_controller(ctrl, texts.GAINS_RESTORED)
 
     def _on_push_force_changed(self, value: float) -> None:
         self.config.push_force = value
@@ -503,11 +484,11 @@ class MainWindow(QMainWindow):
         if result is None:
             QMessageBox.information(self, "Load gains", "Select an experiment in the table first.")
             return
-        plant = self.config.plant
-        if (result.config.plant.n_segments, result.config.plant.base_type) != (plant.n_segments, plant.base_type):
+        try:
+            ctrl = rules.controller_from_run(result.config, self.config.plant)
+        except IncompatibleRun:
             QMessageBox.warning(self, "Load gains", "That experiment used a different pendulum structure.")
             return
-        ctrl = result.config.copy().controller
         self._show_controller(ctrl)
         self._on_controller_changed(ctrl)
         self.show_message(f"Controller gains loaded from '{result.name}'")

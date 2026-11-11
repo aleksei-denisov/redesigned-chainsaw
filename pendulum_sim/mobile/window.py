@@ -43,6 +43,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..control import ControllerConfig, LQRWeights
+from ..session import IncompatibleRun, rules
 from ..simulation import AppConfig
 from ..ui.main_window import SPEEDS, MainWindow
 from . import cpu, startup, theme
@@ -59,8 +60,6 @@ if TYPE_CHECKING:
     from .autotune_screen import AutotuneScreen
     from .experiments_page import ExperimentsPage
 
-DRAG_GAIN = 2.0          # drag force = DRAG_GAIN · push force · (offset / total length)
-DRAG_LIMIT = 4.0         # … clamped to ±DRAG_LIMIT · push force
 TIME_UPDATES = sys.version_info >= (3, 11)
 HITCH_FRAMES = 3.0       # a frame gap this many intervals long skips the graph step
 
@@ -357,11 +356,11 @@ class MobileWindow(MainWindow):
 
     def _apply_result_gains(self, result) -> None:
         """Experiments → 'Use gains' on a run: its controller into the Controller screen."""
-        plant = self.config.plant
-        if (result.config.plant.n_segments, result.config.plant.base_type) != (plant.n_segments, plant.base_type):
-            alert(self, "Use gains", "That run used a different pendulum structure.")
+        try:
+            ctrl = rules.controller_from_run(result.config, self.config.plant)
+        except IncompatibleRun as exc:
+            alert(self, "Use gains", str(exc))
             return
-        ctrl = result.config.copy().controller
         self._show_controller(ctrl)
         self._on_controller_changed(ctrl)
         self.show_message(f"Controller gains taken from '{result.name}'")
@@ -662,9 +661,7 @@ class MobileWindow(MainWindow):
         self._drag_offset = offset
 
     def drag_force(self) -> float:
-        f = DRAG_GAIN * self.config.push_force * self._drag_offset
-        limit = DRAG_LIMIT * self.config.push_force
-        return float(np.clip(f, -limit, limit))
+        return rules.drag_force(self.config.push_force, self._drag_offset)
 
     def seed_lqr(self) -> None:
         self._on_auto_tune(LQRWeights())

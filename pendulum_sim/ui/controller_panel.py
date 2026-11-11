@@ -27,6 +27,7 @@ from ..control import (
     PIDLoopConfig,
 )
 from ..physics import PlantParams
+from ..session import rules
 from .widgets import check, group, hint, set_silently, spin
 
 GAIN_RANGE = 1e6
@@ -247,18 +248,11 @@ class ControllerPanel(QWidget):
 
     @staticmethod
     def complete_loops(config: ControllerConfig, plant: PlantParams) -> ControllerConfig:
-        """Ensure there is one loop per available signal (disabled zero-gain if new)."""
-        signals = (["cart"] if plant.has_cart else []) + [f"theta{i + 1}" for i in range(plant.n_segments)]
-        existing = {loop.signal: loop for loop in config.loops}
-        loops = []
-        for sig in signals:
-            if sig in existing:
-                loops.append(existing[sig])
-            else:
-                name = "Cart position" if sig == "cart" else f"Segment {sig[5:]} angle"
-                loops.append(PIDLoopConfig(name=name, signal=sig, enabled=False, kp=0.0, ki=0.0, kd=0.0))
-        config.loops = loops
-        return config
+        """Ensure there is one loop per available signal (disabled zero-gain if new).
+
+        The rule is shared by all interfaces: :func:`pendulum_sim.session.rules.complete_loops`.
+        """
+        return rules.complete_loops(config, plant)
 
     def set_config(self, config: ControllerConfig) -> None:
         set_silently(self.enabled, config.enabled)

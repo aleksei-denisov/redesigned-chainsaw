@@ -22,7 +22,6 @@ laid out like the other mobile screens:
 
 from __future__ import annotations
 
-import threading
 import time
 from typing import Callable
 
@@ -41,7 +40,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..physics import MultiLinkPendulum
+from ..session import rules
+from ..session.jobs import ExperimentWorker, ReplayData
+from ..session.texts import metric_pairs, status_text
 from ..simulation import (
     AppConfig,
     DisturbanceSettings,
@@ -89,60 +90,6 @@ def run_color(index: int) -> str:
     return RUN_COLORS[index % len(RUN_COLORS)]
 
 
-def status_text(r: ExperimentResult) -> str:
-    return "diverged" if r.diverged else "fell" if r.metrics.fell else "stable"
-
-
-def metric_pairs(r: ExperimentResult) -> list[tuple[str, str]]:
-    """The desktop table's columns as (name, value) pairs."""
-    m = r.metrics
-    settle = "–" if m.settling_time is None else f"{m.settling_time:.3f} s"
-    pairs = [("Settling", settle), ("Max dev", f"{m.max_deviation:.2f}°"), ("Overshoot", f"{m.overshoot_pct:.1f} %"),
-             ("RMSE", f"{m.rmse:.3f}°"), ("u RMS", f"{m.control_rms:.3f}"), ("u peak", f"{m.control_peak:.3f}"),
-             ("∫u² dt", f"{m.control_energy:.3f}")]
-    if r.config.plant.has_cart:
-        pairs.append(("Max |x|", f"{m.max_cart_displacement:.3f} m"))
-    return pairs
-
-
-# ------------------------------------------------------------------ worker
-class ExperimentWorker:
-    """One experiment in a plain Python thread; the UI polls :meth:`done` and ``progress``."""
-
-    def __init__(self, config: AppConfig, name: str) -> None:
-        self.config = config
-        self.name = name
-        self.progress = 0.0
-        self.result: ExperimentResult | None = None
-        self.error: str | None = None
-        self._cancel = False
-        self._thread = threading.Thread(target=self._run, name="experiment", daemon=True)
-
-    def start(self) -> None:
-        self._thread.start()
-
-    def cancel(self) -> None:
-        self._cancel = True
-
-    def done(self) -> bool:
-        return self._thread.ident is not None and not self._thread.is_alive()
-
-    def wait(self, timeout_s: float) -> bool:
-        if self._thread.ident is not None:
-            self._thread.join(timeout_s)
-        return not self._thread.is_alive()
-
-    def _run(self) -> None:
-        def report(fraction: float) -> bool:
-            self.progress = fraction
-            return not self._cancel
-
-        try:
-            self.result = run_experiment(self.config, self.name, report)
-        except Exception as exc:  # noqa: BLE001 - shown on screen
-            self.error = str(exc)
-
-
 # ------------------------------------------------------------------ replay
 class ReplayView(TouchPendulumView):
     """Pendulum view of a recorded run: one finger pans, pinch zooms, no pushes."""
@@ -172,41 +119,13 @@ class ReplayView(TouchPendulumView):
         self.fit()
 
 
-class Replay:
+class Replay(ReplayData):
     """Frames of a recorded run (telemetry columns → model state → :class:`FrameData`)."""
 
-    def __init__(self, result: ExperimentResult) -> None:
-        self.result = result
-        self.cfg = result.config
-        self.model = MultiLinkPendulum(self.cfg.plant)
-        d = result.data
-        self.t = np.nan_to_num(np.asarray(d["t"], dtype=float))
-        n = self.model.n
-        self.n = n
-
-        def col(name: str) -> np.ndarray:
-            return np.nan_to_num(np.asarray(d.get(name, np.zeros_like(self.t)), dtype=float))
-
-        self.x, self.xd = col("x"), col("xd")
-        self.th = np.stack([col(f"theta{i + 1}") for i in range(n)], axis=1) if n else np.zeros((self.t.size, 0))
-        self.om = np.stack([col(f"omega{i + 1}") for i in range(n)], axis=1) if n else np.zeros((self.t.size, 0))
-        self.actuator, self.tip = col("actuator"), col("tip_force")
-
-    @property
-    def duration(self) -> float:
-        return float(self.t[-1]) if self.t.size else 0.0
-
-    def index(self, t: float) -> int:
-        if self.t.size == 0:
-            return 0
-        return int(min(max(np.searchsorted(self.t, t, side="right") - 1, 0), self.t.size - 1))
-
     def frame(self, i: int) -> FrameData:
-        n = self.n
-        state = np.concatenate(([self.x[i]], self.th[i], [self.xd[i]], self.om[i]))
         plant = self.cfg.plant
         return FrameData(
-            kin=self.model.kinematics(state), angles=self.th[i].copy(), velocities=self.om[i].copy(),
+            kin=self.model.kinematics(self.state(i)), angles=self.th[i].copy(), velocities=self.om[i].copy(),
             cart_velocity=float(self.xd[i]), time=float(self.t[i]), applied=float(self.actuator[i]),
             max_output=plant.actuator.max_output, tip_force=float(self.tip[i]), has_cart=plant.has_cart,
             track_length=plant.track_length, lengths=self.model.lengths.copy())
@@ -562,16 +481,8 @@ class ExperimentsPage(QWidget):
 
     # ---------------------------------------------------------------- run
     def build_config(self) -> AppConfig:
-        cfg = self.get_config().copy()
-        cfg.experiment = self.settings()
-        if self.reuse.isChecked() and self.results:
-            from ..ui.controller_panel import ControllerPanel
-
-            base = self.results[0].config
-            cfg.plant = base.copy().plant
-            cfg.simulation = base.copy().simulation
-            cfg.controller = ControllerPanel.complete_loops(cfg.controller, cfg.plant)
-        return cfg
+        reuse = self.results[0].config if self.reuse.isChecked() and self.results else None
+        return rules.experiment_config(self.get_config(), self.settings(), reuse)
 
     @property
     def running(self) -> bool:

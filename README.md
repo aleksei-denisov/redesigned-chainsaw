@@ -93,6 +93,7 @@ pendulum_sim/
   physics/                 multibody model, actuator, RK4 (no GUI code)
   control/                 PID loop, multi-loop controller, LQR seeding
   simulation/              config/JSON, fixed-step engine, telemetry, experiments, metrics, scenarios
+  session/                 Qt-free application logic shared by all interfaces (edit rules, workers)
   ui/                      PySide6 window, QPainter view, panels, pyqtgraph plots
   mobile/                  touch-first interface for the Android app (reuses ui/ view and plots)
   quick/                   Qt Quick (QML) interface for Android, in development (docs/ANDROID_QTQUICK.md)

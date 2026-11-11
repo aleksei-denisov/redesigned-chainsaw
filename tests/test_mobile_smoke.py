@@ -1103,3 +1103,11 @@ def test_all_icons_render(app):
     for name in icons.names():
         img = icons.pixmap(name, 24, "#FFFFFF").toImage()
         assert any(img.pixelColor(x, y).alpha() > 0 for x in range(img.width()) for y in range(img.height())), name
+
+
+def test_mobile_edits_match_the_shared_session(win, app):
+    """Widgets mobile window and shared Session (the Qt Quick app's logic): same configuration, same states."""
+    from .window_session import drive
+
+    passed = drive(win, app.processEvents, win._apply_plant)
+    assert passed[-1] == "single step"
