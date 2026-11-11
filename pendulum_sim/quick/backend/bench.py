@@ -16,6 +16,7 @@ from pathlib import Path
 
 from PySide6.QtCore import Property, QObject, QStandardPaths, QTimer, Signal, Slot, qVersion
 from PySide6.QtGui import QGuiApplication
+from PySide6.QtQuick import QQuickWindow
 
 from . import scene_items, threads
 from .bridge import GraphBridge, SimBridge, summarise
@@ -48,7 +49,6 @@ class Benchmark(QObject):
         super().__init__(parent)
         self.sim, self.graph = sim, graph
         self.window = None
-        self.info: dict[str, str] = {}
         self.warnings: list[str] = []
         self._phase = -1
         self._blocks: list[str] = []
@@ -189,6 +189,14 @@ class Benchmark(QObject):
         except OSError:
             pass
 
+    @staticmethod
+    def graphics_api() -> str:
+        try:
+            api = QQuickWindow.graphicsApi()
+            return getattr(api, "name", str(api))
+        except Exception as exc:  # noqa: BLE001 - informational only
+            return f"? ({type(exc).__name__})"
+
     def header(self) -> str:
         import PySide6
 
@@ -207,7 +215,7 @@ class Benchmark(QObject):
             f"Python {platform.python_version()} on {sys.platform} {platform.machine()}; "
             f"PySide6 {PySide6.__version__}, Qt {qVersion()}",
             geo,
-            f"graphics: {self.info.get('graphics', '?')}; render loop: {threads.render_loop()}",
+            f"graphics: {self.graphics_api()}; render loop: {threads.render_loop()}",
             f"scenario '{cfg.name}', dt {cfg.simulation.dt * 1000:g} ms, telemetry "
             f"{cfg.simulation.telemetry_rate_hz:g} Hz; {RECORD_S:g} s per phase; {cpu.describe()}",
             f"interpreter switch interval {sys.getswitchinterval() * 1000:g} ms",

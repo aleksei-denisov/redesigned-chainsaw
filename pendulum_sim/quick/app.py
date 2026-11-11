@@ -110,7 +110,7 @@ class Spike:
     def __init__(self, app, args: argparse.Namespace) -> None:
         from ..mobile.startup import TIMER
 
-        from PySide6.QtCore import QTimer, QUrl
+        from PySide6.QtCore import QUrl
         from PySide6.QtGui import QFont, QFontDatabase
         from PySide6.QtQml import QQmlApplicationEngine, qmlRegisterSingletonType, qmlRegisterType
 
@@ -173,11 +173,6 @@ class Spike:
 
         self._paused_in_background = False
         app.applicationStateChanged.connect(self._on_application_state)
-        self._info = QTimer(self.window)
-        self._info.setSingleShot(True)
-        self._info.timeout.connect(self._collect_info)
-        self._info.start(1500)
-
         self.sim.running = True
         gc.collect()
         gc.freeze()            # start-up objects out of the collector's view: short collections later
@@ -202,15 +197,6 @@ class Spike:
             if self.sim.running:
                 self._paused_in_background = True
                 self.sim.running = False
-
-    def _collect_info(self) -> None:
-        from PySide6.QtQuick import QQuickWindow
-
-        try:
-            api = QQuickWindow.graphicsApi()
-            self.bench.info["graphics"] = getattr(api, "name", str(api))
-        except Exception as exc:  # noqa: BLE001 - informational only
-            self.bench.info["graphics"] = f"? ({type(exc).__name__})"
 
     # ------------------------------------------------------------------ modes
     def run(self) -> int:

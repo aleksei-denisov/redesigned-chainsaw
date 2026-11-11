@@ -200,22 +200,22 @@ jobs:
       - name: Install dependencies
         run: python -m pip install -r requirements.txt
       - name: Smoke test (any QML warning fails)
-        run: xvfb-run -a -s "-screen 0 1280x800x24" python -m pendulum_sim.quick --smoke-test 3 --strict
+        run: xvfb-run -a -s "-screen 0 1280x800x24" python -X faulthandler -m pendulum_sim.quick --smoke-test 3 --strict
       - name: Smoke test with physics in a separate process
-        run: xvfb-run -a -s "-screen 0 1280x800x24" python -m pendulum_sim.quick --smoke-test 3 --strict --physics process
+        run: xvfb-run -a -s "-screen 0 1280x800x24" python -X faulthandler -m pendulum_sim.quick --smoke-test 3 --strict --physics process
       - name: Screenshots
         run: |
           mkdir -p build/quick-preview
           for graph in shape qtgraphs node painted; do
-            xvfb-run -a -s "-screen 0 1280x800x24" python -m pendulum_sim.quick \
+            xvfb-run -a -s "-screen 0 1280x800x24" python -X faulthandler -m pendulum_sim.quick \
               --graph $graph --screenshot build/quick-preview/simulate-$graph.png
           done
-          xvfb-run -a -s "-screen 0 1280x800x24" python -m pendulum_sim.quick \
+          xvfb-run -a -s "-screen 0 1280x800x24" python -X faulthandler -m pendulum_sim.quick \
             --view node --graph shape --screenshot build/quick-preview/simulate-scene-graph-pendulum.png
       - name: Benchmark of all variants (default render loop)
         run: |
           set -o pipefail
-          xvfb-run -a -s "-screen 0 1280x800x24" python -m pendulum_sim.quick --benchmark \
+          xvfb-run -a -s "-screen 0 1280x800x24" python -X faulthandler -m pendulum_sim.quick --benchmark \
             | tee build/quick-preview/benchmark.txt || {
               status=$?
               echo "::error title=quick benchmark::stopped with status $status; report saved so far:"
@@ -228,7 +228,7 @@ jobs:
           QSG_RENDER_LOOP: threaded
         run: |
           set -o pipefail
-          xvfb-run -a -s "-screen 0 1280x800x24" python -m pendulum_sim.quick --benchmark \
+          xvfb-run -a -s "-screen 0 1280x800x24" python -X faulthandler -m pendulum_sim.quick --benchmark \
             | tee build/quick-preview/benchmark-threaded.txt || {
               status=$?
               echo "::error title=quick benchmark (threaded)::stopped with status $status; report saved so far:"
@@ -241,10 +241,11 @@ jobs:
           name: quick-preview
           path: build/quick-preview/*.*
       - name: Publish to the qtquick-ui-preview pre-release
-        if: github.event_name == 'push' && github.ref == 'refs/heads/qtquick-ui'
+        if: always() && github.event_name == 'push' && github.ref == 'refs/heads/qtquick-ui'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          shopt -s nullglob
           gh release delete qtquick-ui-preview --yes --cleanup-tag || true
           gh release create qtquick-ui-preview build/quick-preview/*.png build/quick-preview/*.txt \
             --prerelease --target "$GITHUB_SHA" --title "Qt Quick app preview (${GITHUB_SHA::7})" \
