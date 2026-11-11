@@ -89,3 +89,13 @@ def test_quick_package_only_imports_staged_modules(build_android):
                     continue
                 candidates = {"/".join(rel) + ".py", "/".join(rel) + "/__init__.py"}
                 assert candidates & staged_files, f"{path.name} imports {'.'.join(name)}, which is not staged"
+
+
+def test_lazy_qt_libs_are_removed_from_the_start_up_list_only(build_android):
+    args = ("--qt-libs=Graphs,Qml,OpenGL,Quick3D,Network,Quick,Core,Gui "
+            "--load-local-libs=plugins_platforms_qtforandroid --init-classes=")
+    assert build_android.lazy_qt_libs(args, ("Graphs", "Quick3D")) == (
+        "--qt-libs=Qml,OpenGL,Network,Quick,Core,Gui "
+        "--load-local-libs=plugins_platforms_qtforandroid --init-classes=")
+    assert build_android.lazy_qt_libs(args, ()) == args
+    assert build_android.TARGETS["widgets"].lazy_qt_libs == ()       # the Widgets app is built as before

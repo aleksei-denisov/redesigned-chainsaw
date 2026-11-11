@@ -46,12 +46,23 @@ COLORED_POINT = np.dtype([("x", np.float32), ("y", np.float32), ("rgba", np.uint
 
 
 def vertex_array(geometry: QSGGeometry, dtype: np.dtype) -> np.ndarray | None:
-    """The geometry's vertex buffer as a writable NumPy array (``None`` if not accessible)."""
-    if _VoidPtr is None or geometry.sizeOfVertex() != dtype.itemsize:
+    """The geometry's vertex buffer as a writable NumPy array (``None`` if not accessible).
+
+    ``vertexData()`` arrives as a read-only ``VoidPtr``; a writable one is made from its
+    address (or, failing that, a ctypes array at that address).
+    """
+    if geometry.sizeOfVertex() != dtype.itemsize:
         return None
+    size = dtype.itemsize * geometry.vertexCount()
     try:
-        n = geometry.vertexCount()
-        return np.frombuffer(_VoidPtr(geometry.vertexData(), dtype.itemsize * n, True), dtype)
+        address = int(geometry.vertexData())
+        if _VoidPtr is not None:
+            array = np.frombuffer(_VoidPtr(address, size, True), dtype)
+            if array.flags.writeable:
+                return array
+        import ctypes
+
+        return np.frombuffer((ctypes.c_char * size).from_address(address), dtype)
     except Exception as exc:  # noqa: BLE001 - the caller falls back or reports
         NOTES["vertex buffer"] = f"not accessible from NumPy ({type(exc).__name__}: {exc})"
         return None

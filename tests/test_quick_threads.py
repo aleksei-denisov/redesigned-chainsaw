@@ -42,3 +42,18 @@ def test_other_threads_are_counted_separately():
 
 def test_render_loop_without_qt_is_not_threaded():
     assert threads.render_loop().startswith("not threaded")
+
+
+def test_cpu_frequencies_from_sysfs(tmp_path):
+    for name, cpus, now, hardware, limit in (("policy0", "0 1 2 3", 1804800, 1804800, 1804800),
+                                             ("policy4", "4 5 6", 1900800, 2419200, 2000000),
+                                             ("policy7", "7", 3187200, 3187200, 3187200)):
+        folder = tmp_path / name
+        folder.mkdir()
+        (folder / "related_cpus").write_text(cpus + "\n")
+        (folder / "scaling_cur_freq").write_text(f"{now}\n")
+        (folder / "cpuinfo_max_freq").write_text(f"{hardware}\n")
+        (folder / "scaling_max_freq").write_text(f"{limit}\n")
+    assert threads.cpu_frequencies(tmp_path) == (
+        "cpu 0-3: 1.80 of 1.80 GHz · cpu 4-6: 1.90 of 2.42 GHz (limit 2.00) · cpu 7: 3.19 of 3.19 GHz")
+    assert threads.cpu_frequencies(tmp_path / "missing") == ""

@@ -264,6 +264,13 @@ class GraphBridge(QObject):
 
     def _set_mode(self, mode: str) -> None:
         if mode != self._mode:
+            if mode == "qtgraphs":
+                # loaded on first use (not at start-up); registers the series types, so
+                # setSeries() receives real LineSeries objects
+                try:
+                    from PySide6 import QtGraphs  # noqa: F401
+                except ImportError as exc:
+                    self.error = f"Qt Graphs Python module not available ({exc})"
             self._mode = mode
             self._series = []
             self.modeChanged.emit()

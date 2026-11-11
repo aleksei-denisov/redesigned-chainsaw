@@ -82,6 +82,8 @@ class Target(NamedTuple):
     parts: tuple[str, ...] | None = None
     exclude: tuple[str, ...] = ()
     artifact: str = ""                # dist/<artifact>-<version>-debug.apk
+    # Qt libraries that are packaged but not loaded when the app starts (see lazy_qt_libs())
+    lazy_qt_libs: tuple[str, ...] = ()
 
 
 TARGETS = {
@@ -97,7 +99,10 @@ TARGETS = {
         # the shared core, the Qt Quick UI and the Qt-free helpers it reuses from the mobile package
         parts=("__init__.py", "physics", "control", "simulation", "quick",
                "mobile/__init__.py", "mobile/plot_math.py", "mobile/startup.py", "mobile/cpu.py"),
-        artifact="invertedpendulumquick"),
+        artifact="invertedpendulumquick",
+        # Qt Graphs (and the Qt Quick 3D it links to) is only one of the graph variants the
+        # spike compares: loaded when that variant is selected, not at every start
+        lazy_qt_libs=("Graphs", "Quick3D")),
 }
 
 log = logging.getLogger("build_android")
@@ -185,6 +190,19 @@ def init_deployment(pyside_wheel: Path, shiboken_wheel: Path, sdk: Path, ndk: Pa
         cwd=target.staging, env=build_env())
 
 
+def lazy_qt_libs(extra_args: str, names: tuple[str, ...]) -> str:
+    """Remove ``names`` from the ``--qt-libs=`` list of python-for-android's arguments.
+
+    The Qt bootstrap loads every library of that list before Python starts. All Qt
+    libraries of the wheel are in the APK regardless, so a library left out here is still
+    loaded by the dynamic linker when something that needs it is imported.
+    """
+    def strip(match: re.Match) -> str:
+        return "--qt-libs=" + ",".join(lib for lib in match.group(1).split(",") if lib not in names)
+
+    return re.sub(r"--qt-libs=(\S*)", strip, extra_args)
+
+
 def patch_buildozer_spec(version: str, release: bool, target: Target = TARGETS["widgets"]) -> dict[str, str]:
     spec_file = target.staging / "buildozer.spec"
     spec = configparser.ConfigParser(interpolation=None)
@@ -217,6 +235,8 @@ def patch_buildozer_spec(version: str, release: bool, target: Target = TARGETS["
     app["source.include_exts"] = ",".join(sorted(set(
         app.get("source.include_exts", "py").split(",") + list(target.include_exts))))
     app["source.exclude_dirs"] = "deployment,bin,.buildozer,tests"
+    if target.lazy_qt_libs and app.get("p4a.extra_args"):
+        app["p4a.extra_args"] = lazy_qt_libs(app["p4a.extra_args"], target.lazy_qt_libs)
     app["android.release_artifact"] = "aab" if release else "apk"
     app["android.debug_artifact"] = "apk"
     p4a = prepare_p4a(app.get("p4a.branch") or "master", app.get("p4a.commit", ""))

@@ -143,10 +143,6 @@ class Spike:
         qmlRegisterType(scene_items.LineNode, "PendulumSpike", 1, 0, "LineNode")
         qmlRegisterType(scene_items.PaintedGraph, "PendulumSpike", 1, 0, "PaintedGraph")
         qmlRegisterSingletonType(QUrl.fromLocalFile(str(HERE / "qml" / "Theme.qml")), "Instrument", 1, 0, "Theme")
-        try:  # registers the series types, so graph.setSeries() receives real LineSeries objects
-            from PySide6 import QtGraphs  # noqa: F401
-        except ImportError as exc:
-            scene_items.NOTES["Qt Graphs"] = f"Python module not available ({exc})"
         TIMER.mark("bridges ready (physics running off the GUI thread)")
 
         self.engine = QQmlApplicationEngine()

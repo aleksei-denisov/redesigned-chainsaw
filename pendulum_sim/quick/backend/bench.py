@@ -62,6 +62,7 @@ class Benchmark(QObject):
         self._timer.timeout.connect(self._step)
         self._recording = False
         self.first_frame = False
+        self._clock_before = ""
         try:
             previous = report_path().read_text(encoding="utf-8")
             if previous.strip():
@@ -81,6 +82,7 @@ class Benchmark(QObject):
             return
         self._saved = (self.sim.pendulumMode, self.graph.mode, self.sim.physics, self.sim.running)
         self._blocks = [self.header()]
+        self._clock_before = threads.cpu_frequencies()
         self._phase = -1
         self._copied = False
         self.sim.reset()
@@ -106,8 +108,8 @@ class Benchmark(QObject):
         label, pendulum, graph, physics = PHASES[self._phase]
         self.sim.physics = physics
         self.sim.pendulumMode = pendulum
-        self.graph.mode = graph
         self.graph.error = ""
+        self.graph.mode = graph
         self._progress = f"{self._phase + 1}/{len(PHASES)}  {label}"
         self._save(f"… running phase {self._phase + 1}: {label} (if this is the last line, the app stopped here)")
         self.changed.emit()
@@ -176,6 +178,9 @@ class Benchmark(QObject):
         notes = [f"  {k}: {v}" for k, v in scene_items.NOTES.items()]
         if self.warnings:
             notes += ["  QML warnings:"] + [f"    {w}" for w in self.warnings[:12]]
+        if self._clock_before:
+            notes.append(f"CPU clocks at the start: {self._clock_before}")
+            notes.append(f"CPU clocks now:          {threads.cpu_frequencies()}")
         if notes:
             parts.append("Notes:\n" + "\n".join(notes))
         parts += [TIMER.report(), tail]

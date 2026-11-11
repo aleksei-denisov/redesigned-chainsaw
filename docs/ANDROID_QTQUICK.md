@@ -64,6 +64,9 @@ as for the Widgets app and described in [ANDROID.md](ANDROID.md). Differences of
   modules it reuses from `pendulum_sim/mobile` – no Widgets UI, no pyqtgraph, so only the
   Qt Quick libraries are loaded at start-up;
 - `.qml`, `.ttf` and the font licence texts are packaged in addition to the usual files.
+- Qt Graphs and Qt Quick 3D are packaged but left out of the list of libraries the Qt
+  bootstrap loads before Python starts (`lazy_qt_libs`); they load when the Qt Graphs variant
+  is selected.
 
 GitHub Actions builds it in the `Android` workflow (matrix entry `quick`) and publishes the
 APK of the `qtquick-ui` branch as the pre-release `android-qtquick-ui`
