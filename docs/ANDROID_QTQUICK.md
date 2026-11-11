@@ -6,44 +6,62 @@ developed next to the existing Qt Widgets mobile app (`pendulum_sim/mobile`, see
 Qt Quick version reaches feature parity. The simulation, controllers, LQR and autotune code
 are shared and unchanged.
 
-**Status: Phase 1 – spike.** One *Simulate* screen that proves (or disproves) the approach
-on the device before anything is ported. The remaining screens come in later phases.
+**Status: Phase 2 – architecture.** The backend for every screen exists; the QML has the
+Simulate, Graphs and Settings screens. The remaining screens (Controller, Model,
+Autotune, Experiments/Scenarios) and the full design come in Phase 3.
 
 ## Why
 
-In the Widgets app all painting runs in Python on the UI thread, together with the physics.
-In Qt Quick the scene is drawn by the GPU scene graph on its own render thread; Python only
-supplies state (a few numbers per frame) and the physics run off the GUI thread.
+In the Widgets app all painting runs in Python on the UI thread, together with the physics
+(19–38 fps on the Pad 6, 12–20 fps in the last report). In Qt Quick the scene is drawn by
+the GPU scene graph; Python only supplies state, and the physics run in a separate process.
+The Phase 1 spike measured 120 fps on the Pad 6 (frame gap p95 11.6 ms, no gaps over 33 ms).
 
-## What the spike contains
+## Architecture
+
+```
+ physics process (fork)              GUI process
+ ┌────────────────────────┐          ┌──────────────────────────────────────────────┐
+ │ Simulator +            │  shared  │ Sim bridge ── one read per shown frame       │
+ │ RealtimeStepper        │  memory  │   (interpolated state into a preallocated    │
+ │ (unchanged core)       │ ───────▶ │    row) ─▶ QML positions the pendulum        │
+ │ fixed dt, real time    │          │ Graphs bridge ── telemetry window, 20–30 Hz, │
+ │ state history ring     │          │   only visible graphs, decimated to pixels   │
+ │ telemetry ring         │ ◀─────── │ Model / Controller ── shared editor forms    │
+ └────────────────────────┘ commands │ Session (shared rules) ─▶ edit operations    │
+                             (pipe)  │ Frames ── vsync, pacing, hints, idle GC      │
+                                     └──────────────────────────────────────────────┘
+```
 
 | Part | File | Notes |
 |---|---|---|
-| Physics off the GUI thread | `pendulum_sim/quick/backend/sim_source.py` | The unchanged `Simulator` + `RealtimeStepper` in a worker thread (`ThreadSource`) or a forked process with shared memory (`ForkSource`). Publishes time-stamped state samples; the GUI interpolates between them, so dropped frames never slow the simulation. Qt-free, tested: results are bit-identical to the core. |
-| Bridges to QML | `backend/bridge.py` | `SimBridge` (state per frame, read-outs at 15 Hz, Play/Pause, push, reset), `GraphBridge` (two traces from the telemetry ring, decimated to the pixel width, 30 Hz, nothing while hidden). |
-| Benchmark | `backend/bench.py`, `backend/threads.py` | Runs every rendering variant for a few seconds and writes the report (fps, frame gaps, CPU per frame on the GUI and render thread, start-up timeline). |
-| Comparison variants | `backend/scene_items.py` | Custom scene-graph items written in Python (`QQuickItem` + `QSGGeometry`, `QQuickPaintedItem`). They run Python on the render thread and exist to be measured. |
-| Scene | `qml/Main.qml`, `qml/PendulumItems.qml`, `qml/Graph*.qml` | Plain QML items placed once per frame; graph as `Shape` paths, Qt Graphs, scene-graph lines or QPainter. |
-| Theme | `qml/Theme.qml` | Singleton with the "Instrument" tokens for light and dark (the spike shows light). |
-| Fonts | `fonts/` | Space Grotesk and JetBrains Mono (SIL Open Font License, licence texts included). |
+| Shared application logic | `pendulum_sim/session/` | Qt-free rules that used to live in the desktop window and the Widgets screens: structure changes, restoring gains, LQR seeding, gains from a run, single step, drag force, graph labels, experiment configuration; editor forms; auto-tune and experiment workers; texts. Desktop and Widgets mobile use it too. `tests/test_session_equivalence.py` pins it to the previous code (identical configurations, bit-identical trajectories). |
+| Physics host | `quick/backend/sim_source.py` | The unchanged `Simulator` + `RealtimeStepper` in a forked process (default) or a thread (fallback), one loop and one shared-memory layout for both. Every edit is a session operation applied with the same simulator calls as the desktop. Frame reads interpolate into a preallocated row, so dropped frames never slow the simulation. Divergence and refused edits come back as messages. |
+| Bridges (QML singletons) | `quick/backend/*.py` | `Sim` (state, read-outs, run control), `Model`, `Controller` (shared forms as list models), `Graphs` (selection, views, decimation), `Autotune`, `Scenarios`, `Settings`, `App`, `Frames`, `Bench`. No UI logic in the core, no physics in QML. |
+| Graph data | `quick/backend/graphdata.py` | Telemetry window → per series a list of pixel polylines, using the Widgets app's chart maths (catalogue, min/max decimation, auto range with minimum span, nice ticks). Qt-free, tested. |
+| Frame loop | `quick/backend/frames.py`, `pacing.py` | `FrameAnimation` calls `Frames.vsync()` on every vsync; the pacer shows a frame on every k-th vsync (120/60/40/30 fps on a 120 Hz display; *Auto* keeps the highest rate whose p95 frame work fits, or a fixed rate). Skipped vsyncs change nothing, so Qt Quick renders nothing. |
+| Android hints | `quick/backend/android_perf.py` | `APerformanceHint` session (the NDK side of `PerformanceHintManager`, Android 13+) for the GUI and render threads, target = frame interval, each frame's work reported; thermal status for the report. No-op on older Android and on the desktop. PySide6 has no JNI bindings, hence the NDK C API through `ctypes`. The forked physics process gets no session (a forked child must not use binder). No CPU affinity is set. |
+| Garbage collection | `pacing.IdleCollector` | After start-up all objects are frozen out of the collector's view and automatic collection is off; the young generation is collected in frames with slack, a full collection runs when the app is paused or goes to the background. |
+| Start-up | `quick/app.py`, `qml/Main.qml` | The loading screen is the first frame (only `Settings` and `App` exist then). After it: NumPy and the core, the physics process, the backend; then the shell and the Simulate screen are built asynchronously and fade in. Other screens are built when first opened. |
+| Theme | `qml/Theme.qml` | Singleton with the "Instrument" tokens for light and dark; follows *Settings → Theme* (System/Light/Dark, remembered) and switches instantly. No colour is written anywhere else. |
+| Fonts | `quick/fonts/` | Space Grotesk and JetBrains Mono (SIL Open Font License, licence texts included). |
 
-Per displayed frame the GUI thread runs one Python call (`SimBridge.advance`, well under a
-millisecond): it reads the interpolated state and emits one signal; a QML function then
-positions the cart, links and joints. The render thread never calls Python in the default
-variants.
+Per shown frame the GUI thread makes one Python call (`Sim.advance`, about 1 ms on the
+Pad 6) and QML moves the cart, links and joints. The render thread never calls Python.
 
 ## Running it
 
 ```bash
-python -m pendulum_sim.quick                        # desktop preview of the spike
-python -m pendulum_sim.quick --benchmark            # all variants, report printed at the end
-python -m pendulum_sim.quick --physics process      # physics in a forked process (not on Windows)
-python -m pendulum_sim.quick --smoke-test 3         # run briefly and exit (CI)
+python -m pendulum_sim.quick                                  # desktop preview
+python -m pendulum_sim.quick --benchmark                      # performance test, report printed at the end
+python -m pendulum_sim.quick --theme dark --screen graphs     # theme and first screen for this run
+python -m pendulum_sim.quick --physics thread                 # physics in a thread (default: process)
+python -m pendulum_sim.quick --smoke-test 3                   # visit every screen, run briefly, exit (CI)
 ```
 
-On the device: **Run benchmark** (about one minute; leave the tablet alone meanwhile), then
-**Copy report**. The report is also saved after every variant, so if a variant crashes the
-app, the next start shows what was measured up to that point (**Report** button).
+On the device: *Settings → Run performance test* (about 45 s; leave the tablet alone),
+then *Copy report*. The report is saved after every phase, so if the app dies during the
+test, the next start offers what was measured (*Show report*).
 
 ## Building the APK
 
@@ -60,23 +78,43 @@ as for the Widgets app and described in [ANDROID.md](ANDROID.md). Differences of
 
 - entry point `android/main_quick.py` instead of `android/main.py`;
 - staging folder `build/android/app-quick`, containing only the shared core
-  (`physics`, `control`, `simulation`), `pendulum_sim/quick` and the three Qt-free helper
-  modules it reuses from `pendulum_sim/mobile` – no Widgets UI, no pyqtgraph, so only the
-  Qt Quick libraries are loaded at start-up;
-- `.qml`, `.ttf` and the font licence texts are packaged in addition to the usual files.
-- Qt Graphs and Qt Quick 3D are packaged but left out of the list of libraries the Qt
-  bootstrap loads before Python starts (`lazy_qt_libs`); they load when the Qt Graphs variant
-  is selected.
+  (`physics`, `control`, `simulation`, `session`), `pendulum_sim/quick` and the Qt-free
+  helper modules it reuses from `pendulum_sim/mobile` – no Widgets UI, no pyqtgraph;
+- `.qml`, `.ttf` and the font licence texts are packaged in addition to the usual files;
+- Qt Graphs and Qt Quick 3D are left out of the libraries the Qt bootstrap loads before
+  Python starts (`lazy_qt_libs`).
 
 GitHub Actions builds it in the `Android` workflow (matrix entry `quick`) and publishes the
 APK of the `qtquick-ui` branch as the pre-release `android-qtquick-ui`
-(`PendulumQuick-debug.apk`). The `CI` workflow's `quick-preview` job runs the smoke test,
-screenshots and the benchmark under Xvfb with software-rasterised OpenGL.
+(`PendulumQuick-debug.apk`). The `CI` workflow's `quick-preview` job runs the smoke test
+(every screen, both themes, any QML warning fails), screenshots and the performance test
+under Xvfb with software-rasterised OpenGL, and publishes them as `qtquick-ui-preview`.
 
 ## Tests
 
-- `tests/test_quick_sim_source.py` – both physics sources give exactly the core's results;
-  telemetry, reset, push, real-time pacing, interpolation.
-- `tests/test_quick_threads.py` – per-thread CPU times used by the benchmark.
+- `tests/test_session_equivalence.py`, `test_session_forms.py`, `test_session_texts.py` – the
+  shared logic gives the same configurations and bit-identical trajectories as the previous
+  code; the GUI tests repeat this inside the real desktop and Widgets windows.
+- `tests/test_quick_sim_source.py` – both physics hosts give exactly the core's results for
+  the same edit sequences; telemetry, reset, push, drag, divergence, real-time pacing,
+  interpolation without per-frame allocations.
+- `tests/test_quick_graphdata.py` – decimation, axes, runs of the graph data.
+- `tests/test_quick_pacing.py` – frame pacing, idle collection, the Android hint wrappers.
+- `tests/test_quick_threads.py` – per-thread CPU times and CPU clocks for the report.
 - `tests/test_build_android_targets.py` – the two build targets are staged separately and the
   Qt Quick staging contains everything the app imports.
+
+## Phase 1 results (Pad 6, triple pendulum)
+
+| | Widgets app | Qt Quick spike |
+|---|---|---|
+| Frame rate | 12–20 fps | 120 fps |
+| Frame gap p50 / p95 / max | 21–50 ms busy per frame | 8.3 / 11.6 / 16.4 ms |
+| Gaps over 33 ms | many | 0 |
+| Python on the GUI thread per frame | 21–50 ms | 0.9 ms mean |
+| Start-up to first frame | 2.95 s | 3.1 s (QML load 2.5 s; addressed in Phase 2) |
+| APK size | 172 MB | 179 MB |
+
+Chosen: pendulum as plain QML items, graphs as `Shape` paths (curve renderer), physics in a
+separate process. The Python scene-graph items, Qt Graphs and `QQuickPaintedItem` variants
+were measured and removed (see the git history of `pendulum_sim/quick`).
