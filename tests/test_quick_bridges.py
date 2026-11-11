@@ -94,10 +94,16 @@ def test_edits_reach_the_host_as_session_operations(bridges):
     kinds = [op[0] for op in sent]
     assert "plant" in kinds and "controller" in kinds and "simulation" in kinds
     assert sim.session.config.plant.segments[1].mass == pytest.approx(0.12)
-    # the session holds exactly the configuration the edits describe
+    # the session holds exactly the configuration the edits describe; with "uniform rod"
+    # on, the editor recomputes the rod's inertia from the new mass (as the Widgets editor)
     expected = copy.deepcopy(original)
-    expected.plant.segments[1].mass = 0.12
-    assert sim.session.config.plant == expected.plant
+    seg = expected.plant.segments[1]
+    seg.mass = 0.12
+    seg.inertia = seg.mass * seg.length ** 2 / 12.0
+    got = sim.session.config.plant
+    assert got.segments[1].inertia == pytest.approx(seg.inertia)
+    got.segments[1].inertia = seg.inertia
+    assert got == expected.plant
 
 
 def test_structure_change_through_the_model_bridge(bridges):
