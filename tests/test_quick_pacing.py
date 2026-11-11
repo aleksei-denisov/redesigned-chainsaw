@@ -59,7 +59,21 @@ def test_auto_steps_down_when_frames_are_too_expensive_and_back_up():
     assert pacer.rate == 60
     t = _run(pacer, 2.0, cost_ms=4.0, t0=t)    # cheap, but not yet held long enough
     assert pacer.rate == 60
-    _run(pacer, 3.0, cost_ms=4.0, t0=t)        # 4 ms < 0.55 · 8.33 ms for 3 s → back to 120
+    _run(pacer, 3.0, cost_ms=4.0, t0=t)        # 4 ms < 0.75 · 8.33 ms for 3 s → back to 120
+    assert pacer.rate == 120
+
+
+def test_failed_tries_back_off():
+    pacer = Pacer(120, "auto")
+    t = _run(pacer, 1.5, cost_ms=9.0)          # down to 60
+    assert pacer.rate == 60
+    t = _run(pacer, 4.0, cost_ms=5.0, t0=t)    # 5 ms fits 0.75 · 8.33 ms → up after 3 s
+    assert pacer.rate == 120
+    t = _run(pacer, 1.5, cost_ms=9.0, t0=t)    # too expensive at 120 after all → down: failed try
+    assert pacer.rate == 60
+    t = _run(pacer, 4.5, cost_ms=5.0, t0=t)    # now it needs 6 s
+    assert pacer.rate == 60
+    _run(pacer, 2.5, cost_ms=5.0, t0=t)
     assert pacer.rate == 120
 
 

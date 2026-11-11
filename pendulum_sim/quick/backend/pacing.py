@@ -9,7 +9,10 @@ the :class:`Pacer` keeps the highest rate whose recent frame cost fits:
   exceeds ``DOWN_FRACTION`` of the frame interval, or frames were missed (the gap between
   shown frames exceeded 1.5 intervals in more than ``MISS_FRACTION`` of them);
 * **step up** after ``UP_HOLD_S`` seconds in which the p95 cost stayed below
-  ``UP_FRACTION`` of the *faster* rate's interval and nothing was missed.
+  ``UP_FRACTION`` of the *faster* rate's interval and nothing was missed. The cost
+  measured at the slower rate includes work that happens per second rather than per
+  frame (graph refreshes), so it slightly overstates the cost at the faster rate; a try
+  that fails (stepping down again within ``FAILED_TRY_S``) doubles the hold time.
 
 Skipped vsyncs change nothing in the scene, so Qt Quick does not render them: the GPU
 and the render thread rest as well. The simulation itself never depends on the frame
@@ -28,8 +31,10 @@ from collections import deque
 
 WINDOW_S = 1.0               # cost statistics over the last second
 DOWN_FRACTION = 0.85         # p95 cost above this share of the interval → slower rate
-UP_FRACTION = 0.55           # p95 cost below this share of the faster interval …
-UP_HOLD_S = 3.0              # … for this long → faster rate
+UP_FRACTION = 0.75           # p95 cost below this share of the faster interval …
+UP_HOLD_S = 3.0              # … for this long → faster rate (doubled after each failed try, up to MAX_HOLD_S)
+MAX_HOLD_S = 30.0
+FAILED_TRY_S = 5.0           # stepping down this soon after stepping up counts as a failed try
 MISS_FRACTION = 0.05         # more missed frames than this → slower rate
 MIN_SAMPLES = 20
 
@@ -64,6 +69,8 @@ class Pacer:
         self._samples: deque[tuple[float, float, bool]] = deque()   # (time, cost ms, missed)
         self._good_since: float | None = None
         self._last_shown: float | None = None
+        self._hold = UP_HOLD_S
+        self._stepped_up_at: float | None = None
         self.changes = 0
         self.set_mode(mode)
 
@@ -134,12 +141,16 @@ class Pacer:
         misses = sum(1 for _t, _c, m in samples if m) / len(samples)
         index = self.rates.index(self.rate)
         if (cost95 > DOWN_FRACTION * self.interval_ms or misses > MISS_FRACTION) and index + 1 < len(self.rates):
+            failed_try = self._stepped_up_at is not None and now - self._stepped_up_at < FAILED_TRY_S
+            self._hold = min(2.0 * self._hold, MAX_HOLD_S) if failed_try else UP_HOLD_S
+            self._stepped_up_at = None
             self._set_rate(self.rates[index + 1])
             return
         if index > 0 and cost95 < UP_FRACTION * 1000.0 / self.rates[index - 1] and misses == 0:
             if self._good_since is None:
                 self._good_since = now
-            elif now - self._good_since >= UP_HOLD_S:
+            elif now - self._good_since >= self._hold:
+                self._stepped_up_at = now
                 self._set_rate(self.rates[index - 1])
         else:
             self._good_since = None

@@ -314,7 +314,8 @@ class QuickApp:
         self._done(stats["t"] > 0.4 * wall and (not self.args.strict or not self.warnings))
 
     def _screenshot(self) -> None:
-        image = self.window.grabWindow()
+        grab = getattr(self.window, "grabWindow", None)     # PySide may hand back the root as a plain QWindow
+        image = grab() if grab is not None else self.window.screen().grabWindow(self.window.winId()).toImage()
         ok = image.save(self.args.screenshot)
         print(f"screenshot {self.args.screenshot}: {image.width()}×{image.height()} {'saved' if ok else 'NOT saved'}",
               flush=True)
