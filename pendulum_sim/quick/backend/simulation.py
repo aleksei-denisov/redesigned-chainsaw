@@ -64,7 +64,7 @@ class SimulationBridge(QObject):
     configChanged = Signal()                 # a new configuration was loaded (scenario, file)
     controllerChanged = Signal()             # the session's controller changed (any reason)
     plantChanged = Signal(bool)              # the plant changed; True = structural
-    message = Signal(str, str)               # kind ("info" | "warning" | "error"), text
+    message = Signal(str, str, arguments=["kind", "text"])   # kind: "info" | "warning" | "error"
 
     def __init__(self, config: AppConfig, physics: str = "process", parent: QObject | None = None) -> None:
         super().__init__(parent)

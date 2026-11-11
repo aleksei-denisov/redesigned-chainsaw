@@ -1,23 +1,31 @@
-"""Entry point of the Qt Quick spike (Phase 1 of the Qt Quick mobile interface).
+"""Entry point of the Qt Quick interface (``pendulum_sim/quick``).
 
-One *Simulate* screen in the "Instrument" light theme: the triple pendulum on a cart
-with real physics, a two-trace graph, four read-outs, Play/Pause – and a built-in
-benchmark that compares the rendering variants (see ``backend/bench.py``).
+Start-up order, built for a fast first frame:
 
-    python -m pendulum_sim.quick                       # desktop preview
-    python -m pendulum_sim.quick --benchmark           # run all variants, print the report, exit
-    python -m pendulum_sim.quick --smoke-test 2        # CI: run briefly and exit
-    python -m pendulum_sim.quick --screenshot out.png  # CI: save the window after 2 s
+1. ``QGuiApplication``, the bundled fonts, ``Settings`` (theme) and ``App``;
+2. ``Main.qml`` – only the loading screen – is shown;
+3. after its first frame: NumPy and the simulation core, the physics process and the
+   backend singletons (``Sim``, ``Model``, ``Controller``, ``Graphs``, ``Autotune``,
+   ``Scenarios``, ``Frames``, ``Bench``);
+4. the app shell and the Simulate screen are built asynchronously and fade in; other
+   screens are built when first opened;
+5. once the Simulate screen is on screen: the frame loop's helpers start (Android
+   performance hints, render-thread measurement) and the garbage collector switches to
+   idle-time collection.
+
+    python -m pendulum_sim.quick                          # desktop preview
+    python -m pendulum_sim.quick --benchmark              # performance test, report printed, exit
+    python -m pendulum_sim.quick --smoke-test 3           # CI: visit every screen, run, exit
+    python -m pendulum_sim.quick --screenshot out.png --screen graphs --theme dark
 
 On Android it is started by ``android/main_quick.py`` (``scripts/build_android.py --ui quick``).
-If the QML scene cannot be loaded, the reason is drawn on screen with plain QtGui, so a
+If the QML cannot be loaded, the reason is drawn on screen with plain QtGui, so a
 packaging problem is visible on the device without ``adb``.
 """
 
 from __future__ import annotations
 
 import argparse
-import gc
 import os
 import sys
 import time
@@ -29,23 +37,23 @@ HERE = Path(__file__).resolve().parent
 SCENARIO = "triple_cart_lqr"
 FONTS = ("SpaceGrotesk-Regular.ttf", "SpaceGrotesk-Medium.ttf", "SpaceGrotesk-Bold.ttf",
          "JetBrainsMono-Regular.ttf", "JetBrainsMono-Medium.ttf")
-GUI_SWITCH_INTERVAL_S = 0.001      # the physics thread yields the interpreter within 1 ms
+GUI_SWITCH_INTERVAL_S = 0.001      # with the physics thread fallback: the GUI waits ≤ 1 ms for the interpreter
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="pendulum-sim-quick",
-                                     description="Inverted Pendulum Simulator – Qt Quick spike")
-    parser.add_argument("--physics", choices=["thread", "process"], default="thread")
-    parser.add_argument("--view", choices=["items", "node"], default="items", help="pendulum variant")
-    parser.add_argument("--graph", choices=["off", "shape", "shapegeo", "qtgraphs", "node", "painted"],
-                        default="shape", help="graph variant")
-    parser.add_argument("--dark", action="store_true", help="dark theme (preview; the spike targets light)")
+                                     description="Inverted Pendulum Simulator – Qt Quick interface")
+    parser.add_argument("--physics", choices=["thread", "process"], default=None,
+                        help="where the physics runs (default: the saved setting, normally a process)")
+    parser.add_argument("--scenario", default=SCENARIO)
+    parser.add_argument("--theme", choices=["system", "light", "dark"], default=None,
+                        help="theme for this run (not saved)")
+    parser.add_argument("--screen", choices=["simulate", "graphs", "settings"], default="simulate")
     parser.add_argument("--smoke-test", type=float, metavar="SECONDS", default=None,
-                        help="run the simulation for SECONDS, then exit (CI)")
-    parser.add_argument("--screenshot", metavar="PNG", default=None, help="save the window after 2 s and exit")
-    parser.add_argument("--benchmark", action="store_true", help="run the benchmark, print the report, exit")
-    parser.add_argument("--strict", action="store_true",
-                        help="exit with an error on QML warnings or failed variants (CI)")
+                        help="visit every screen, run the simulation for SECONDS, then exit (CI)")
+    parser.add_argument("--screenshot", metavar="PNG", default=None, help="save the window after 2.5 s and exit")
+    parser.add_argument("--benchmark", action="store_true", help="run the performance test, print the report, exit")
+    parser.add_argument("--strict", action="store_true", help="exit with an error on QML warnings (CI)")
     args, _unknown = parser.parse_known_args(argv)  # Android may pass launcher arguments
     return args
 
@@ -66,18 +74,21 @@ def main(argv: list[str] | None = None) -> int:
     app.setOrganizationName("pendulum-sim")
     TIMER.mark("Qt ready")
     try:
-        spike = Spike(app, args)
+        quick = QuickApp(app, args)
     except Exception:  # noqa: BLE001 - show any start-up failure on screen
-        text = traceback.format_exc()
-        print(text, file=sys.stderr, flush=True)
-        if args.smoke_test is not None or args.benchmark or args.screenshot:
-            return 1
-        window = error_window("The Qt Quick spike could not start.\n\n" + text)
-        window.showMaximized() if IS_ANDROID else window.show()
-        return app.exec()
-    code = spike.run()
-    spike.shutdown()
+        return show_error(app, args, "The app could not start.\n\n" + traceback.format_exc())
+    code = quick.run()
+    quick.shutdown()
     return code
+
+
+def show_error(app, args: argparse.Namespace, text: str) -> int:
+    print(text, file=sys.stderr, flush=True)
+    if args.smoke_test is not None or args.benchmark or args.screenshot:
+        return 1
+    window = error_window(text)
+    window.showMaximized() if IS_ANDROID else window.show()
+    return app.exec()
 
 
 def error_window(text: str):
@@ -104,76 +115,137 @@ def error_window(text: str):
     return window
 
 
-class Spike:
-    """The loaded application: bridges, QML engine, root window."""
+class QuickApp:
+    """The running application: QML engine, window, backend singletons."""
 
     def __init__(self, app, args: argparse.Namespace) -> None:
         from ..mobile.startup import TIMER
 
         from PySide6.QtCore import QUrl
         from PySide6.QtGui import QFont, QFontDatabase
-        from PySide6.QtQml import QQmlApplicationEngine, qmlRegisterSingletonType, qmlRegisterType
+        from PySide6.QtQml import QQmlApplicationEngine, qmlRegisterSingletonInstance, qmlRegisterSingletonType
+
+        from .backend.settings import SettingsBridge
+        from .backend.shell import AppBridge
 
         self.app, self.args = app, args
         self.warnings: list[str] = []
-        missing = [name for name in FONTS
-                   if QFontDatabase.addApplicationFont(str(HERE / "fonts" / name)) < 0]
-        app.setFont(QFont("Space Grotesk"))
-        TIMER.mark("fonts loaded")
-
-        import numpy  # noqa: F401
-
-        from ..simulation import scenario
-
-        TIMER.mark("NumPy, physics, control and simulation loaded")
-        from .backend import scene_items
-        from .backend.bench import Benchmark
-        from .backend.bridge import GraphBridge, SimBridge
-
-        self.sim = SimBridge(scenario(SCENARIO), args.physics)
-        self.sim.pendulumMode = args.view
-        self.graph = GraphBridge(self.sim)
-        self.graph.mode = args.graph
-        self.bench = Benchmark(self.sim, self.graph)
-        self.bench.warnings = self.warnings
+        self.result = 0
+        self.backend_error = ""
+        missing = [name for name in FONTS if QFontDatabase.addApplicationFont(str(HERE / "fonts" / name)) < 0]
         if missing:
-            scene_items.NOTES["fonts"] = "could not load " + ", ".join(missing)
-        scene_items.BRIDGES.update(sim=self.sim, graph=self.graph)
-        qmlRegisterType(scene_items.PendulumNode, "PendulumSpike", 1, 0, "PendulumNode")
-        qmlRegisterType(scene_items.LineNode, "PendulumSpike", 1, 0, "LineNode")
-        qmlRegisterType(scene_items.PaintedGraph, "PendulumSpike", 1, 0, "PaintedGraph")
+            self.warnings.append("fonts not loaded: " + ", ".join(missing))
+        app.setFont(QFont("Space Grotesk"))
+        self.settings = SettingsBridge()
+        if args.theme:
+            self.settings.override_theme(args.theme)
+        self.shell = AppBridge()
+        self.shell._set_screen(args.screen)
+        qmlRegisterSingletonInstance(SettingsBridge, "PendulumApp", 1, 0, "Settings", self.settings)
+        qmlRegisterSingletonInstance(AppBridge, "PendulumApp", 1, 0, "App", self.shell)
         qmlRegisterSingletonType(QUrl.fromLocalFile(str(HERE / "qml" / "Theme.qml")), "Instrument", 1, 0, "Theme")
-        TIMER.mark("bridges ready (physics running off the GUI thread)")
+        TIMER.mark("fonts and settings ready")
 
         self.engine = QQmlApplicationEngine()
         self.engine.warnings.connect(self._on_warnings)
-        context = self.engine.rootContext()
-        context.setContextProperty("sim", self.sim)
-        context.setContextProperty("graph", self.graph)
-        context.setContextProperty("bench", self.bench)
+        self.shell.loadingShown.connect(self._on_loading_shown)
+        self.shell.shellLoaded.connect(lambda: TIMER.mark("app shell and Simulate screen built"))
+        self.shell.shellShown.connect(self._on_shell_shown)
+        self.shell.exitRequested.connect(self._on_exit_requested)
         self.engine.load(QUrl.fromLocalFile(str(HERE / "qml" / "Main.qml")))
         roots = self.engine.rootObjects()
         if not roots:
             raise RuntimeError("Main.qml could not be loaded:\n" + "\n".join(self.warnings)
                                + "\n\nQML import paths:\n" + "\n".join(self.engine.importPathList()))
         self.window = roots[0]
-        self.bench.window = self.window
-        if args.dark:
-            try:
-                self.engine.singletonInstance("Instrument", "Theme").setProperty("dark", True)
-            except Exception as exc:  # noqa: BLE001 - preview option only
-                print(f"dark theme not applied: {exc}", file=sys.stderr)
         if IS_ANDROID:
             self.window.showMaximized()
-        TIMER.mark("QML scene loaded")
-
-        self._paused_in_background = False
+        TIMER.mark("loading screen created")
+        self.sim = self.frames = self.graphs = self.bench = self.autotune = None
         app.applicationStateChanged.connect(self._on_application_state)
-        self.sim.running = True
-        gc.collect()
-        gc.freeze()            # start-up objects out of the collector's view: short collections later
 
-    # ------------------------------------------------------------- callbacks
+    # ------------------------------------------------------------ start-up
+    def _on_loading_shown(self) -> None:
+        from PySide6.QtCore import QTimer
+
+        from ..mobile.startup import TIMER
+
+        TIMER.mark("loading screen shown (first frame)")
+        self.shell.set_status("Loading the simulation core…", 0.25)
+        QTimer.singleShot(0, self._load_backend)      # let the status text reach the screen first
+
+    def _load_backend(self) -> None:
+        try:
+            self._create_backend()
+        except Exception:  # noqa: BLE001 - shown on the loading screen
+            self.backend_error = traceback.format_exc()
+            print(self.backend_error, file=sys.stderr, flush=True)
+            self.shell.set_status("The app could not start:\n\n" + self.backend_error, 0.0)
+            self.result = 1
+            if self.args.smoke_test is not None or self.args.benchmark or self.args.screenshot:
+                self.app.quit()
+
+    def _create_backend(self) -> None:
+        from ..mobile.startup import TIMER
+
+        from PySide6.QtQml import qmlRegisterSingletonInstance
+
+        import numpy  # noqa: F401  - timed on its own: the biggest import
+
+        from ..simulation import scenario
+
+        TIMER.mark("NumPy and the simulation core loaded")
+        from .backend.autotune import AutotuneBridge
+        from .backend.bench import Benchmark
+        from .backend.frames import FrameDriver
+        from .backend.graphs import GraphsBridge
+        from .backend.parameters import ControllerBridge, ModelBridge
+        from .backend.settings import ScenarioBridge
+        from .backend.simulation import SimulationBridge
+
+        physics = self.args.physics or self.settings.physics
+        self.sim = SimulationBridge(scenario(self.args.scenario), physics)
+        TIMER.mark(f"physics started ({self.sim.physics})")
+        self.model = ModelBridge(self.sim)
+        self.controller = ControllerBridge(self.sim)
+        self.graphs = GraphsBridge(self.sim)
+        self.graphs.rateHz = self.settings.graphRate
+        self.autotune = AutotuneBridge(self.sim, self.controller)
+        self.scenarios = ScenarioBridge(self.sim)
+        screen = self.window.screen()
+        refresh = screen.refreshRate() if screen is not None else 60.0
+        self.frames = FrameDriver(self.sim, refresh, self.settings.frameRate)
+        self.bench = Benchmark(self.shell, self.sim, self.graphs, self.frames)
+        self.bench.window = self.window
+        self.bench.warnings = self.warnings
+        for cls, name, obj in ((SimulationBridge, "Sim", self.sim), (ModelBridge, "Model", self.model),
+                               (ControllerBridge, "Controller", self.controller),
+                               (GraphsBridge, "Graphs", self.graphs), (AutotuneBridge, "Autotune", self.autotune),
+                               (ScenarioBridge, "Scenarios", self.scenarios), (FrameDriver, "Frames", self.frames),
+                               (Benchmark, "Bench", self.bench)):
+            qmlRegisterSingletonInstance(cls, "Pendulum", 1, 0, name, obj)
+        s = self.settings
+        s.frameRateChanged.connect(lambda: self.frames.set_mode(s.frameRate))
+        s.graphRateChanged.connect(lambda: setattr(self.graphs, "rateHz", s.graphRate))
+        s.physicsChanged.connect(lambda: setattr(self.sim, "physics", s.physics))
+        if screen is not None:
+            screen.refreshRateChanged.connect(self.frames.set_refresh)
+        TIMER.mark("backend ready")
+        self.shell.set_status("Building the Simulate screen…", 0.6)
+        self.shell.set_ready()                         # QML loads the shell asynchronously now
+        self.sim.running = True
+
+    def _on_shell_shown(self) -> None:
+        from ..mobile.startup import TIMER
+
+        TIMER.mark("Simulate screen shown")
+        self.frames.start_threads()
+        self.frames.collector.start(time.perf_counter())
+        self._start_mode()
+
+    def _on_exit_requested(self) -> None:
+        self.window.setProperty("askExit", True)
+
     def _on_warnings(self, warnings) -> None:
         for warning in warnings:
             text = warning.toString()
@@ -181,70 +253,80 @@ class Spike:
             print("QML:", text, file=sys.stderr, flush=True)
 
     def _on_application_state(self, state) -> None:
-        """Background: stop the simulation (and a running benchmark); foreground: resume."""
+        """Background: pause everything (a running test or auto-tune stops); foreground: resume."""
         from PySide6.QtCore import Qt
 
+        if self.sim is None:
+            return
         if state == Qt.ApplicationState.ApplicationActive:
-            if self._paused_in_background:
-                self._paused_in_background = False
-                self.sim.running = True
+            self.frames.enabled = True
+            self.sim.resume()
         elif state in (Qt.ApplicationState.ApplicationSuspended, Qt.ApplicationState.ApplicationHidden):
             self.bench.cancel()
-            if self.sim.running:
-                self._paused_in_background = True
-                self.sim.running = False
+            self.autotune.cancel()
+            self.sim.suspend()
+            self.frames.enabled = False
 
-    # ------------------------------------------------------------------ modes
-    def run(self) -> int:
+    # ---------------------------------------------------------------- modes
+    def _start_mode(self) -> None:
         from PySide6.QtCore import QTimer
 
-        args, app = self.args, self.app
-        result = {"code": 0}
+        args = self.args
         if args.benchmark:
-            def done() -> None:
-                failed = "no frames recorded" in self.bench.report or "note:" in self.bench.report
-                if args.strict and (failed or self.warnings):
-                    result["code"] = 1
-                app.quit()
-
-            self.bench.finished.connect(done)
+            self.bench.finished.connect(lambda: self._done(not self.warnings or not args.strict))
             QTimer.singleShot(1000, self.bench.start)
         elif args.screenshot:
-            def shoot() -> None:
-                image = self.window.grabWindow()
-                ok = image.save(args.screenshot)
-                print(f"screenshot {args.screenshot}: {image.width()}×{image.height()} "
-                      f"{'saved' if ok else 'NOT saved'}", flush=True)
-                result["code"] = 0 if ok and not (args.strict and self.warnings) else 1
-                app.quit()
-
-            QTimer.singleShot(2000, shoot)
+            QTimer.singleShot(2500, self._screenshot)
         elif args.smoke_test is not None:
             started = time.perf_counter()
+            steps = [("graphs", None), ("settings", None), ("settings", "dark"), ("simulate", None),
+                     ("simulate", "light")]
+            for i, (screen, theme) in enumerate(steps):
+                QTimer.singleShot(400 * (i + 1), lambda s=screen, t=theme: self._smoke_step(s, t))
+            QTimer.singleShot(int(max(args.smoke_test, 2.5) * 1000), lambda: self._smoke_check(started))
 
-            def check() -> None:
-                from .backend import threads
+    def _smoke_step(self, screen: str, theme: str | None) -> None:
+        self.shell.screen = screen
+        if theme:
+            self.settings.override_theme(theme)
 
-                stats = self.sim.source.stats()
-                sample = self.sim.source.sample()
-                t = sample.t if sample is not None else 0.0
-                print(f"quick smoke test: simulation t={t:.2f} s after {time.perf_counter() - started:.1f} s wall, "
-                      f"{stats['steps']:.0f} steps, {self.sim.recorder.fps:.0f} fps, physics '{self.sim.physics}', "
-                      f"render loop {threads.render_loop()}, {len(self.warnings)} QML warnings", flush=True)
-                ok = t > 0.5 * args.smoke_test and self.bench.first_frame
-                result["code"] = 0 if ok and not (args.strict and self.warnings) else 1
-                app.quit()
+    def _smoke_check(self, started: float) -> None:
+        from .backend import threads
 
-            QTimer.singleShot(int(args.smoke_test * 1000), check)
-        app.exec()
-        return result["code"]
+        stats = self.sim.source.stats()
+        wall = time.perf_counter() - started
+        print(f"quick smoke test: simulation t={stats['t']:.2f} s after {wall:.1f} s wall, {stats['steps']:.0f} steps, "
+              f"{self.sim.clock.fps:.0f} fps, physics '{self.sim.physics}', render loop {threads.render_loop()}, "
+              f"{len(self.warnings)} QML warnings; {self.frames.describe()}", flush=True)
+        self._done(stats["t"] > 0.4 * wall and (not self.args.strict or not self.warnings))
+
+    def _screenshot(self) -> None:
+        image = self.window.grabWindow()
+        ok = image.save(self.args.screenshot)
+        print(f"screenshot {self.args.screenshot}: {image.width()}×{image.height()} {'saved' if ok else 'NOT saved'}",
+              flush=True)
+        self._done(ok and (not self.args.strict or not self.warnings))
+
+    def _done(self, ok: bool) -> None:
+        self.result = 0 if ok else 1
+        self.app.quit()
+
+    def run(self) -> int:
+        self.app.exec()
+        return self.result
 
     def shutdown(self) -> None:
-        """Stop the physics source and delete the scene while the application still exists."""
+        """Stop the physics, the workers and the scene while the application still exists."""
         from PySide6.QtCore import QCoreApplication, QEvent
 
-        self.graph.timer.stop()
-        self.sim.shutdown()
+        if self.frames is not None:
+            self.frames.shutdown()
+        if self.graphs is not None:
+            self.graphs.timer.stop()
+        if self.autotune is not None:
+            self.autotune.shutdown()
+        if self.sim is not None:
+            self.sim.shutdown()
         self.window.close()
         self.engine.deleteLater()
         QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)

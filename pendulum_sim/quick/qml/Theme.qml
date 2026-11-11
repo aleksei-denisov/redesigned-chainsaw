@@ -1,10 +1,12 @@
 pragma Singleton
 import QtQuick
+import PendulumApp 1.0
 
 // "Instrument" design tokens. One set of names, two themes; no colour is written
-// anywhere else in the QML.
+// anywhere else in the QML. The theme follows Settings (System / Light / Dark) and
+// switches instantly.
 QtObject {
-    property bool dark: false
+    readonly property bool dark: Settings.isDark
 
     readonly property color background: dark ? "#0F131A" : "#F4F5F7"
     readonly property color surface: dark ? "#171C25" : "#FFFFFF"
@@ -24,13 +26,24 @@ QtObject {
     readonly property color success: dark ? "#47CD89" : "#067647"
     readonly property color segment2: dark ? "#A9BCFF" : "#1D3FCC"
     readonly property color segment3: dark ? "#2ED3B7" : "#0E9384"
+    readonly property var palette: dark ? ["#7C97FF", "#F5A524", "#2ED3B7", "#A48AFB", "#F670C7"]
+                                        : ["#2F5BFF", "#B54708", "#0E9384", "#7A5AF8", "#C11574"]
+    readonly property var segments: [accent, segment2, segment3]
 
     readonly property string uiFont: "Space Grotesk"
     readonly property string monoFont: "JetBrains Mono"
+    readonly property int body: 15
+    readonly property int label: 12
+    readonly property int title: 26
+    readonly property int readout: 26
+    readonly property int inline: 14
 
     readonly property int pad: 16
     readonly property int gap: 12
     readonly property int radiusPanel: 18
     readonly property int radiusCard: 14
     readonly property int radiusButton: 12
+    readonly property int touch: 48
+    readonly property int dockButton: 52
+    readonly property int fade: 180
 }

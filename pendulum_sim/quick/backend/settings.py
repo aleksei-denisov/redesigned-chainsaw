@@ -9,11 +9,13 @@ graph refresh rate, physics in a process or a thread, the debug overlay.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from PySide6.QtCore import Property, QObject, QSettings, Qt, Signal, Slot
 from PySide6.QtGui import QGuiApplication
 
-from ...simulation import SCENARIOS, scenario
-from .simulation import SimulationBridge
+if TYPE_CHECKING:  # the core is imported after the loading screen is up
+    from .simulation import SimulationBridge
 
 THEMES = ["system", "light", "dark"]
 FRAME_RATES = ["auto", "120", "60", "40", "30"]
@@ -71,6 +73,15 @@ class SettingsBridge(QObject):
                 self.darkChanged.emit()
 
     theme = Property(str, lambda self: self._theme, _set_theme, notify=themeChanged)
+
+    def override_theme(self, value: str) -> None:
+        """Theme for this run only (command line, tests): not saved."""
+        if value in THEMES and value != self._theme:
+            before = self.dark
+            self._theme = value
+            self.themeChanged.emit()
+            if self.dark != before:
+                self.darkChanged.emit()
     themes = Property("QVariantList", lambda self: THEMES, constant=True)
 
     @property
@@ -126,6 +137,8 @@ class ScenarioBridge(QObject):
         self._items: list[dict] | None = None
 
     def _get_items(self) -> list[dict]:
+        from ...simulation import SCENARIOS, scenario
+
         if self._items is None:              # built on first use: each scenario seeds its LQR gains
             self._items = []
             for key in SCENARIOS:
@@ -137,5 +150,7 @@ class ScenarioBridge(QObject):
 
     @Slot(str)
     def load(self, key: str) -> None:
+        from ...simulation import SCENARIOS, scenario
+
         if key in SCENARIOS:
             self.sim.load(scenario(key))

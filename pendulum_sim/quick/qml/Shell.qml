@@ -1,0 +1,215 @@
+import QtQuick
+import QtQuick.Layouts
+import Pendulum 1.0
+import PendulumApp 1.0
+import Instrument 1.0
+
+// App shell: the screens (each built when first opened) and the bottom dock with the
+// navigation tabs and the run controls. Drives the frame loop: every vsync goes to
+// Frames.vsync(), which decides (frame pacing) whether a new frame is shown.
+Item {
+    id: shell
+    focus: true
+    readonly property bool wide: width >= height
+    property bool reportOpen: false
+
+    Keys.onBackPressed: (event) => {
+        event.accepted = true
+        if (reportOpen)
+            reportOpen = false
+        else
+            App.back()
+    }
+
+    FrameAnimation {
+        running: Frames.enabled
+        onTriggered: Frames.vsync()
+    }
+
+    ColumnLayout {
+        anchors.fill: parent
+        anchors.margins: Theme.pad
+        spacing: Theme.gap
+
+        Item {
+            id: screens
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+
+            Repeater {
+                model: App.screens
+                Loader {
+                    id: screenLoader
+                    required property string modelData
+                    readonly property bool current: App.screen === modelData
+                    property bool visited: false
+                    anchors.fill: parent
+                    active: current || visited
+                    visible: current
+                    asynchronous: modelData !== "simulate"
+                    source: modelData === "simulate" ? "SimulateScreen.qml"
+                          : modelData === "graphs" ? "GraphsScreen.qml" : "SettingsScreen.qml"
+                    onCurrentChanged: if (current) visited = true
+                    Component.onCompleted: if (current) visited = true
+                    onLoaded: item.shown = Qt.binding(() => screenLoader.current && shell.visible)
+                }
+            }
+        }
+
+        // ------------------------------------------------------------------ dock
+        Card {
+            id: dock
+            Layout.fillWidth: true
+            Layout.preferredHeight: dockGrid.implicitHeight + 24
+            GridLayout {
+                id: dockGrid
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.margins: 12
+                columns: shell.wide ? 3 : 1
+                rowSpacing: 10
+                columnSpacing: 10
+
+                Row {
+                    spacing: 6
+                    Repeater {
+                        model: [["simulate", "Simulate"], ["graphs", "Graphs"], ["settings", "Settings"]]
+                        Btn {
+                            required property var modelData
+                            text: modelData[1]
+                            active: App.screen === modelData[0]
+                            enabled: !Bench.running && !Autotune.busy
+                            onClicked: App.screen = modelData[0]
+                        }
+                    }
+                }
+                Item { Layout.fillWidth: true; visible: shell.wide; implicitHeight: 1 }
+                Row {
+                    spacing: 6
+                    Layout.alignment: shell.wide ? Qt.AlignRight : Qt.AlignLeft
+                    Caption { text: "Push"; anchors.verticalCenter: parent.verticalCenter; rightPadding: 2 }
+                    Btn { text: "Left"; onClicked: Sim.push(-1) }
+                    Btn { text: "Right"; onClicked: Sim.push(1) }
+                    Item { width: 6; height: 1 }
+                    Btn { text: "Reset"; onClicked: Sim.reset() }
+                    Btn { text: "Step"; onClicked: Sim.step() }
+                    Btn {
+                        text: Sim.speed + "×"
+                        onClicked: {
+                            var s = Sim.speeds
+                            var i = s.indexOf(Sim.speed)
+                            Sim.speed = s[(i + 1) % s.length]
+                        }
+                    }
+                    Btn {
+                        text: Sim.running ? "Pause" : "Play"
+                        filled: true
+                        implicitWidth: 96
+                        onClicked: Sim.toggle()
+                    }
+                }
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------ toast
+    Rectangle {
+        id: toast
+        property string text
+        anchors.horizontalCenter: parent.horizontalCenter
+        y: dock.y + Theme.pad - height - Theme.gap
+        width: Math.min(toastText.implicitWidth + 32, parent.width - 2 * Theme.pad)
+        height: toastText.implicitHeight + 20
+        radius: Theme.radiusButton
+        color: Theme.text
+        opacity: 0
+        visible: opacity > 0
+        Behavior on opacity { NumberAnimation { duration: Theme.fade } }
+        Text {
+            id: toastText
+            anchors.centerIn: parent
+            width: Math.min(implicitWidth, toast.parent.width - 2 * Theme.pad - 32)
+            text: toast.text
+            color: Theme.surface
+            font.family: Theme.uiFont
+            font.pixelSize: 14
+            wrapMode: Text.Wrap
+        }
+        Timer { id: toastTimer; onTriggered: toast.opacity = 0 }
+        Connections {
+            target: Sim
+            function onMessage(kind, text) {
+                toast.text = text
+                toast.opacity = 1
+                toastTimer.interval = kind === "error" ? 6000 : 2500
+                toastTimer.restart()
+            }
+        }
+    }
+
+    // ------------------------------------------------------- debug overlay
+    Rectangle {
+        visible: Settings.overlay
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.margins: Theme.pad + 8
+        width: overlayText.implicitWidth + 16
+        height: overlayText.implicitHeight + 12
+        radius: 8
+        color: Theme.surface
+        border.color: Theme.border
+        opacity: 0.92
+        Mono {
+            id: overlayText
+            x: 8
+            y: 6
+            font.pixelSize: 11
+            text: Sim.fpsText + " · " + Frames.statsText
+        }
+    }
+
+    // -------------------------------------------------------- report sheet
+    Connections {
+        target: Bench
+        function onFinished() { shell.reportOpen = true }
+        function onShowRequested() { shell.reportOpen = true }
+    }
+    Rectangle {
+        anchors.fill: parent
+        visible: shell.reportOpen
+        color: Theme.background
+        TapHandler {}
+        ColumnLayout {
+            anchors.fill: parent
+            anchors.margins: Theme.pad
+            spacing: Theme.gap
+            RowLayout {
+                Layout.fillWidth: true
+                Text {
+                    text: "Performance report"
+                    color: Theme.text
+                    font.family: Theme.uiFont
+                    font.pixelSize: Theme.title
+                    font.weight: Font.DemiBold
+                    Layout.fillWidth: true
+                }
+                Btn { text: Bench.copied ? "Copied" : "Copy report"; filled: true; onClicked: Bench.copy() }
+                Btn { text: "Close"; onClicked: shell.reportOpen = false }
+            }
+            Card {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                clip: true
+                Flickable {
+                    anchors.fill: parent
+                    anchors.margins: 14
+                    contentWidth: reportText.implicitWidth
+                    contentHeight: reportText.implicitHeight
+                    boundsBehavior: Flickable.StopAtBounds
+                    Mono { id: reportText; text: Bench.report; font.pixelSize: 12 }
+                }
+            }
+        }
+    }
+}
