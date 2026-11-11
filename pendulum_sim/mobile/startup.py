@@ -54,6 +54,7 @@ class StartupTimer:
         self._offset = age if age is not None else 0.0
         self.marks: list[tuple[str, float]] = [("Python running" if self.from_process else "start", self._offset)]
         self.notes: list[tuple[str, float]] = []
+        self.on_mark = None                 # optional callback(step, seconds), e.g. a start-up journal
 
     def now(self) -> float:
         return self._offset + time.perf_counter() - self._t0
@@ -63,6 +64,8 @@ class StartupTimer:
         self.marks.append((step, t))
         if echo:
             print(f"startup {t:7.3f} s  {step}", flush=True)
+        if self.on_mark is not None:
+            self.on_mark(step, t)
         return t
 
     def note(self, what: str, seconds: float) -> None:

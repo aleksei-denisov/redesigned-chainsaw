@@ -42,6 +42,8 @@ class FrameDriver(QObject):
         self.pacer = Pacer(refresh_hz, mode)
         self.collector = IdleCollector()
         self.hints: PerformanceHints | None = None
+        self.hints_allowed = True                 # False in safe mode
+        self.journal = None                       # start-up journal (diagnostics), if any
         self.render_tid: int | None = None
         self._enabled = True
         self._cpu_last = 0.0
@@ -73,10 +75,19 @@ class FrameDriver(QObject):
         table = threads.thread_table()
         self.render_tid = next((tid for tid, (name, _cpu) in table.items() if name == threads.RENDER_THREAD), None)
         tids = [gui_thread_id()] + ([self.render_tid] if self.render_tid else [])
-        self.hints = PerformanceHints(tids, self.pacer.interval_ms)
+        if self.hints_allowed:
+            self._note(f"performance hints: opening a session for threads {tids}")
+            self.hints = PerformanceHints(tids, self.pacer.interval_ms)
+            self._note(f"performance hints: {self.hints.describe()}")
+        else:
+            self._note("performance hints: off (safe mode)")
         if self.render_tid:
             self._render_cpu = (self._render_seconds(), time.perf_counter(), self._shown)
             self._render_timer.start()
+
+    def _note(self, text: str) -> None:
+        if self.journal is not None:
+            self.journal.write(text)
 
     def _render_seconds(self) -> float:
         try:

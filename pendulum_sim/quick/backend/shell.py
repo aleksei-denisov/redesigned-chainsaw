@@ -22,6 +22,8 @@ class AppBridge(QObject):
     shellShown = Signal()            # … and their first frame is on screen
     exitRequested = Signal()
     failed = Signal()                # the shell could not be built (QML error)
+    continueRequested = Signal()     # safe mode: the user read the previous start's report
+    previousChanged = Signal()
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -30,6 +32,8 @@ class AppBridge(QObject):
         self._ready = False
         self._screen = "simulate"
         self._loading_shown = self._shell_loaded = self._shell_shown = False
+        self._previous = ""
+        self._copied = False
 
     def set_status(self, text: str, progress: float) -> None:
         self._status, self._progress = text, progress
@@ -37,6 +41,27 @@ class AppBridge(QObject):
 
     status = Property(str, lambda self: self._status, notify=statusChanged)
     progress = Property(float, lambda self: self._progress, notify=statusChanged)
+
+    def set_previous_report(self, text: str) -> None:
+        self._previous = text
+        self.previousChanged.emit()
+
+    previousReport = Property(str, lambda self: self._previous, notify=previousChanged)
+    previousCopied = Property(bool, lambda self: self._copied, notify=previousChanged)
+
+    @Slot()
+    def copyPreviousReport(self) -> None:  # noqa: N802 - QML API
+        from PySide6.QtGui import QGuiApplication
+
+        QGuiApplication.clipboard().setText(self._previous)
+        self._copied = True
+        self.previousChanged.emit()
+
+    @Slot()
+    def continueStart(self) -> None:  # noqa: N802 - QML API
+        self._previous = ""
+        self.previousChanged.emit()
+        self.continueRequested.emit()
 
     def set_ready(self) -> None:
         if not self._ready:

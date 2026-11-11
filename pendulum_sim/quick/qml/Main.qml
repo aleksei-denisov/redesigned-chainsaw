@@ -98,6 +98,52 @@ Window {
                 wrapMode: Text.Wrap
             }
         }
+
+        // safe mode: what the previous (unfinished) start recorded
+        Rectangle {
+            anchors.fill: parent
+            anchors.margins: Theme.pad
+            visible: App.previousReport.length > 0
+            radius: Theme.radiusPanel
+            color: Theme.surface
+            border.color: Theme.border
+            Text {
+                id: previousTitle
+                x: Theme.pad
+                y: Theme.pad
+                text: "The previous start did not finish"
+                color: Theme.text
+                font.family: Theme.uiFont
+                font.pixelSize: 22
+                font.weight: Font.DemiBold
+            }
+            Row {
+                anchors.right: parent.right
+                anchors.rightMargin: Theme.pad
+                y: Theme.pad - 6
+                spacing: 10
+                Btn { text: App.previousCopied ? "Copied" : "Copy report"; filled: true; onClicked: App.copyPreviousReport() }
+                Btn { text: "Continue"; onClicked: App.continueStart() }
+            }
+            Flickable {
+                anchors.fill: parent
+                anchors.margins: Theme.pad
+                anchors.topMargin: 70
+                clip: true
+                contentWidth: width
+                contentHeight: previousText.implicitHeight
+                boundsBehavior: Flickable.StopAtBounds
+                Text {
+                    id: previousText
+                    width: parent.width
+                    text: App.previousReport
+                    color: Theme.text
+                    font.family: Theme.monoFont
+                    font.pixelSize: 12
+                    wrapMode: Text.WrapAnywhere
+                }
+            }
+        }
     }
 
     // ------------------------------------------------------------- exit dialog

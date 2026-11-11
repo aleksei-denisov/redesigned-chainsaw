@@ -54,12 +54,18 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--screenshot", metavar="PNG", default=None, help="save the window after 2.5 s and exit")
     parser.add_argument("--benchmark", action="store_true", help="run the performance test, print the report, exit")
     parser.add_argument("--strict", action="store_true", help="exit with an error on QML warnings (CI)")
+    parser.add_argument("--safe-mode-preview", action="store_true",
+                        help="CI: show the safe-mode screen after an unfinished start even in a test run")
     args, _unknown = parser.parse_known_args(argv)  # Android may pass launcher arguments
     return args
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
+    from .diagnostics import Journal
+
+    journal = Journal()
+    journal.install_hooks()
     os.environ.setdefault("QT_QUICK_CONTROLS_STYLE", "Basic")
     if IS_ANDROID:
         os.environ.setdefault("QT_ANDROID_DISABLE_ACCESSIBILITY", "1")   # as in the Widgets app
@@ -67,16 +73,24 @@ def main(argv: list[str] | None = None) -> int:
 
     from ..mobile.startup import TIMER
 
+    TIMER.on_mark = lambda step, t: journal.write(f"step {t:6.3f} s  {step}")
+    journal.write("importing PySide6.QtGui")
     from PySide6.QtGui import QGuiApplication
 
+    journal.install_qt_handler()
+    journal.write("creating QGuiApplication")
     app = QGuiApplication.instance() or QGuiApplication(sys.argv[:1])
     app.setApplicationName("Pendulum Quick")
     app.setOrganizationName("pendulum-sim")
     TIMER.mark("Qt ready")
     try:
-        quick = QuickApp(app, args)
+        quick = QuickApp(app, args, journal)
     except Exception:  # noqa: BLE001 - show any start-up failure on screen
-        return show_error(app, args, "The app could not start.\n\n" + traceback.format_exc())
+        journal.exception("start-up")
+        text = "The app could not start.\n\n" + traceback.format_exc()
+        if journal.previous_failed:
+            text += "\n\n" + journal.report()
+        return show_error(app, args, text)
     code = quick.run()
     quick.shutdown()
     return code
@@ -86,6 +100,11 @@ def show_error(app, args: argparse.Namespace, text: str) -> int:
     print(text, file=sys.stderr, flush=True)
     if args.smoke_test is not None or args.benchmark or args.screenshot:
         return 1
+    try:
+        app.clipboard().setText(text)
+        text = "(This text is on the clipboard: paste it into a message.)\n\n" + text
+    except Exception:  # noqa: BLE001 - best effort
+        pass
     window = error_window(text)
     window.showMaximized() if IS_ANDROID else window.show()
     return app.exec()
@@ -118,7 +137,7 @@ def error_window(text: str):
 class QuickApp:
     """The running application: QML engine, window, backend singletons."""
 
-    def __init__(self, app, args: argparse.Namespace) -> None:
+    def __init__(self, app, args: argparse.Namespace, journal=None) -> None:
         from ..mobile.startup import TIMER
 
         from PySide6.QtCore import QUrl
@@ -129,6 +148,13 @@ class QuickApp:
         from .backend.shell import AppBridge
 
         self.app, self.args = app, args
+        if journal is None:
+            from .diagnostics import Journal
+
+            journal = Journal()
+        self.journal = journal
+        # the previous start did not finish: start without the optional native pieces
+        self.safe_mode = journal.previous_failed and (not self._unattended or args.safe_mode_preview)
         self.warnings: list[str] = []
         self.result = 0
         self.backend_error = ""
@@ -141,6 +167,9 @@ class QuickApp:
             self.settings.override_theme(args.theme)
         self.shell = AppBridge()
         self.shell._set_screen(args.screen)
+        if self.safe_mode:
+            self.shell.set_previous_report(journal.report() + "\n\nThis start runs in safe mode: physics in a thread, "
+                                           "no Android performance hints.")
         qmlRegisterSingletonInstance(SettingsBridge, "PendulumApp", 1, 0, "Settings", self.settings)
         qmlRegisterSingletonInstance(AppBridge, "PendulumApp", 1, 0, "App", self.shell)
         qmlRegisterSingletonType(QUrl.fromLocalFile(str(HERE / "qml" / "Theme.qml")), "Instrument", 1, 0, "Theme")
@@ -153,6 +182,7 @@ class QuickApp:
         self.shell.shellShown.connect(self._on_shell_shown)
         self.shell.exitRequested.connect(self._on_exit_requested)
         self.shell.failed.connect(self._on_shell_failed)
+        self.shell.continueRequested.connect(self._load_backend)
         self.engine.load(QUrl.fromLocalFile(str(HERE / "qml" / "Main.qml")))
         roots = self.engine.rootObjects()
         if not roots:
@@ -176,13 +206,22 @@ class QuickApp:
         from ..mobile.startup import TIMER
 
         TIMER.mark("loading screen shown (first frame)")
+        if self.safe_mode:                            # wait until the report has been read / copied
+            self.shell.set_status("The previous start did not finish.", 0.25)
+            if self.args.screenshot:
+                QTimer.singleShot(1500, self._screenshot)
+            return
         self.shell.set_status("Loading the simulation core…", 0.25)
         QTimer.singleShot(0, self._load_backend)      # let the status text reach the screen first
 
     def _load_backend(self) -> None:
+        if self.sim is not None:
+            return
+        self.shell.set_status("Loading the simulation core…", 0.25)
         try:
             self._create_backend()
         except Exception:  # noqa: BLE001 - shown on the loading screen
+            self.journal.exception("loading the backend")
             self.backend_error = traceback.format_exc()
             print(self.backend_error, file=sys.stderr, flush=True)
             self.shell.set_status("The app could not start:\n\n" + self.backend_error, 0.0)
@@ -206,7 +245,8 @@ class QuickApp:
         from .backend.settings import ScenarioBridge
         from .backend.simulation import SimulationBridge
 
-        physics = self.args.physics or self.settings.physics
+        physics = self.args.physics or ("thread" if self.safe_mode else self.settings.physics)
+        self.journal.write(f"starting the physics ({physics})")
         self.sim = SimulationBridge(scenario(self.args.scenario), physics)
         TIMER.mark(f"physics started ({self.sim.physics})")
         self.model = ModelBridge(self.sim)
@@ -218,6 +258,8 @@ class QuickApp:
         screen = self.window.screen()
         refresh = screen.refreshRate() if screen is not None else 60.0
         self.frames = FrameDriver(self.sim, refresh, self.settings.frameRate)
+        self.frames.hints_allowed = not self.safe_mode
+        self.frames.journal = self.journal
         self.frames.attach_graphs(self.graphs)
         self.bench = Benchmark(self.shell, self.sim, self.graphs, self.frames)
         self.bench.window = self.window
@@ -243,9 +285,13 @@ class QuickApp:
     def _on_shell_shown(self) -> None:
         from ..mobile.startup import TIMER
 
+        from PySide6.QtCore import QTimer
+
         TIMER.mark("Simulate screen shown")
         self.frames.start_threads()
+        self.journal.write("garbage collector: idle-time mode")
         self.frames.collector.start(time.perf_counter())
+        QTimer.singleShot(4000, self.journal.complete)  # still running 4 s later: a complete start
         self._start_mode()
 
     def _on_shell_failed(self) -> None:
@@ -338,6 +384,9 @@ class QuickApp:
         """Stop the physics, the workers and the scene while the application still exists."""
         from PySide6.QtCore import QCoreApplication, QEvent
 
+        self.journal.write("shutting down")
+        if self.sim is not None and self.shell.shown:
+            self.journal.complete()                    # a normal exit after a normal start
         if self.frames is not None:
             self.frames.shutdown()
         if self.graphs is not None:

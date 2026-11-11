@@ -211,6 +211,18 @@ jobs:
         run: $RUN --smoke-test 3 --strict
       - name: Smoke test with the physics in a thread
         run: $RUN --smoke-test 3 --strict --physics thread
+      - name: Smoke test with Qt's basic render loop (rendering on the GUI thread, as on the Pad 6)
+        env:
+          QSG_RENDER_LOOP: basic
+        run: $RUN --smoke-test 3 --strict
+      - name: Start-up journal and safe mode after an unfinished start
+        env:
+          PENDULUM_QUICK_DIAG: ${{ runner.temp }}/diag
+        run: |
+          mkdir -p "$PENDULUM_QUICK_DIAG" build/quick-preview
+          printf '  0.001  start\n  0.002  step  0.30 s  loading screen shown\n' > "$PENDULUM_QUICK_DIAG/start.log"
+          $RUN --strict --safe-mode-preview --screenshot build/quick-preview/safe-mode.png
+          grep -q "start complete\|loading screen" "$PENDULUM_QUICK_DIAG/start.log"
       - name: Screenshots
         run: |
           mkdir -p build/quick-preview
