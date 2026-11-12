@@ -14,12 +14,22 @@ on:
     types: [completed]
     branches: [qtquick-ui]
   workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Android workflow run whose APK to test (empty: the published pre-release)"
+        default: ""
 
 jobs:
   emulator:
+    name: Emulator (${{ matrix.source }})
     if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        # the published APK, and the build of 0c4ac58 (the last one run on the tablet) as a control
+        source: ${{ fromJSON(github.event.inputs.run_id && format('["{0}"]', github.event.inputs.run_id) || '["release", "43086554915"]') }}
     env:
       PKG: com.adenisov.invertedpendulumquick
     steps:
@@ -34,7 +44,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p out
-          gh release download android-qtquick-ui -R "$GITHUB_REPOSITORY" -p "PendulumQuick-debug.apk" -D .
+          if [ "${{ matrix.source }}" = release ]; then
+            gh release download android-qtquick-ui -R "$GITHUB_REPOSITORY" -p "PendulumQuick-debug.apk" -D .
+          else
+            gh run download "${{ matrix.source }}" -R "$GITHUB_REPOSITORY" -n inverted-pendulum-quick-debug-apk -D apk
+            mv apk/*.apk PendulumQuick-debug.apk
+          fi
           ls -la PendulumQuick-debug.apk
       - name: Run on the emulator
         uses: reactivecircus/android-emulator-runner@v2
@@ -50,5 +65,5 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: android-emulator
+          name: android-emulator-${{ matrix.source }}
           path: out/
