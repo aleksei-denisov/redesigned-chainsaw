@@ -406,6 +406,13 @@ class QuickApp:
         panel.editing = True
         tiles = panel.model.tiles
         action = ("up", "down", "up", "down", "add", "remove", "update")[step % 7]
+        forced = None
+        if step < 12:                      # first: two values moved down step by step, past the graph
+            if step in (0, 6):
+                values = [t for t in tiles if t["type"] == "value"]
+                self._stress_tile = values[step // 6]["id"] if len(values) > step // 6 else None
+            forced = next((t for t in tiles if t["id"] == getattr(self, "_stress_tile", None)), None)
+            action = "down"
         detail = ""
         if action == "add":
             kind = rng.choice(["value", "graph", "status"])
@@ -420,7 +427,7 @@ class QuickApp:
             if graph:
                 panel.update(graph["id"], {"window": rng.choice([5, 10, 20]), "smoothing": rng.choice(["off", "light"])})
         elif action in ("up", "down"):
-            tile = tiles[rng.randrange(len(tiles))]
+            tile = forced or tiles[rng.randrange(len(tiles))]
             panel.selected = tile["id"]
             detail = tile["type"]
             button = self._stress_buttons["tileMoveUp" if action == "up" else "tileMoveDown"]
@@ -434,7 +441,8 @@ class QuickApp:
         from .backend.lineitem import NOTES
 
         valid = Shiboken.isValid(self.window) and not NOTES
-        print(f"panel stress {step}: {action} {detail}; window wrapper valid {valid} {NOTES or ''}, "
+        print(f"panel stress {step}: {action} {detail}; layout {''.join(t['type'][0] for t in panel.model.tiles)}; "
+              f"window wrapper valid {valid} {NOTES or ''}, "
               f"{len(QGuiApplication.topLevelWindows())} windows", flush=True)
         if not valid:
             self._done(False)
