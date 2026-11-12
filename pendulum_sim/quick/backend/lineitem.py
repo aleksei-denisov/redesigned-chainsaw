@@ -10,7 +10,8 @@ no more than two memory copies per series.
 Registered before the QML engine starts (``app.py``); NumPy is imported on first use,
 so the registration does not slow down the loading screen.
 
-**Ownership.** Scene-graph nodes, geometries and materials are not QObjects: Qt deletes
+**Ownership.** The item never calls ``self.window()`` (see :meth:`GraphLines._dpr`).
+Scene-graph nodes, geometries and materials are not QObjects: Qt deletes
 them (with the item, or when the scene graph is released) without telling Python. If
 their Python wrappers still owned them, Python would delete them a second time when the
 wrappers go – after the item is destroyed, e.g. on every side-panel edit – and corrupt
@@ -92,7 +93,8 @@ class GraphLines(QQuickItem):
         self.widthChanged.connect(self._sync)
         self.heightChanged.connect(self._sync)
         self.visibleChanged.connect(self._sync)
-        self.windowChanged.connect(lambda _w: self._sync())
+        self._window_dpr = 0.0                          # from windowChanged; see _dpr()
+        self.windowChanged.connect(self._on_window)
         self.setClip(True)                              # curves scroll in from the right, out at the left
 
     # ------------------------------------------------------------ properties
@@ -142,9 +144,21 @@ class GraphLines(QQuickItem):
 
     active = Property(bool, lambda self: self._active, _set_active, notify=activeChanged)
 
+    def _on_window(self, window) -> None:
+        self._window_dpr = float(window.effectiveDevicePixelRatio()) if window is not None else 0.0
+        self._sync()
+
     def _dpr(self) -> float:
-        window = self.window()
-        return float(window.effectiveDevicePixelRatio()) if window is not None else 1.0
+        """The window's pixel ratio – never through ``self.window()``: PySide makes an object
+        returned by a method a child of the caller's wrapper, so when this item is destroyed
+        (every side-panel edit) the window's Python wrapper was invalidated with it, or the
+        window deleted with a garbage-collected wrapper – the crash after Move up / down."""
+        if self._window_dpr > 0:
+            return self._window_dpr
+        from PySide6.QtGui import QGuiApplication
+
+        screen = QGuiApplication.primaryScreen()
+        return float(screen.devicePixelRatio()) if screen is not None else 1.0
 
     def _sync(self) -> None:
         """Tell the view its size (in item pixels and physical pixels) and whether it is shown."""

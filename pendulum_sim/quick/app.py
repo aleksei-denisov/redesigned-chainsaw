@@ -431,8 +431,12 @@ class QuickApp:
             QMetaObject.invokeMethod(button, "clicked")
         if self.args.stress_gc:
             gc.collect()
-        print(f"panel stress {step}: {action} {detail}; window wrapper valid {Shiboken.isValid(self.window)}, "
+        valid = Shiboken.isValid(self.window)
+        print(f"panel stress {step}: {action} {detail}; window wrapper valid {valid}, "
               f"{len(QGuiApplication.topLevelWindows())} windows", flush=True)
+        if not valid:
+            self._done(False)
+            return
         QTimer.singleShot(120, self._stress_step)
 
     def _smoke_step(self, screen: str, theme: str | None) -> None:
