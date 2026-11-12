@@ -54,6 +54,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ..session import sliders
 from . import theme
 from .icons import icon
 
@@ -369,29 +370,15 @@ class NumberRow(QWidget):
             outer.addWidget(label(hint, "secondary"))
         self._sync()
 
-    # mapping value <-> slider position (0 … 1)
+    # mapping value <-> slider position (0 … 1): the shared rules (session.sliders)
     def _to_pos(self, v: float) -> float:
-        lo, hi = self.minimum, self.maximum
-        if self.mapping == "log" and lo > 0:
-            return (math.log10(max(v, lo)) - math.log10(lo)) / (math.log10(hi) - math.log10(lo))
-        if self.mapping == "symlog":
-            f = self._symlog_scale()
-            a, b = math.asinh(lo / f), math.asinh(hi / f)
-            return (math.asinh(v / f) - a) / (b - a)
-        return (v - lo) / (hi - lo) if hi > lo else 0.0
+        return sliders.to_position(v, self.minimum, self.maximum, self.mapping, self.decimals)
 
     def _from_pos(self, t: float) -> float:
-        lo, hi = self.minimum, self.maximum
-        if self.mapping == "log" and lo > 0:
-            return 10 ** (math.log10(lo) + t * (math.log10(hi) - math.log10(lo)))
-        if self.mapping == "symlog":
-            f = self._symlog_scale()
-            a, b = math.asinh(lo / f), math.asinh(hi / f)
-            return f * math.sinh(a + t * (b - a))
-        return lo + t * (hi - lo)
+        return sliders.from_position(t, self.minimum, self.maximum, self.mapping, self.decimals)
 
     def _symlog_scale(self) -> float:
-        return max(10 ** (-self.decimals), 1e-3 * max(abs(self.minimum), abs(self.maximum)))
+        return sliders.symlog_scale(self.minimum, self.maximum, self.decimals)
 
     def _clamp(self, v: float) -> float:
         return min(max(float(v), self.minimum), self.maximum)
@@ -400,22 +387,8 @@ class NumberRow(QWidget):
         return round(v, self.decimals)
 
     def _nudge(self, direction: int) -> None:
-        v = self._value
-        if self.step is not None:
-            new = v + direction * self.step
-        elif self.mapping in ("log", "symlog"):
-            mag = abs(v)
-            unit = 10 ** (-self.decimals)
-            if mag < 10 * unit:
-                new = v + direction * unit
-            else:   # ~2 % of the value, rounded to a "nice" 1/2/5 step
-                raw = 0.02 * mag
-                e = 10 ** math.floor(math.log10(raw))
-                nice = min((m * e for m in (1, 2, 5, 10) if m * e >= raw), default=raw)
-                new = v + direction * nice
-        else:
-            new = v + direction * (self.maximum - self.minimum) / 100.0
-        self._commit(new)
+        self._commit(sliders.nudge(self._value, direction, self.minimum, self.maximum, self.mapping,
+                                   self.decimals, self.step))
 
     def _on_slider_moved(self, pos: int) -> None:
         self._value = self._clamp(self._round(self._from_pos(pos / SLIDER_STEPS)))

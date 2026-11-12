@@ -49,7 +49,8 @@ Item {
                     active: current || visited
                     visible: current
                     source: modelData === "simulate" ? "SimulateScreen.qml"
-                          : modelData === "graphs" ? "GraphsScreen.qml" : "SettingsScreen.qml"
+                          : modelData === "graphs" ? "GraphsScreen.qml"
+                          : modelData === "controller" ? "ControllerScreen.qml" : "SettingsScreen.qml"
                     onCurrentChanged: if (current) visited = true
                     Component.onCompleted: if (current) visited = true
                     onLoaded: item.shown = Qt.binding(() => screenLoader.current && shell.visible)
@@ -72,16 +73,30 @@ Item {
                 rowSpacing: 10
                 columnSpacing: 10
 
-                Row {
-                    spacing: 6
-                    Repeater {
-                        model: [["simulate", "Simulate"], ["graphs", "Graphs"], ["settings", "Settings"]]
-                        Btn {
-                            required property var modelData
-                            text: modelData[1]
-                            active: App.screen === modelData[0]
-                            enabled: !bench.running && !autotune.busy
-                            onClicked: App.screen = modelData[0]
+                Flickable {                     // screen buttons; scroll sideways if they do not fit
+                    id: navFlick
+                    Layout.fillWidth: true
+                    Layout.preferredWidth: navRow.implicitWidth
+                    Layout.maximumWidth: navRow.implicitWidth
+                    implicitHeight: navRow.implicitHeight
+                    contentWidth: navRow.implicitWidth
+                    flickableDirection: Flickable.HorizontalFlick
+                    boundsBehavior: Flickable.StopAtBounds
+                    interactive: contentWidth > width + 1
+                    clip: true
+                    Row {
+                        id: navRow
+                        spacing: 6
+                        Repeater {
+                            model: [["simulate", "Simulate"], ["graphs", "Graphs"], ["controller", "Controller"],
+                                    ["settings", "Settings"]]
+                            Btn {
+                                required property var modelData
+                                text: modelData[1]
+                                active: App.screen === modelData[0]
+                                enabled: !bench.running && !autotune.busy
+                                onClicked: App.screen = modelData[0]
+                            }
                         }
                     }
                 }

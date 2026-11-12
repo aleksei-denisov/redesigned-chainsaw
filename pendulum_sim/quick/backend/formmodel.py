@@ -10,8 +10,9 @@ from __future__ import annotations
 
 from typing import Callable
 
-from PySide6.QtCore import QAbstractListModel, QByteArray, QModelIndex, Qt, Signal, Slot
+from PySide6.QtCore import QAbstractListModel, QByteArray, QModelIndex, Qt, QTimer, Signal, Slot
 
+from ...session import sliders
 from ...session.forms import Form
 
 ROLES = ["rowType", "key", "label", "kind", "unit", "decimals", "minimum", "maximum", "mapping", "step",
@@ -98,18 +99,65 @@ class FormModel(QAbstractListModel):
         return getattr(field, name, None) if name else None
 
     # --------------------------------------------------------------- QML
+    # Edits from QML take effect once control is back in the event loop: an edit can
+    # rebuild the rows (loops, segments), and rebuilding delegates inside the QML handler
+    # that asked for it is what crashed the side panel.
+    def _later(self, action) -> None:
+        QTimer.singleShot(0, self, action)
+
     @Slot(str, "QVariant")
     def setValue(self, key: str, value) -> None:  # noqa: N802 - QML API
+        if key in self.form.fields:
+            self._later(lambda: self.apply(key, value))
+
+    def apply(self, key: str, value) -> None:
+        """An edit, at once (tests, Python callers)."""
         if key in self.form.fields:
             self.on_edit(key, value)
             self.edited.emit(key, value)
 
     @Slot(str, bool)
     def setExpanded(self, section_key: str, on: bool) -> None:  # noqa: N802 - QML API
-        if self._expanded.get(section_key) != on:
-            self._expanded[section_key] = on
-            self.refresh()
+        def change() -> None:
+            if self._expanded.get(section_key) != on:
+                self._expanded[section_key] = on
+                self.refresh()
+        self._later(change)
 
     @Slot(str, result="QVariant")
     def value(self, key: str):
         return self.form.values.get(key)
+
+    # ------------------------------------------------- sliders (shared rules)
+    def _field(self, key: str):
+        return self.form.fields.get(key)
+
+    @Slot(str, float, result=float)
+    def position(self, key: str, value: float) -> float:
+        """Slider position (0 … 1) of ``value`` for the field ``key`` (session.sliders)."""
+        f = self._field(key)
+        if f is None:
+            return 0.0
+        try:
+            return min(max(sliders.to_position(float(value), f.minimum, f.maximum, f.mapping, f.decimals), 0.0), 1.0)
+        except (ValueError, ZeroDivisionError):
+            return 0.0
+
+    @Slot(str, float, result=float)
+    def valueAt(self, key: str, t: float) -> float:  # noqa: N802 - QML API
+        """The value at slider position ``t``, rounded to the field's decimals and clamped."""
+        f = self._field(key)
+        if f is None:
+            return 0.0
+        v = sliders.from_position(min(max(float(t), 0.0), 1.0), f.minimum, f.maximum, f.mapping, f.decimals)
+        return min(max(round(v, f.decimals), f.minimum), f.maximum)
+
+    @Slot(str, int, result=float)
+    def nudged(self, key: str, direction: int) -> float:
+        """The value after one tap on − / +, rounded and clamped (not yet applied)."""
+        f = self._field(key)
+        v = self.form.values.get(key)
+        if f is None or not isinstance(v, (int, float)):
+            return 0.0
+        new = sliders.nudge(float(v), int(direction), f.minimum, f.maximum, f.mapping, f.decimals, f.step)
+        return min(max(round(new, f.decimals), f.minimum), f.maximum)

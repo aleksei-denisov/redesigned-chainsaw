@@ -10,6 +10,7 @@ Rectangle {
     property string placeholder
     property bool mono: false
     signal accepted()
+    function edit() { input.forceActiveFocus(); input.selectAll() }
     implicitWidth: 160
     implicitHeight: Theme.touch
     radius: Theme.radiusButton
