@@ -1,0 +1,53 @@
+name: Android emulator check
+
+# Installs the published Qt Quick APK (pre-release android-qtquick-ui) on an Android 11
+# emulator (x86_64 image, which runs arm64 apps through its ARM translation), starts it
+# twice and keeps logcat, the start-up journal and screenshots. Slow, but it shows what a
+# device does with the APK – the desktop CI cannot catch Android-only start problems.
+
+on:
+  push:
+    branches: [qtquick-ui]
+    paths: [".github/workflows/android-emulator.yml"]
+  workflow_run:
+    workflows: [Android]
+    types: [completed]
+    branches: [qtquick-ui]
+  workflow_dispatch:
+
+jobs:
+  emulator:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      PKG: com.adenisov.invertedpendulumquick
+    steps:
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Download the APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p out
+          gh release download android-qtquick-ui -R "$GITHUB_REPOSITORY" -p "PendulumQuick-debug.apk" -D .
+          ls -la PendulumQuick-debug.apk
+      - name: Run on the emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          arch: x86_64
+          target: google_apis
+          ram-size: 4096M
+          disk-size: 6000M
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          disable-animations: true
+          script: bash .github/android-emulator-run.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: android-emulator
+          path: out/
