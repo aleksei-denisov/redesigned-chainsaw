@@ -235,6 +235,10 @@ jobs:
             done
           done
           $RUN --strict --scenario double_fixed_lqr --screenshot build/quick-preview/simulate-double-fixed.png || true
+          for panel in edit value graph; do
+            $RUN --strict --theme dark --panel $panel --screenshot build/quick-preview/panel-$panel-dark.png
+          done
+          $RUN --strict --theme light --panel graph --screenshot build/quick-preview/panel-graph-light.png
       - name: Performance test
         if: always()
         run: |
