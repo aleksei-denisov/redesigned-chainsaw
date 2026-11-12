@@ -431,8 +431,10 @@ class QuickApp:
             QMetaObject.invokeMethod(button, "clicked")
         if self.args.stress_gc:
             gc.collect()
-        valid = Shiboken.isValid(self.window)
-        print(f"panel stress {step}: {action} {detail}; window wrapper valid {valid}, "
+        from .backend.lineitem import NOTES
+
+        valid = Shiboken.isValid(self.window) and not NOTES
+        print(f"panel stress {step}: {action} {detail}; window wrapper valid {valid} {NOTES or ''}, "
               f"{len(QGuiApplication.topLevelWindows())} windows", flush=True)
         if not valid:
             self._done(False)
@@ -452,7 +454,11 @@ class QuickApp:
         print(f"quick smoke test: simulation t={stats['t']:.2f} s after {wall:.1f} s wall, {stats['steps']:.0f} steps, "
               f"{self.sim.clock.fps:.0f} fps, physics '{self.sim.physics}', render loop {threads.render_loop()}, "
               f"{len(self.warnings)} QML warnings; {self.frames.describe()}", flush=True)
-        self._done(stats["t"] > 0.4 * wall and (not self.args.strict or not self.warnings))
+        from .backend.lineitem import NOTES
+
+        for name, note in NOTES.items():
+            print(f"quick smoke test: {name}: {note}", flush=True)
+        self._done(stats["t"] > 0.4 * wall and not NOTES and (not self.args.strict or not self.warnings))
 
     def _screenshot(self) -> None:
         grab = getattr(self.window, "grabWindow", None)     # PySide may hand back the root as a plain QWindow
