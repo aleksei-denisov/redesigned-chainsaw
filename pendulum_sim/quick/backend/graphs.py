@@ -227,8 +227,12 @@ class GraphsBridge(QObject):
         return view
 
     def drop_tiles(self, keep: set[str]) -> None:
+        """Views of removed tiles stop at once and are deleted a little later, when the QML
+        items that showed them are surely gone."""
         for tile_id in [k for k in self._tiles if k not in keep]:
-            self._tiles.pop(tile_id).deleteLater()
+            view = self._tiles.pop(tile_id)
+            view.active = False
+            QTimer.singleShot(5000, view.deleteLater)
 
     def _reconfigure_cards(self) -> None:
         for key, v in self._views.items():

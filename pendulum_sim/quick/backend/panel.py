@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import math
 
-from PySide6.QtCore import Property, QObject, QSettings, Signal, Slot
+from PySide6.QtCore import Property, QObject, QSettings, QTimer, Signal, Slot
 
 from .curves import GraphSpec
 from .graphs import GraphsBridge
@@ -53,6 +53,10 @@ class PanelBridge(QObject):
         self._values: dict[str, str] = {}
         self._status: dict[str, list] = {}
         self._due = 0.0
+        self._notify = QTimer(self)                 # tilesChanged after the current call returns
+        self._notify.setSingleShot(True)
+        self._notify.setInterval(0)
+        self._notify.timeout.connect(self.tilesChanged)
         sim.structureChanged.connect(self._on_structure)
         sim.controllerChanged.connect(self._on_structure)
         sim.configChanged.connect(self._update_status)
@@ -74,12 +78,19 @@ class PanelBridge(QObject):
                     d.update(name=sig.name or sig.label, unit=unit, available=True)
             elif t["type"] == "graph":
                 d["missing"] = [k for k in t["signals"] if k not in cat]
+                d["view"] = self.graphs.tile_view(t["id"], self._spec(t))
             out.append(d)
         return out
 
+    def _rows(self, columns: int) -> list[list[dict]]:
+        """The tiles themselves per row (not indices: a delegate never looks a tile up in a list
+        that may already have changed under it)."""
+        tiles = self._display_tiles()
+        return [[tiles[i] for i in row] for row in rows(self.model.tiles, columns)]
+
     tiles = Property("QVariantList", _display_tiles, notify=tilesChanged)
-    rows = Property("QVariantList", lambda self: rows(self.model.tiles, 2), notify=tilesChanged)
-    rowsCompact = Property("QVariantList", lambda self: rows(self.model.tiles, 4), notify=tilesChanged)
+    rows = Property("QVariantList", lambda self: self._rows(2), notify=tilesChanged)
+    rowsCompact = Property("QVariantList", lambda self: self._rows(4), notify=tilesChanged)
     values = Property("QVariantMap", lambda self: self._values, notify=valuesChanged)
     status = Property("QVariantMap", lambda self: self._status, notify=statusChanged)
     layoutName = Property(str, lambda self: self.model.name, notify=layoutsChanged)
@@ -180,7 +191,9 @@ class PanelBridge(QObject):
                 self.graphs.tile_view(t["id"], self._spec(t))
                 keep.add(t["id"])
         self.graphs.drop_tiles(keep)
-        self.tilesChanged.emit()
+        # Queued: the panel's delegates are rebuilt when control is back in the event loop,
+        # never inside a QML handler that called an edit (re-entrant rebuilds crashed in QML).
+        self._notify.start()
         self._update_values()
         self._update_status()
 

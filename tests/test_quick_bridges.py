@@ -221,7 +221,9 @@ def test_panel_default_layout_values_and_graph_tile(bridges):
     panel = PanelBridge(sim, graphs, _DictStore())
     kinds = [t["type"] for t in panel.tiles]
     assert kinds == ["value"] * 4 + ["graph"]                 # the layout the screen had before
-    assert panel.rows == [[0, 1], [2, 3], [4]]
+    ids = [t["id"] for t in panel.tiles]
+    assert [[t["id"] for t in row] for row in panel.rows] == [ids[0:2], ids[2:4], ids[4:5]]
+    assert panel.rows[2][0]["view"] is panel.view(ids[4])           # graph tiles carry their view
     sim.start()
     assert _wait(lambda: sim.source.stats()["t"] > 0.5)
     panel.on_frame(1e9)

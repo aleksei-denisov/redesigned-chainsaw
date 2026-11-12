@@ -40,7 +40,8 @@ Item {
     function dragStart(tileId, source, x, y) {
         dragId = tileId
         dropId = ""
-        ghost.text = tileName(panel.tiles[indexOf(tileId)])
+        var i = indexOf(tileId)
+        ghost.text = i >= 0 ? tileName(panel.tiles[i]) : ""
         dragMove(source, x, y)
     }
     function dragMove(source, x, y) {
@@ -147,8 +148,8 @@ Item {
                     model: sidePanel.compact ? panel.rowsCompact : panel.rows
                     RowLayout {
                         id: row
-                        required property var modelData                  // tile indices
-                        readonly property var first: panel.tiles[modelData[0]] || ({})
+                        required property var modelData                  // the row's tiles
+                        readonly property var first: modelData[0] || ({})
                         readonly property bool fill: first.type === "graph" && first.height === "fill"
                         readonly property bool halves: first.type === "value" && first.size === "half"
                         Layout.fillWidth: true
@@ -195,8 +196,8 @@ Item {
     // ------------------------------------------------------------ one tile
     component TileFrame: Item {
         id: frame
-        required property int modelData                                  // index in panel.tiles
-        readonly property var tile: panel.tiles[modelData] || ({})
+        required property var modelData                                  // the tile (from panel.rows)
+        readonly property var tile: modelData || ({})
         readonly property string tileId: tile.id || ""
         readonly property bool isDropTarget: sidePanel.dropId === tileId && sidePanel.dragId !== tileId
         Layout.fillWidth: true
@@ -229,7 +230,7 @@ Item {
         Component {
             id: graphTile
             GraphCard {
-                view: panel.view(frame.tileId)
+                view: frame.tile.view || null
                 colors: Theme.tilePalette
                 active: sidePanel.shown
             }
