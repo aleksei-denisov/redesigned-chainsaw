@@ -1,11 +1,11 @@
 """``GraphLines``: the curves of one graph view as a scene-graph item (QML type).
 
-When the view has new data (``GraphView.updated``, at the graph rate), the item builds
-the triangles of every series with NumPy (``linegeom.stroke``: antialiased lines of the
-given width, real samples decimated per physical pixel). ``updatePaintNode`` only
-copies the prepared vertex and index buffers into the scene graph's geometry – with a
-threaded render loop it runs on the render thread while the GUI thread waits, and
-does no more than two memory copies per series.
+The view (``graphs.GraphView``) prepares the triangles of every series with NumPy at
+the graph rate – incrementally, see ``curves.py`` – and the horizontal offset by which
+the curves have scrolled. ``updatePaintNode`` only copies the vertex and index buffers
+into the scene graph's geometry and sets the offset on a transform node – with a
+threaded render loop it runs on the render thread while the GUI thread waits, and does
+no more than two memory copies per series.
 
 Registered before the QML engine starts (``app.py``); NumPy is imported on first use,
 so the registration does not slow down the loading screen.
@@ -16,8 +16,15 @@ from __future__ import annotations
 import ctypes
 
 from PySide6.QtCore import Property, QObject, Signal
-from PySide6.QtGui import QColor
-from PySide6.QtQuick import QQuickItem, QSGGeometry, QSGGeometryNode, QSGNode, QSGVertexColorMaterial
+from PySide6.QtGui import QColor, QMatrix4x4
+from PySide6.QtQuick import (
+    QQuickItem,
+    QSGGeometry,
+    QSGGeometryNode,
+    QSGNode,
+    QSGTransformNode,
+    QSGVertexColorMaterial,
+)
 
 MAX_SERIES = 6
 NOTES: dict[str, str] = {}          # problems seen while drawing (shown in the performance report)
@@ -49,12 +56,13 @@ class GraphLines(QQuickItem):
         self._dashed: list[bool] = []
         self._width = 2.0
         self._active = False
-        self._pending: list[tuple] | None = None       # per series (vertices, indices), for the next sync
+        self._pending = False                           # the view has new curves for the next sync
         self._nodes: list[tuple] = []                   # (node, geometry, material, attributes, wide)
         self.widthChanged.connect(self._sync)
         self.heightChanged.connect(self._sync)
         self.visibleChanged.connect(self._sync)
         self.windowChanged.connect(lambda _w: self._sync())
+        self.setClip(True)                              # curves scroll in from the right, out at the left
 
     # ------------------------------------------------------------ properties
     def _set_view(self, view: QObject | None) -> None:
@@ -69,6 +77,7 @@ class GraphLines(QQuickItem):
         self._view = view
         if view is not None:
             view.updated.connect(self._rebuild)
+            self._style_changed()
         self._sync()
         self.viewChanged.emit()
 
@@ -77,21 +86,20 @@ class GraphLines(QQuickItem):
     def _set_colors(self, colors) -> None:
         self._colors = [QColor(c) for c in (colors or [])]
         self.colorsChanged.emit()
-        self._rebuild()
+        self._style_changed()
 
     colors = Property("QVariantList", lambda self: self._colors, _set_colors, notify=colorsChanged)
 
     def _set_dashed(self, dashed) -> None:
-        self._dashed = [bool(d) for d in (dashed or [])]
+        self._dashed = [bool(d) for d in (dashed or [])]       # (dashes come from the signal catalogue)
         self.dashedChanged.emit()
-        self._rebuild()
 
     dashed = Property("QVariantList", lambda self: self._dashed, _set_dashed, notify=dashedChanged)
 
     def _set_line_width(self, width: float) -> None:
         self._width = float(width)
         self.lineWidthChanged.emit()
-        self._rebuild()
+        self._style_changed()
 
     lineWidth = Property(float, lambda self: self._width, _set_line_width, notify=lineWidthChanged)
 
@@ -114,28 +122,25 @@ class GraphLines(QQuickItem):
             return
         w, h = self.width(), self.height()
         view.setSize(w, h)
-        view.dpr = self._dpr()
+        if view.dpr != self._dpr():
+            view.dpr = self._dpr()
+            self._style_changed()
         view.setActive(self._active and self.isVisible() and w > 2 and h > 2)
 
     # -------------------------------------------------------------- geometry
-    def _rebuild(self) -> None:
-        """New data or style: prepare the triangles (GUI thread), then schedule a sync."""
-        from .linegeom import merge, stroke
+    def _style_changed(self) -> None:
+        """Colours, width or pixel density changed: the view redraws its curves."""
+        from .curves import Style
 
         view = self._view
-        runs = getattr(view, "runs", None) if view is not None else None
-        if not runs:
-            self._pending = []
-            self.update()
+        if view is None:
             return
-        feather = 1.0 / max(self._dpr(), 1.0)
-        out = []
-        for k, series in enumerate(runs[:MAX_SERIES]):
-            c = self._colors[k % len(self._colors)] if self._colors else QColor("black")
-            rgba = (c.red(), c.green(), c.blue(), c.alpha())
-            dash = 4.0 * self._width if k < len(self._dashed) and self._dashed[k] else 0.0
-            out.append(merge([stroke(xs, ys, self._width, feather, rgba, dash) for xs, ys in series]))
-        self._pending = out
+        colors = [(c.red(), c.green(), c.blue(), c.alpha()) for c in self._colors] or [(0, 0, 0, 255)]
+        view.set_style(Style(colors, self._width, 1.0 / max(self._dpr(), 1.0)))
+
+    def _rebuild(self) -> None:
+        """The view has new curves: take them at the next sync."""
+        self._pending = True
         self.update()
 
     def updatePaintNode(self, old, data):  # noqa: N802 - Qt API (render thread with a threaded loop)
@@ -150,7 +155,7 @@ class GraphLines(QQuickItem):
 
         root = old
         if root is None or not self._nodes:
-            root = QSGNode()
+            root = QSGTransformNode()
             self._nodes = []
             for _ in range(MAX_SERIES):
                 attributes = QSGGeometry.defaultAttributes_ColoredPoint2D()
@@ -164,12 +169,19 @@ class GraphLines(QQuickItem):
                 node.setFlag(QSGNode.Flag.OwnsMaterial)
                 root.appendChildNode(node)
                 self._nodes.append([node, geometry, material, attributes, False])
-        pending, self._pending = self._pending, None
-        if pending is None:
+            self._pending = True
+        if not self._pending:
             return root
+        self._pending = False
+        out = self._view.output if self._view is not None else None
+        curves = out.curves if out is not None else []
+        matrix = QMatrix4x4()
+        matrix.translate(out.dx if out is not None else 0.0, 0.0)
+        root.setMatrix(matrix)
+        root.markDirty(QSGNode.DirtyStateBit.DirtyMatrix)
         for k, entry in enumerate(self._nodes):
             node, geometry = entry[0], entry[1]
-            vertices, indices = pending[k] if k < len(pending) else (None, None)
+            vertices, indices = curves[k] if k < len(curves) else (None, None)
             if vertices is None or not indices.size:
                 if geometry.indexCount():
                     geometry.allocate(0, 0)
@@ -184,7 +196,7 @@ class GraphLines(QQuickItem):
                 entry[1], entry[3], entry[4] = geometry, attributes, wide
             if geometry.vertexCount() != vertices.size or geometry.indexCount() != indices.size:
                 geometry.allocate(vertices.size, indices.size)
-            _copy(geometry.vertexData(), vertices)
+            _copy(geometry.vertexData(), np.ascontiguousarray(vertices))
             _copy(geometry.indexData(), indices.astype(np.uint32 if wide else np.uint16, copy=False))
             node.markDirty(QSGNode.DirtyStateBit.DirtyGeometry)
         return root

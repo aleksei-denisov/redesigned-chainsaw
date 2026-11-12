@@ -73,60 +73,141 @@ def _indices(segments: int) -> np.ndarray:
 
 
 def stroke(xs: np.ndarray, ys: np.ndarray, width: float, feather: float, rgba: tuple[int, int, int, int],
-           dash: float = 0.0) -> tuple[np.ndarray, np.ndarray]:
-    """Vertices (:data:`VERTEX`) and triangle indices (relative to 0) of one polyline.
+           dash: float = 0.0, breaks: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray]:
+    """Vertices (:data:`VERTEX`, four per point) and triangle indices (relative to 0).
 
     ``width``: core width in pixels (item units); ``feather``: fade width on each side
-    (one physical pixel); ``dash``: dash length (0 = solid line).
+    (one physical pixel); ``dash``: dash length in x pixels (0 = solid line), measured on
+    the x axis so dashes stay put while a curve scrolls; ``breaks[i]``: point ``i`` starts
+    a new piece (no segment from ``i - 1``). Zero-length segments are skipped as well.
     """
+    vertices = stroke_vertices(xs, ys, width, feather, rgba, breaks)
+    return vertices, segment_indices(xs, ys, dash, breaks)
+
+
+def _valid_segments(x: np.ndarray, y: np.ndarray, breaks: np.ndarray | None) -> np.ndarray:
+    valid = (x[1:] != x[:-1]) | (y[1:] != y[:-1])
+    if breaks is not None:
+        valid &= ~breaks[1:]
+    return valid
+
+
+def stroke_vertices(xs: np.ndarray, ys: np.ndarray, width: float, feather: float,
+                    rgba: tuple[int, int, int, int], breaks: np.ndarray | None = None) -> np.ndarray:
+    """The four vertices of each point (see :func:`stroke`)."""
     x = np.asarray(xs, dtype=np.float64)
     y = np.asarray(ys, dtype=np.float64)
-    if x.size >= 2:                                             # drop repeated points (no direction)
-        moved = np.empty(x.size, dtype=bool)
-        moved[0] = True
-        np.logical_or(x[1:] != x[:-1], y[1:] != y[:-1], out=moved[1:])
-        if not moved.all():
-            x, y = x[moved], y[moved]
     n = x.size
-    if n < 2:
-        return np.zeros(0, dtype=VERTEX), np.zeros(0, dtype=np.uint32)
-    dx, dy = np.diff(x), np.diff(y)
-    length = np.hypot(dx, dy)
-    nx, ny = -dy / length, dx / length                          # unit normals per segment
-    # vertex normals: miter of the two adjacent segment normals (ends: the segment's normal)
-    mx = np.empty(n)
-    my = np.empty(n)
+    if n == 0:
+        return np.zeros(0, dtype=VERTEX)
+    mx = np.zeros(n)
+    my = np.ones(n)
     scale = np.ones(n)
-    mx[0], my[0], mx[-1], my[-1] = nx[0], ny[0], nx[-1], ny[-1]
-    if n > 2:
-        sx, sy = nx[:-1] + nx[1:], ny[:-1] + ny[1:]
+    if n >= 2:
+        dx, dy = np.diff(x), np.diff(y)
+        length = np.hypot(dx, dy)
+        valid = _valid_segments(x, y, breaks)
+        safe = np.where(valid, length, 1.0)
+        nx = np.where(valid, -dy / safe, 0.0)
+        ny = np.where(valid, dx / safe, 0.0)
+        # per point: normal of the segment before (if any) and after (if any)
+        bx = np.zeros(n)
+        by = np.zeros(n)
+        bv = np.zeros(n, dtype=bool)
+        ax = np.zeros(n)
+        ay = np.zeros(n)
+        av = np.zeros(n, dtype=bool)
+        bx[1:], by[1:], bv[1:] = nx, ny, valid
+        ax[:-1], ay[:-1], av[:-1] = nx, ny, valid
+        sx, sy = bx + ax, by + ay                       # only the existing neighbours count
         norm = np.hypot(sx, sy)
-        flat = norm < 1e-6                                       # a full reversal: use the segment normal
-        if flat.any():
-            sx[flat], sy[flat], norm[flat] = nx[1:][flat], ny[1:][flat], 1.0
-        sx /= norm
-        sy /= norm
-        cos = np.abs(sx * nx[1:] + sy * ny[1:])
-        np.maximum(cos, 1.0 / MITER_LIMIT, out=cos)
-        scale[1:-1] = 1.0 / cos
-        mx[1:-1], my[1:-1] = sx, sy
+        both = bv & av
+        flat = both & (norm < 1e-6)                     # a full reversal: use the segment after
+        sx = np.where(flat, ax, sx)
+        sy = np.where(flat, ay, sy)
+        norm = np.where(flat, 1.0, norm)
+        has = norm > 1e-12
+        mx = np.where(has, sx / np.where(has, norm, 1.0), 0.0)
+        my = np.where(has, sy / np.where(has, norm, 1.0), 1.0)
+        cos = np.abs(mx * ax + my * ay)
+        cos = np.where(both & ~flat, np.maximum(cos, 1.0 / MITER_LIMIT), 1.0)
+        scale = 1.0 / cos
     half = 0.5 * width
     k = np.array([half + feather, half, -half, -(half + feather)])
-    off = scale[:, None] * k[None, :]                           # (n, 4) offsets along the normal
-    buf = np.empty((n, 4, 3), dtype=np.float32)                 # x, y, rgba (bit pattern)
+    off = scale[:, None] * k[None, :]                   # (n, 4) offsets along the normal
+    buf = np.empty((n, 4, 3), dtype=np.float32)          # x, y, rgba (bit pattern)
     buf[:, :, 0] = x[:, None] + mx[:, None] * off
     buf[:, :, 1] = y[:, None] + my[:, None] * off
     r, g, b, a = rgba
-    solid = _rgba_as_float((r * a // 255, g * a // 255, b * a // 255, a))   # premultiplied
-    clear = _rgba_as_float((0, 0, 0, 0))
-    buf[:, 0, 2] = buf[:, 3, 2] = clear
-    buf[:, 1, 2] = buf[:, 2, 2] = solid
-    vertices = buf.reshape(-1).view(VERTEX)
+    buf[:, 0, 2] = buf[:, 3, 2] = _rgba_as_float((0, 0, 0, 0))
+    buf[:, 1, 2] = buf[:, 2, 2] = _rgba_as_float((r * a // 255, g * a // 255, b * a // 255, a))   # premultiplied
+    return buf.reshape(-1).view(VERTEX)
+
+
+def segment_indices(xs: np.ndarray, ys: np.ndarray, dash: float = 0.0,
+                    breaks: np.ndarray | None = None) -> np.ndarray:
+    """Triangle indices of the drawn segments (see :func:`stroke`)."""
+    x = np.asarray(xs, dtype=np.float64)
+    y = np.asarray(ys, dtype=np.float64)
+    if x.size < 2:
+        return np.zeros(0, dtype=np.uint32)
+    valid = _valid_segments(x, y, breaks)
     if dash > 0:
-        start = np.concatenate(([0.0], np.cumsum(length)[:-1]))
-        segments = np.flatnonzero((start // dash) % 2 == 0).astype(np.uint32)
-        return vertices, (segments[:, None] * 4 + _QUADS[None, :]).ravel()
-    return vertices, _indices(n - 1)
+        mid = 0.5 * (x[1:] + x[:-1])
+        valid &= np.floor(mid / dash) % 2 == 0
+    if valid.all():
+        return _indices(x.size - 1)
+    segments = np.flatnonzero(valid).astype(np.uint32)
+    return (segments[:, None] * 4 + _QUADS[None, :]).ravel()
+
+
+def decimate_columns(t: np.ndarray, y: np.ndarray, column_s: float) -> tuple[np.ndarray, np.ndarray]:
+    """Like :func:`decimate`, on columns fixed in time (column ``floor(t / column_s)``).
+
+    Column boundaries do not move as the window scrolls, so points already decimated stay
+    valid and a curve can be extended incrementally. With no more than two samples per
+    column on average the input is used as it is.
+    """
+    n = t.size
+    if n < 3 or column_s <= 0:
+        return t, y
+    col = np.floor(t / column_s).astype(np.int64)
+    if n <= 2 * (int(col[-1] - col[0]) + 1):
+        return t, y
+    change = np.empty(n, dtype=bool)
+    change[0] = True
+    np.not_equal(col[1:], col[:-1], out=change[1:])
+    owner = np.cumsum(change) - 1                       # column index (0..k-1) of each sample
+    starts = np.flatnonzero(change)
+    lo = np.minimum.reduceat(y, starts)
+    hi = np.maximum.reduceat(y, starts)
+    keep = np.zeros(n, dtype=bool)
+    for target in (lo, hi):
+        hit = np.flatnonzero(y == target[owner])
+        first = np.empty(hit.size, dtype=bool)
+        first[0] = True
+        oh = owner[hit]
+        np.not_equal(oh[1:], oh[:-1], out=first[1:])
+        keep[hit[first]] = True
+    keep[-1] = True                      # the newest sample: the curve reaches "now"
+    return t[keep], y[keep]
+
+
+def smooth(y: np.ndarray, samples: int) -> np.ndarray:
+    """Centred moving average over ``samples`` (odd; ≤ 1: unchanged), shorter at the ends.
+
+    Centred, so the curve is not delayed; at the newest end the average is one-sided until
+    the samples after it arrive.
+    """
+    n = y.size
+    if samples <= 1 or n < 3:
+        return y
+    h = samples // 2
+    c = np.concatenate(([0.0], np.cumsum(y, dtype=np.float64)))
+    i = np.arange(n)
+    lo = np.maximum(i - h, 0)
+    hi = np.minimum(i + h + 1, n)
+    return (c[hi] - c[lo]) / (hi - lo)
 
 
 def merge(parts: list[tuple[np.ndarray, np.ndarray]]) -> tuple[np.ndarray, np.ndarray]:

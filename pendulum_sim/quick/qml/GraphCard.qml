@@ -2,17 +2,28 @@ import QtQuick
 import PendulumItems 1.0
 import Instrument 1.0
 
-// One graph: title and unit, legend, horizontal grid lines with monospace tick labels
-// (horizontal, never clipped), the curves.
+// One live graph (Graphs-screen card or side-panel graph tile): title and units, legend,
+// horizontal grid lines with monospace tick labels (left axis; right axis for a second
+// unit), the curves (GraphLines, drawn by the scene graph from NumPy-built geometry).
 Card {
     id: card
     property QtObject view
     property bool active: false
     property var colors: Theme.palette
+    property string title: view ? view.title : ""
     radius: Theme.radiusCard
+    readonly property bool twoAxes: view !== null && view.unitRight.length > 0
 
-    Caption { id: title; x: 14; y: 12; text: card.view ? card.view.title + (card.view.unit ? "  ·  " + card.view.unit : "") : "" }
+    Caption {
+        x: 14
+        y: 12
+        width: legend.x - x - 8
+        elide: Text.ElideRight
+        text: (card.title.length ? card.title + "  ·  " : "")
+              + (card.view ? card.view.unit + (card.twoAxes ? "  |  " + card.view.unitRight : "") : "")
+    }
     Row {
+        id: legend
         anchors.right: parent.right
         anchors.rightMargin: 14
         y: 10
@@ -25,12 +36,19 @@ Card {
                 Rectangle {
                     width: 14; height: 2
                     color: card.colors[modelData.index % card.colors.length]
+                    opacity: modelData.dashed ? 0.6 : 1.0
                     anchors.verticalCenter: parent.verticalCenter
                 }
-                Mono { text: modelData.label; color: Theme.textMuted; font.pixelSize: 12 }
+                Mono {
+                    text: modelData.label + (card.twoAxes ? " " + modelData.unit : "")
+                    color: Theme.textMuted
+                    font.pixelSize: 12
+                }
             }
         }
     }
+
+    TextMetrics { id: labelWidth; font.family: Theme.monoFont; font.pixelSize: 11; text: "-000.00" }
 
     Item {
         id: area
@@ -38,9 +56,7 @@ Card {
         anchors.topMargin: 36
         anchors.bottomMargin: 12
         anchors.leftMargin: 14 + labelWidth.width + 8
-        anchors.rightMargin: 14
-
-        TextMetrics { id: labelWidth; font.family: Theme.monoFont; font.pixelSize: 11; text: "-0000.0" }
+        anchors.rightMargin: 14 + (card.twoAxes ? labelWidth.width + 8 : 0)
 
         Repeater {
             model: card.view ? card.view.ticks : []
@@ -59,11 +75,21 @@ Card {
                 }
             }
         }
+        Repeater {
+            model: card.view ? card.view.ticksRight : []
+            Mono {
+                required property var modelData
+                x: area.width + 8
+                y: modelData.y - height / 2
+                text: modelData.text
+                color: Theme.textMuted
+                font.pixelSize: 11
+            }
+        }
         GraphLines {
             anchors.fill: parent
             view: card.view
             colors: card.colors
-            dashed: card.view ? card.view.legend.map(s => s.dashed) : []
             active: card.active
         }
     }

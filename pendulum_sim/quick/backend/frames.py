@@ -40,6 +40,7 @@ class FrameDriver(QObject):
         super().__init__(parent)
         self.sim = sim
         self.graphs = None                        # attach_graphs(): refreshed on shown frames
+        self.listeners: list = []                 # more on_frame(now) receivers (side panel values)
         self.pacer = Pacer(refresh_hz, mode)
         self.collector = IdleCollector()
         self.hints: PerformanceHints | None = None
@@ -150,6 +151,7 @@ class FrameDriver(QObject):
     def swapped(self) -> None:
         """A frame was presented (``QQuickWindow.frameSwapped``, queued to the GUI thread)."""
         if self._enabled and self.pacer.divisor > 1:
+            self._keepalive.stop()                   # a frame came: no idle tick needed
             vsync_ms = 1000.0 / self.pacer.refresh_hz
             self._tick.start(max(0, int((self.pacer.divisor - 1) * vsync_ms - 3.0)))
 
@@ -213,6 +215,8 @@ class FrameDriver(QObject):
         self.sim.advance()
         if self.graphs is not None:
             self.graphs.on_frame(now)
+        for listener in self.listeners:
+            listener.on_frame(now)
         python_ms = (time.perf_counter() - now) * 1000.0
         if self.recording is not None and gap:
             self.recording.append((gap, python_ms, work))

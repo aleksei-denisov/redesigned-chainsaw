@@ -2,8 +2,8 @@ import QtQuick
 import QtQuick.Layouts
 import Instrument 1.0
 
-// Graphs screen: choose up to four graphs (remembered) and the time window; one card
-// per graph. Graph data is computed only while this screen is shown.
+// Graphs screen: choose up to four graphs (remembered), the time window and the display
+// smoothing; one card per graph. Graph data is computed only while this screen is shown.
 Item {
     id: screen
     property bool shown: false
@@ -39,6 +39,13 @@ Item {
                     options: graphs.windows.map(w => [w, w + " s"])
                     value: graphs.windowS
                     onPicked: (v) => graphs.windowS = v
+                }
+                Item { width: 12; height: 1 }
+                Seg {
+                    title: "Smoothing"
+                    options: [["off", "Off"], ["light", "Light"], ["medium", "Medium"], ["strong", "Strong"]]
+                    value: graphs.smoothing
+                    onPicked: (v) => graphs.smoothing = v
                 }
             }
         }

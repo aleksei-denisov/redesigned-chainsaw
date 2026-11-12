@@ -1,10 +1,11 @@
-"""QML context object ``graphs``: graph selection and the data of the graphs on screen.
+"""QML context object ``graphs``: the Graphs screen's selection and every live graph's data.
 
-A graph item in QML (``GraphLines``, ``lineitem.py``) is given its :class:`GraphView`
-(``graphs.view("angle")``), tells it its size and whether it is visible, and draws the
-view's ``runs`` – per series a list of pixel polylines. Only active views are computed,
-at the graph rate (20–30 Hz, a setting, driven by shown frames), from one telemetry read
-for all of them; the maths is ``graphdata.py`` (Qt-free).
+A graph item in QML (``GraphLines``, ``lineitem.py``) is given a :class:`GraphView` –
+``graphs.view("angle")`` for a Graphs-screen card, ``panel.view(tileId)`` for a side-
+panel graph tile – tells it its size and whether it is visible, and draws the view's
+:attr:`GraphView.output`. Only active views are computed, at the graph rate (20–30 Hz,
+driven by shown frames), from one telemetry read for all of them. The maths is
+``curves.GraphState`` (Qt-free, incremental).
 """
 
 from __future__ import annotations
@@ -13,41 +14,44 @@ import time
 
 from PySide6.QtCore import Property, QObject, QSettings, QTimer, Signal, Slot
 
-from ...mobile.plot_math import DEFAULT_SELECTION, GRAPHS, MAX_VISIBLE, format_tick, graph_series
+from ...mobile.plot_math import DEFAULT_SELECTION, GRAPHS, MAX_VISIBLE, graph_available, graph_series
 from ...session import rules
-from . import graphdata
+from .curves import SMOOTHING_S, WINDOWS_S, GraphSpec, GraphState, Output, Style
+from .signals import by_key, catalogue
 from .simulation import SimulationBridge
 
-WINDOWS_S = [5, 10, 20, 30]
-TRACE_WINDOW_S = 10.0
 DEFAULT_RATE_HZ = 25.0
 
 
 class GraphView(QObject):
-    """The data of one graph item (or of the Simulate screen's trace)."""
+    """One live graph: a Graphs-screen card or a side-panel graph tile."""
 
     updated = Signal()
     legendChanged = Signal()
+    axesChanged = Signal()
 
-    def __init__(self, key: str, parent: QObject | None = None) -> None:
+    def __init__(self, key: str, spec: GraphSpec, owner: GraphsBridge, title: str = "", parent=None) -> None:
         super().__init__(parent)
         self.key = key
+        self.owner = owner
+        self._title = title
         self.width = 0.0
         self.height = 0.0
+        self.dpr = 1.0
         self.active = False
-        self.axis = graphdata.trace_axes() if key == "trace" else graphdata.graph_axis(key)
-        self.dpr = 1.0                                 # physical pixels per item pixel (set by the item)
-        self.runs: list[list[tuple]] = []              # per series: pixel polylines (drawn by GraphLines)
-        self._ticks: list[dict] = []
-        self._legend: list[dict] = []
-        self.lo, self.hi = 0.0, 1.0
+        self.state = GraphState(spec, owner.catalogue, owner.rate_telemetry)
+        self.output: Output | None = None
+        self._ticks: list[list[dict]] = [[], []]
+        self._units: list[str] = []
 
-    title = Property(str, lambda self: GRAPHS[self.key].title if self.key in GRAPHS else "Trace", constant=True)
-    unit = Property(str, lambda self: GRAPHS[self.key].unit if self.key in GRAPHS else "", constant=True)
-    ticks = Property("QVariantList", lambda self: self._ticks, notify=updated)
-    legend = Property("QVariantList", lambda self: self._legend, notify=legendChanged)
-    minimum = Property(float, lambda self: self.lo, notify=updated)
-    maximum = Property(float, lambda self: self.hi, notify=updated)
+    title = Property(str, lambda self: self._title, constant=True)
+    legend = Property("QVariantList", lambda self: self.state.legend, notify=legendChanged)
+    units = Property("QVariantList", lambda self: self._units, notify=axesChanged)
+    ticks = Property("QVariantList", lambda self: self._ticks[0], notify=axesChanged)
+    ticksRight = Property("QVariantList", lambda self: self._ticks[1], notify=axesChanged)
+    unit = Property(str, lambda self: self._units[0] if self._units else "", notify=axesChanged)
+    unitRight = Property(str, lambda self: self._units[1] if len(self._units) > 1 else "", notify=axesChanged)
+    window = Property(float, lambda self: float(self.state.spec.window_s), notify=legendChanged)
 
     @Slot(float, float)
     def setSize(self, width: float, height: float) -> None:  # noqa: N802 - QML API
@@ -57,22 +61,28 @@ class GraphView(QObject):
     def setActive(self, on: bool) -> None:  # noqa: N802 - QML API
         self.active = bool(on)
 
-    def set_legend(self, legend: list[dict]) -> None:
-        if legend != self._legend:
-            self._legend = legend
-            self.legendChanged.emit()
+    @Slot(result="QVariantList")
+    def ranges(self) -> list:
+        """The axes' current ``[min, max]`` (display units), e.g. to start a fixed scale from."""
+        axes = self.output.axes if self.output is not None else []
+        return [[float(a.lo), float(a.hi)] for a in axes if a.lo is not None and a.hi is not None]
 
-    def reset_axis(self) -> None:
-        for axis in (self.axis if isinstance(self.axis, list) else [self.axis]):
-            axis.reset()
+    def set_style(self, style: Style) -> None:
+        self.state.set_style(style)
 
-    def show(self, frame: graphdata.GraphFrame) -> None:
-        self.runs = frame.series
-        if self.key != "trace" and self.height > 0 and frame.hi > frame.lo:
-            scale = self.height / (frame.hi - frame.lo)
-            self._ticks = [{"value": v, "text": format_tick(v, frame.step), "y": self.height - (v - frame.lo) * scale}
-                           for v in frame.ticks]
-        self.lo, self.hi = frame.lo, frame.hi
+    def configure(self, spec: GraphSpec) -> None:
+        self.state.configure(spec, self.owner.catalogue)
+        self.output = None
+        self.legendChanged.emit()
+
+    def compute(self, data, now: float) -> None:
+        out = self.state.update(data, self.width, self.height, self.dpr, now)
+        self.output = out
+        ticks = [[{"y": y, "text": text} for y, text in ax.ticks] for ax in out.axes] + [[], []]
+        units = [ax.unit for ax in out.axes]
+        if ticks[:2] != self._ticks or units != self._units:
+            self._ticks, self._units = ticks[:2], units
+            self.axesChanged.emit()
         self.updated.emit()
 
 
@@ -82,6 +92,8 @@ class GraphsBridge(QObject):
     windowChanged = Signal()
     loopChanged = Signal()
     rateChanged = Signal()
+    smoothingChanged = Signal()
+    catalogueChanged = Signal()
 
     def __init__(self, sim: SimulationBridge, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -90,11 +102,15 @@ class GraphsBridge(QObject):
         stored = self.settings.value("quick/graphs/selected", DEFAULT_SELECTION)
         self._selection = [str(k) for k in (stored if isinstance(stored, list) else [stored]) if str(k) in GRAPHS]
         self._window = int(self.settings.value("quick/graphs/window_s", 10))
+        smoothing = str(self.settings.value("quick/graphs/smoothing", "off"))
+        self._smoothing = smoothing if smoothing in SMOOTHING_S else "off"
         self._loop = 0
         self._rate = DEFAULT_RATE_HZ
-        self._views: dict[str, GraphView] = {}
-        self._trace = GraphView("trace", self)
-        self.ms = 0.0                                  # last refresh, for reports
+        self.rate_telemetry = float(sim.session.config.simulation.telemetry_rate_hz)
+        self.catalogue = {}
+        self._views: dict[str, GraphView] = {}            # Graphs-screen cards
+        self._tiles: dict[str, GraphView] = {}            # side-panel graph tiles
+        self.ms = 0.0                                     # last refresh, for reports
         self.recording: list[float] | None = None
         self._due = 0.0
         # Refreshed from the frame loop (on_frame) once a frame driver is attached, so a
@@ -104,7 +120,7 @@ class GraphsBridge(QObject):
         self.timer.start(int(1000 / self._rate))
         sim.structureChanged.connect(self._on_structure)
         sim.controllerChanged.connect(self._on_structure)
-        sim.configChanged.connect(self._reset_axes)
+        sim.configChanged.connect(self._on_config)
         self._on_structure()
 
     # ------------------------------------------------------------ choices
@@ -113,16 +129,18 @@ class GraphsBridge(QObject):
 
     def _available(self) -> list[str]:
         plant = self.sim.session.config.plant
-        return graphdata.available_graphs(plant.n_segments, plant.has_cart)
+        return [k for k in GRAPHS if graph_available(k, plant.n_segments, plant.has_cart)]
 
     available = Property("QVariantList", lambda self: [{"key": k, "title": GRAPHS[k].title, "unit": GRAPHS[k].unit}
                                                        for k in self._available()], notify=availableChanged)
     selection = Property("QVariantList", lambda self: [k for k in self._selection if k in self._available()],
                          notify=selectionChanged)
     maxVisible = Property(int, lambda self: MAX_VISIBLE, constant=True)
-    windows = Property("QVariantList", lambda self: WINDOWS_S, constant=True)
+    windows = Property("QVariantList", lambda self: list(WINDOWS_S), constant=True)
+    smoothings = Property("QVariantList", lambda self: list(SMOOTHING_S), constant=True)
     loopLabels = Property("QVariantList", lambda self: self._labels(), notify=availableChanged)
-    trace = Property(QObject, lambda self: self._trace, constant=True)
+    signals = Property("QVariantList", lambda self: [s.to_dict() for s in self.catalogue.values()],
+                       notify=catalogueChanged)
 
     @Slot(str, bool)
     def select(self, key: str, on: bool) -> None:
@@ -137,21 +155,28 @@ class GraphsBridge(QObject):
             self.settings.setValue("quick/graphs/selected", sel)
             self.selectionChanged.emit()
 
-    def _get_window(self) -> int:
-        return self._window
-
     def _set_window(self, seconds: int) -> None:
         if int(seconds) != self._window:
             self._window = int(seconds)
             self.settings.setValue("quick/graphs/window_s", self._window)
+            self._reconfigure_cards()
             self.windowChanged.emit()
 
-    windowS = Property(int, _get_window, _set_window, notify=windowChanged)
+    windowS = Property(int, lambda self: self._window, _set_window, notify=windowChanged)
+
+    def _set_smoothing(self, level: str) -> None:
+        if level in SMOOTHING_S and level != self._smoothing:
+            self._smoothing = level
+            self.settings.setValue("quick/graphs/smoothing", level)
+            self._reconfigure_cards()
+            self.smoothingChanged.emit()
+
+    smoothing = Property(str, lambda self: self._smoothing, _set_smoothing, notify=smoothingChanged)
 
     def _set_loop(self, k: int) -> None:
         if int(k) != self._loop:
             self._loop = int(k)
-            self._legends()
+            self._reconfigure_cards()
             self.loopChanged.emit()
 
     pidLoop = Property(int, lambda self: self._loop, _set_loop, notify=loopChanged)
@@ -162,6 +187,8 @@ class GraphsBridge(QObject):
             self._rate = hz
             self.timer.setInterval(int(1000 / hz))
             self.rateChanged.emit()
+
+    rateHz = Property(float, lambda self: self._rate, _set_rate, notify=rateChanged)
 
     def drive_from_frames(self) -> None:
         """The frame loop calls :meth:`on_frame` from now on."""
@@ -176,60 +203,74 @@ class GraphsBridge(QObject):
                 self._due = now + interval
             self.refresh()
 
-    rateHz = Property(float, lambda self: self._rate, _set_rate, notify=rateChanged)
+    # -------------------------------------------------------------- views
+    def card_spec(self, key: str) -> GraphSpec:
+        plant = self.sim.session.config.plant
+        signals = [s.column for s in graph_series(key, plant.n_segments, self._labels(), self._loop)]
+        return GraphSpec(signals, float(self._window), "auto", [], self._smoothing)
 
     @Slot(str, result=QObject)
     def view(self, key: str) -> QObject:
-        if key == "trace":
-            return self._trace
+        """The view of a Graphs-screen card."""
         if key not in self._views:
-            self._views[key] = GraphView(key, self)
-            self._legends()
+            self._views[key] = GraphView(key, self.card_spec(key), self, GRAPHS[key].title if key in GRAPHS else key,
+                                         self)
         return self._views[key]
+
+    def tile_view(self, tile_id: str, spec: GraphSpec) -> GraphView:
+        """The view of a side-panel graph tile (created or reconfigured)."""
+        view = self._tiles.get(tile_id)
+        if view is None:
+            view = self._tiles[tile_id] = GraphView(tile_id, spec, self, "", self)
+        elif view.state.spec != spec:
+            view.configure(spec)
+        return view
+
+    def drop_tiles(self, keep: set[str]) -> None:
+        for tile_id in [k for k in self._tiles if k not in keep]:
+            self._tiles.pop(tile_id).deleteLater()
+
+    def _reconfigure_cards(self) -> None:
+        for key, v in self._views.items():
+            if key in GRAPHS:
+                v.configure(self.card_spec(key))
 
     # ----------------------------------------------------------- updates
     def _on_structure(self) -> None:
+        plant = self.sim.session.config.plant
         labels = self._labels()
         self._loop = min(self._loop, max(len(labels) - 1, 0))
-        self._legends()
+        self.catalogue = by_key(catalogue(plant.n_segments, plant.has_cart, labels))
+        self.rate_telemetry = float(self.sim.session.config.simulation.telemetry_rate_hz)
+        self._reconfigure_cards()
+        for v in self._tiles.values():
+            v.configure(v.state.spec)
+        self.catalogueChanged.emit()
         self.availableChanged.emit()
         self.selectionChanged.emit()
 
-    def _legends(self) -> None:
-        n = self.sim.n
-        labels = self._labels()
-        for key, v in self._views.items():
-            if key in GRAPHS:
-                v.set_legend([{"label": s.label, "index": i, "dashed": s.dashed}
-                              for i, s in enumerate(graph_series(key, n, labels, self._loop))])
-        self._trace.set_legend([{"label": "θ1", "index": 0, "dashed": False},
-                                {"label": "x", "index": 1, "dashed": False}])
-
-    def _reset_axes(self) -> None:
-        for v in list(self._views.values()) + [self._trace]:
-            v.reset_axis()
+    def _on_config(self) -> None:
+        rate = float(self.sim.session.config.simulation.telemetry_rate_hz)
+        if rate != self.rate_telemetry:
+            self._on_structure()
 
     def refresh(self) -> None:
         """Compute the active views (one telemetry read for all of them)."""
-        active = [v for v in self._views.values() if v.active and v.key in self._available()]
-        trace = self._trace.active
-        if not active and not trace:
+        available = set(self._available())
+        active = [v for k, v in self._views.items() if v.active and k in available]
+        active += [v for v in self._tiles.values() if v.active]
+        if not active:
             return
         started = time.perf_counter()
-        n, labels = self.sim.n, self._labels()
-        names = graphdata.columns([v.key for v in active], n, labels, self._loop)
-        if trace:
-            names += [c for c in ("theta1", "x") if c not in names]
-        window = max(float(self._window), TRACE_WINDOW_S if trace else 0.0)
-        data = self.sim.source.tail(names, window)
+        names = ["t"]
+        window = 0.0
+        for v in active:
+            names += [c for c in v.state.columns() if c not in names]
+            window = max(window, float(v.state.spec.window_s))
+        data = self.sim.source.tail(names, window + 0.5)
         now = time.monotonic()
         for v in active:
-            v.show(graphdata.graph_frame(v.key, data, n, labels, self._loop, float(self._window),
-                                         v.width, v.height, v.axis, now, v.dpr))
-        if trace:
-            self._trace.show(graphdata.trace_frame(data, TRACE_WINDOW_S, self._trace.width, self._trace.height,
-                                                   self._trace.axis, now, self.sim.session.config.plant.has_cart,
-                                                   self._trace.dpr))
+            v.compute(data, now)
         self.ms = (time.perf_counter() - started) * 1000.0
         if self.recording is not None:
             self.recording.append(self.ms)
