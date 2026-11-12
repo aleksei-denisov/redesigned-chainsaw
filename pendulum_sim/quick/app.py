@@ -72,6 +72,11 @@ def main(argv: list[str] | None = None) -> int:
     if IS_ANDROID:
         os.environ.setdefault("QT_ANDROID_DISABLE_ACCESSIBILITY", "1")   # as in the Widgets app
     sys.setswitchinterval(GUI_SWITCH_INTERVAL_S)
+    if args.screenshot:
+        # grabWindow() blocks the GUI thread – holding the GIL – until the render thread has
+        # drawn; with a threaded loop GraphLines.updatePaintNode (Python, on the render
+        # thread) then waits for the GIL: a deadlock. The basic loop grabs on this thread.
+        os.environ.setdefault("QSG_RENDER_LOOP", "basic")
 
     from ..mobile.startup import TIMER
 
