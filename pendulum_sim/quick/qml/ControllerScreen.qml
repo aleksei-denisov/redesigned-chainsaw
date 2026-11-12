@@ -52,8 +52,8 @@ Item {
                 Text {
                     width: parent.width
                     wrapMode: Text.Wrap
-                    text: "Designs a state-feedback (LQR) controller for the current plant with the weights "
-                          + "below and sets every loop's Kp and Kd from it."
+                    text: "Designs a state-feedback (LQR) controller for the current plant with the "
+                          + "“LQR weights for seeding” and sets every loop's Kp and Kd from it."
                     color: Theme.textMuted
                     font.family: Theme.uiFont
                     font.pixelSize: 13
