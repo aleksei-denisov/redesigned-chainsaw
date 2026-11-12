@@ -5,7 +5,8 @@ up to two y axes (one per unit), stable scales (``scale.StableScale``) and optio
 display smoothing. It works **incrementally**: each curve keeps its decimated points
 (in data units) and their triangles (in pixels); a refresh only
 
-* re-decimates the newest samples (columns fixed in time, ``linegeom.decimate_columns``)
+* re-decimates the newest samples (columns fixed in time, ``linegeom.envelope_columns``:
+  the curve goes through each column's mean, its range is drawn as a translucent band)
   – from the start of the column that may still change, or that the smoothing window of
   the newest samples still reaches;
 * strokes those points (plus the one before, whose miter changes);
@@ -25,7 +26,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from ...mobile.plot_math import finite_runs, format_tick, nice_ticks, wrap_degrees
-from .linegeom import decimate_columns, segment_indices, smooth, stroke_vertices
+from .linegeom import VERTEX, band, envelope_columns, merge, segment_indices, smooth, stroke_vertices
 from .scale import StableScale
 from .signals import Signal
 
@@ -33,6 +34,7 @@ SMOOTHING_S = {"off": 0.0, "light": 0.010, "medium": 0.030, "strong": 0.100}
 WINDOWS_S = (5, 10, 20, 30)
 MAX_SIGNALS = 4
 MAX_AXES = 2
+BAND_ALPHA = 0.35            # opacity of a curve's column range relative to its line
 
 
 def columns_for(width: float, dpr: float) -> int:
@@ -83,7 +85,9 @@ class _Curve:
 
     def reset_points(self) -> None:
         self.t = np.zeros(0)
-        self.y = np.zeros(0)
+        self.y = np.zeros(0)                             # column means: the line
+        self.lo = np.zeros(0)                            # column ranges: the band
+        self.hi = np.zeros(0)
         self.brk = np.zeros(0, dtype=bool)
         self.final = -math.inf                           # points before this time are final
         self.verts = np.zeros((0, 4, 3), dtype=np.float32)
@@ -170,9 +174,10 @@ class GraphState:
             dmin, dmax = math.inf, -math.inf
             for k, c in enumerate(self.curves):
                 if self.axis_of[k] == a and c.t.size:
-                    vis = c.y[c.t >= t0]
-                    if vis.size:
-                        dmin, dmax = min(dmin, float(vis.min())), max(dmax, float(vis.max()))
+                    shown = c.t >= t0
+                    if shown.any():
+                        dmin = min(dmin, float(c.lo[shown].min()))
+                        dmax = max(dmax, float(c.hi[shown].max()))
             if not math.isfinite(dmin):
                 dmin = dmax = math.nan
             lo, hi = scale.update(dmin, dmax, now)
@@ -217,7 +222,7 @@ class GraphState:
         y = col[ctx:] * conv
         if wrap:
             y = wrap_degrees(y)
-        new_t, new_y, new_b = [], [], []
+        new_t, new_y, new_lo, new_hi, new_b = [], [], [], [], []
         for sl in finite_runs(y, wrap=wrap):
             rt, ry = tt[sl], y[sl]
             if smooth_n > 1:
@@ -226,11 +231,13 @@ class GraphState:
             if not sel.any():
                 continue
             continues = math.isfinite(cut) and not sel[0]   # the run began before the cut
-            dt, dy = decimate_columns(rt[sel], ry[sel], col_s)
+            dt, dy, dlo, dhi = envelope_columns(rt[sel], ry[sel], col_s)
             b = np.zeros(dt.size, dtype=bool)
             b[0] = not continues
             new_t.append(dt)
             new_y.append(dy)
+            new_lo.append(dlo)
+            new_hi.append(dhi)
             new_b.append(b)
         keep = int(np.searchsorted(c.t, cut, side="left"))
         # a run that continues across the cut joins the point before it
@@ -245,17 +252,19 @@ class GraphState:
         nt = np.concatenate([c.t[:keep]] + new_t) if new_t else c.t[:keep]
         ny = np.concatenate([c.y[:keep]] + new_y) if new_t else c.y[:keep]
         nb = np.concatenate([c.brk[:keep]] + new_b) if new_t else c.brk[:keep]
+        nlo = np.concatenate([c.lo[:keep]] + new_lo) if new_t else c.lo[:keep]
+        nhi = np.concatenate([c.hi[:keep]] + new_hi) if new_t else c.hi[:keep]
         c.stroked = min(c.stroked, max(keep - 1, 0))     # the last kept point's miter changes
         drop = int(np.searchsorted(nt, t_keep, side="left"))
         drop = max(drop - 1, 0)                          # keep one point left of the window
         if drop:
-            nt, ny, nb = nt[drop:], ny[drop:], nb[drop:]
+            nt, ny, nb, nlo, nhi = nt[drop:], ny[drop:], nb[drop:], nlo[drop:], nhi[drop:]
             if nb.size:
                 nb = nb.copy()
                 nb[0] = True
             c.verts = c.verts[drop:]
             c.stroked = max(c.stroked - drop, 0)
-        c.t, c.y, c.brk = nt, ny, nb
+        c.t, c.y, c.brk, c.lo, c.hi = nt, ny, nb, nlo, nhi
         c.final = math.floor((t_last - 0.5 * smooth_n / self.rate_hz) / col_s) * col_s
 
     def _stroke(self, c: _Curve, k: int, sx: float, lo: float, hi: float, height: float):
@@ -275,5 +284,8 @@ class GraphState:
         c.verts = np.concatenate((c.verts[:first], part[lead:])) if first else part
         c.stroked = n
         dash = 4.0 * st.width if self.series[k].dashed else 0.0
-        indices = segment_indices(x, y, dash, c.brk)
-        return c.verts.reshape(-1).view(np.dtype([("x", np.float32), ("y", np.float32), ("rgba", np.uint8, 4)])), indices
+        line = (c.verts.reshape(-1).view(VERTEX), segment_indices(x, y, dash, c.brk))
+        r, g, b, a = color
+        fill = band(x, (hi - c.lo) * sy, (hi - c.hi) * sy, (r, g, b, int(a * BAND_ALPHA)), 2.0 * st.width,
+                    c.brk, y)
+        return merge([fill, line]) if fill[1].size else line

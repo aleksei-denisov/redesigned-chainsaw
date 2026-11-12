@@ -1,4 +1,5 @@
 import QtQuick
+import PendulumItems 1.0
 import Instrument 1.0
 
 // The pendulum as plain QML items. Python only changes four numbers per frame
@@ -23,6 +24,7 @@ Item {
     property real linkW: 10
     readonly property var linkColors: Theme.segments
     property real tipX: width / 2
+    property bool trailActive: true                 // the trajectory is drawn (Settings: off / tip / all)
 
     // grid: a line every 0.25 m, centre line stronger
     Repeater {
@@ -64,6 +66,18 @@ Item {
             color: Theme.tick
         }
     }
+
+    // trajectory of the tip (or of every joint), fading with age: `trail` draws it in metres,
+    // this view tells it the mapping to pixels
+    GraphLines {
+        anchors.fill: parent
+        view: trail                                 // (inside, `view` is this item's property)
+        colors: Theme.segments
+        lineWidth: 1.6
+        active: parent.trailActive && trail.mode !== "off"
+    }
+    readonly property var trailMapping: [pxPerM, width / 2, originY]
+    onTrailMappingChanged: trail.setMapping(pxPerM, width / 2, originY)
 
     Item {
         id: cart

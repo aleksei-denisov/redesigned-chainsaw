@@ -135,3 +135,32 @@ def test_wrapped_angles_break_the_line():
     seg_starts = sorted({int(k) // 4 for k in i[::18]})
     jumps = [s for s in seg_starts if abs(pts[s + 1, 1] - pts[s, 1]) > 50]
     assert not jumps                                         # no line across the ±180° jump
+
+
+def test_chatter_is_drawn_as_a_band_around_a_calm_line():
+    """A force chattering ±40 N around a slow 5 N sine: the line follows the slow part
+    (column means), the chatter shows as a filled band instead of a zigzag."""
+    t = np.arange(0.0, 10.0, 1.0 / RATE)
+    slow = 5.0 * np.sin(0.5 * t)
+    chatter = 40.0 * np.where(np.arange(t.size) % 2, 1.0, -1.0)
+    data = {"t": t, "command": slow + chatter}
+    calm = GraphState(GraphSpec(["command"]), CAT, RATE)
+    calm.set_style(Style([(80, 120, 255, 255)], 2.0, 0.5))
+    out = calm.update(data, 300.0, 200.0, 1.0, now=1.0)       # 150 columns: 13 samples each
+    vertices, indices = out.curves[0]
+    lo, hi = out.axes[0].lo, out.axes[0].hi
+    assert lo <= -40.0 and hi >= 40.0                         # the scale holds the whole band
+    c = calm.curves[0]
+    assert np.max(np.abs(c.y - 5.0 * np.sin(0.5 * c.t))) < 4.0  # the line: the slow part
+    assert np.all(c.hi - c.lo > 70.0)                          # the band: the chatter
+    band_vertices = 2 * c.t.size
+    assert vertices.size == band_vertices + 4 * c.t.size       # band, then the line on top
+    assert indices.max() < vertices.size
+
+
+def test_a_calm_signal_has_no_band():
+    data = _telemetry(10.0, 10.0)
+    g = GraphState(GraphSpec(["command"]), CAT, RATE)
+    out = g.update(data, 300.0, 200.0, 1.0, now=1.0)
+    vertices, _indices = out.curves[0]
+    assert vertices.size == 4 * g.curves[0].t.size             # line only

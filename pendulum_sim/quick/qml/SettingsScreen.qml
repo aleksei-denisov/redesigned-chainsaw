@@ -46,6 +46,19 @@ Item {
                     value: Settings.theme
                     onPicked: (v) => Settings.theme = v
                 }
+                Seg {
+                    title: "Trajectory"
+                    options: [["off", "Off"], ["tip", "Tip"], ["all", "All joints"]]
+                    value: trail.mode
+                    onPicked: (v) => trail.mode = v
+                }
+                Seg {
+                    title: "Trajectory length"
+                    visible: trail.mode !== "off"
+                    options: trail.secondsOptions.map(s => [s, s + " s"])
+                    value: trail.seconds
+                    onPicked: (v) => trail.seconds = v
+                }
             }
 
             Section {

@@ -193,6 +193,65 @@ def decimate_columns(t: np.ndarray, y: np.ndarray, column_s: float) -> tuple[np.
     return t[keep], y[keep]
 
 
+def envelope_columns(t: np.ndarray, y: np.ndarray, column_s: float
+                     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Per column fixed in time (``floor(t / column_s)``): mean time, mean, minimum, maximum.
+
+    A column with one sample keeps it as it is. The curve is drawn through the means and
+    the range [minimum, maximum] as a translucent band (:func:`band`): a signal that
+    oscillates faster than a column – controller chatter, sensor noise – shows as a solid
+    band around a calm centre line, the way an oscilloscope shows it, instead of a zigzag
+    between extremes that aliases into hatching. Columns are independent of where the
+    input starts, so a curve can be extended incrementally from a column boundary.
+    """
+    n = t.size
+    if n == 0 or column_s <= 0:
+        return t, y, y, y
+    col = np.floor(t / column_s).astype(np.int64)
+    change = np.empty(n, dtype=bool)
+    change[0] = True
+    np.not_equal(col[1:], col[:-1], out=change[1:])
+    if change.all():                                    # one sample per column: nothing to merge
+        return t, y, y, y
+    starts = np.flatnonzero(change)
+    counts = np.diff(np.append(starts, n))
+    tc = np.add.reduceat(t, starts) / counts
+    mean = np.add.reduceat(y, starts) / counts
+    return tc, mean, np.minimum.reduceat(y, starts), np.maximum.reduceat(y, starts)
+
+
+def band(xs: np.ndarray, lo: np.ndarray, hi: np.ndarray, rgba: tuple[int, int, int, int],
+         min_height: float, breaks: np.ndarray | None = None,
+         line: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray]:
+    """Vertices (two per point: ``hi``, ``lo``) and indices of the filled band between two
+    curves (pixel coordinates; ``lo``/``hi`` may be in either order).
+
+    A segment is drawn only where the range at one of its ends is taller than the line
+    already covers there – ``min_height`` plus the line's step to its neighbours (``line``:
+    the line's y per point) – so a calm or steep but smooth signal has no band."""
+    n = xs.size
+    if n < 2:
+        return np.zeros(0, dtype=VERTEX), np.zeros(0, dtype=np.uint32)
+    buf = np.empty((n, 2, 3), dtype=np.float32)
+    buf[:, :, 0] = np.asarray(xs, dtype=np.float32)[:, None]
+    buf[:, 0, 1] = hi
+    buf[:, 1, 1] = lo
+    r, g, b, a = rgba
+    buf[:, :, 2] = _rgba_as_float((r * a // 255, g * a // 255, b * a // 255, a))
+    need = np.full(n, float(min_height))
+    if line is not None:
+        step = np.abs(np.diff(np.asarray(line, dtype=np.float64)))
+        need[:-1] += step
+        need[1:] = np.maximum(need[1:], min_height + step)
+    wide = np.abs(np.asarray(hi) - np.asarray(lo)) >= need
+    seg = wide[:-1] | wide[1:]
+    if breaks is not None and len(breaks) == n:
+        seg &= ~np.asarray(breaks[1:], dtype=bool)
+    i = np.flatnonzero(seg).astype(np.uint32) * 2
+    indices = np.stack((i, i + 1, i + 2, i + 1, i + 3, i + 2), axis=1).ravel()
+    return buf.reshape(-1).view(VERTEX), indices
+
+
 def smooth(y: np.ndarray, samples: int) -> np.ndarray:
     """Centred moving average over ``samples`` (odd; ≤ 1: unchanged), shorter at the ends.
 

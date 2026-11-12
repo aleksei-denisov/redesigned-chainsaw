@@ -214,7 +214,7 @@ class QuickApp:
             from PySide6.QtCore import QTimer
 
             QTimer.singleShot(90_000, self._watchdog)
-        self.sim = self.frames = self.graphs = self.panel = self.bench = self.autotune = None
+        self.sim = self.frames = self.graphs = self.panel = self.trail = self.bench = self.autotune = None
         app.applicationStateChanged.connect(self._on_application_state)
 
     # ------------------------------------------------------------ start-up
@@ -260,6 +260,7 @@ class QuickApp:
         from .backend.frames import FrameDriver
         from .backend.graphs import GraphsBridge
         from .backend.panel import PanelBridge
+        from .backend.trail import TrailBridge
         from .backend.parameters import ControllerBridge, ModelBridge
         from .backend.settings import ScenarioBridge
         from .backend.simulation import SimulationBridge
@@ -273,6 +274,7 @@ class QuickApp:
         self.graphs = GraphsBridge(self.sim)
         self.graphs.rateHz = self.settings.graphRate
         self.panel = PanelBridge(self.sim, self.graphs)
+        self.trail = TrailBridge(self.sim)
         self.autotune = AutotuneBridge(self.sim, self.controller)
         self.scenarios = ScenarioBridge(self.sim)
         screen = self.window.screen()
@@ -285,6 +287,7 @@ class QuickApp:
         self.frames.journal = self.journal
         self.frames.attach_graphs(self.graphs)
         self.frames.listeners.append(self.panel)
+        self.frames.listeners.append(self.trail)
         self.bench = Benchmark(self.shell, self.sim, self.graphs, self.frames)
         self.bench.window = self.window
         self.bench.warnings = self.warnings
@@ -292,7 +295,8 @@ class QuickApp:
         # started broke type checks in later files ("Cannot assign object of type …").
         context = self.engine.rootContext()
         for name, obj in (("sim", self.sim), ("model", self.model), ("controller", self.controller),
-                          ("graphs", self.graphs), ("panel", self.panel), ("autotune", self.autotune),
+                          ("graphs", self.graphs), ("panel", self.panel), ("trail", self.trail),
+                          ("autotune", self.autotune),
                           ("scenarios", self.scenarios),
                           ("frames", self.frames), ("bench", self.bench)):
             context.setContextProperty(name, obj)
@@ -383,7 +387,7 @@ class QuickApp:
         import gc
         import random
 
-        from PySide6.QtCore import QMetaObject, QObject
+        from PySide6.QtCore import QMetaObject, QObject, QTimer
 
         panel = self.panel
         step = self.args.panel_stress - self._stress_left

@@ -116,3 +116,17 @@ def test_smoothing_is_centred_and_keeps_length():
     assert s.size == y.size
     assert np.abs(s[20:-20] - y[20:-20]).max() < 0.06          # noise gone, no delay of the slow wave
     assert smooth(noisy, 1) is noisy
+
+
+def test_envelope_columns_mean_min_max_per_column():
+    from pendulum_sim.quick.backend.linegeom import envelope_columns
+
+    t = (np.arange(1000) + 0.5) * 0.001
+    y = np.where(np.arange(t.size) % 2, 1.0, -1.0) + 3.0
+    tc, mean, lo, hi = envelope_columns(t, y, 0.01)
+    assert tc.size == 100
+    assert np.allclose(mean, 3.0) and np.allclose(lo, 2.0) and np.allclose(hi, 4.0)
+    a = envelope_columns(t[500:], y[500:], 0.01)            # independent of where the input starts
+    assert np.allclose(a[1], mean[50:]) and np.allclose(a[0], tc[50:])
+    sparse = t[::20]
+    assert envelope_columns(sparse, y[::20], 0.01)[0] is sparse

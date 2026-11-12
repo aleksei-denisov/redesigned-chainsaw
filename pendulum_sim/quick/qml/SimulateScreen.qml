@@ -28,6 +28,7 @@ Item {
             PendulumView {
                 anchors.fill: parent
                 anchors.margins: 1
+                trailActive: screen.shown
             }
 
             // HUD corner brackets
