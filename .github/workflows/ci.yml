@@ -223,7 +223,8 @@ jobs:
           QSG_RENDER_LOOP: basic
         run: |
           $RUN --strict --panel-stress 60
-          QSG_RENDER_LOOP=threaded $RUN --strict --panel-stress 60
+          $RUN --strict --panel-stress 60 --stress-gc
+          QSG_RENDER_LOOP=threaded $RUN --strict --panel-stress 60 --stress-gc
       - name: Start-up journal and safe mode after an unfinished start
         env:
           PENDULUM_QUICK_DIAG: ${{ runner.temp }}/diag

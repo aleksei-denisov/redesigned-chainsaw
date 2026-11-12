@@ -53,6 +53,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                         help="screenshots: side panel in edit mode, or the editor of its first value/graph tile")
     parser.add_argument("--panel-stress", type=int, metavar="STEPS", default=None,
                         help="CI: edit the side panel STEPS times through the tile editor's buttons, then exit")
+    parser.add_argument("--stress-gc", action="store_true", help="--panel-stress: collect garbage after each edit")
     parser.add_argument("--smoke-test", type=float, metavar="SECONDS", default=None,
                         help="visit every screen, run the simulation for SECONDS, then exit (CI)")
     parser.add_argument("--screenshot", metavar="PNG", default=None, help="save the window after 2.5 s and exit")
@@ -388,9 +389,13 @@ class QuickApp:
         import random
 
         from PySide6.QtCore import QMetaObject, QObject, QTimer
+        from PySide6.QtGui import QGuiApplication
+        from shiboken6 import Shiboken
 
         panel = self.panel
         step = self.args.panel_stress - self._stress_left
+        if not hasattr(self, "_stress_buttons"):
+            self._stress_buttons = {n: self.window.findChild(QObject, n) for n in ("tileMoveUp", "tileMoveDown")}
         if self._stress_left <= 0:
             print(f"panel stress: {self.args.panel_stress} edits done, {len(panel.tiles)} tiles, "
                   f"{len(self.warnings)} QML warnings", flush=True)
@@ -401,25 +406,33 @@ class QuickApp:
         panel.editing = True
         tiles = panel.model.tiles
         action = ("up", "down", "up", "down", "add", "remove", "update")[step % 7]
+        detail = ""
         if action == "add":
-            panel.add(rng.choice(["value", "graph", "status"]))
+            kind = rng.choice(["value", "graph", "status"])
+            panel.add(kind)
+            detail = kind
         elif action == "remove" and len(tiles) > 3:
-            panel.remove(tiles[rng.randrange(len(tiles))]["id"])
+            tile = tiles[rng.randrange(len(tiles))]
+            detail = tile["type"]
+            panel.remove(tile["id"])
         elif action == "update":
             graph = next((t for t in tiles if t["type"] == "graph"), None)
             if graph:
                 panel.update(graph["id"], {"window": rng.choice([5, 10, 20]), "smoothing": rng.choice(["off", "light"])})
-        else:
-            panel.selected = tiles[rng.randrange(len(tiles))]["id"]
-            name = "tileMoveUp" if action == "up" else "tileMoveDown"
-            button = self.window.findChild(QObject, name)
+        elif action in ("up", "down"):
+            tile = tiles[rng.randrange(len(tiles))]
+            panel.selected = tile["id"]
+            detail = tile["type"]
+            button = self._stress_buttons["tileMoveUp" if action == "up" else "tileMoveDown"]
             if button is None:
-                print(f"panel stress: no {name} button", flush=True)
+                print("panel stress: tile editor buttons not found", flush=True)
                 self._done(False)
                 return
             QMetaObject.invokeMethod(button, "clicked")
-        print(f"panel stress {step}: {action}", flush=True)
-        gc.collect()
+        if self.args.stress_gc:
+            gc.collect()
+        print(f"panel stress {step}: {action} {detail}; window wrapper valid {Shiboken.isValid(self.window)}, "
+              f"{len(QGuiApplication.topLevelWindows())} windows", flush=True)
         QTimer.singleShot(120, self._stress_step)
 
     def _smoke_step(self, screen: str, theme: str | None) -> None:
