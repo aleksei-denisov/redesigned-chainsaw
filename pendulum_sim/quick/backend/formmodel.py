@@ -26,14 +26,15 @@ class FormModel(QAbstractListModel):
     def __init__(self, form: Form, on_edit: Callable[[str, object], None],
                  visible: Callable[[str], bool] | None = None,
                  editable: Callable[[str], bool] | None = None,
-                 note: Callable[[str], str] | None = None, parent=None) -> None:
+                 note: Callable[[str], str] | None = None, expanded: dict[str, bool] | None = None,
+                 parent=None) -> None:
         super().__init__(parent)
         self.form = form
         self.on_edit = on_edit
         self._visible = visible or (lambda _section: True)
         self._editable = editable or (lambda _key: True)
         self._note = note
-        self._expanded: dict[str, bool] = {}
+        self._expanded: dict[str, bool] = dict(expanded or {})     # overrides of the sections' defaults
         self._rows: list[tuple[str, object]] = []      # ("section", Section) | ("field", (Field, section key))
         self._index: dict[str, int] = {}
         self.refresh()

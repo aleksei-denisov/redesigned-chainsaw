@@ -33,7 +33,8 @@ class ModelBridge(QObject):
         self._fill()
         self._plant_model = FormModel(self.plant_form, self._edit_plant, visible=self.plant_form.visible,
                                       editable=self.plant_form.editable, note=self._note, parent=self)
-        self._sim_model = FormModel(self.sim_form, self._edit_simulation, parent=self)
+        self._sim_model = FormModel(self.sim_form, self._edit_simulation, expanded={"simulation": True},
+                                    parent=self)          # (its own card on the Model screen)
         sim.configChanged.connect(self._reload)
 
     plantModel = Property(QObject, lambda self: self._plant_model, constant=True)
