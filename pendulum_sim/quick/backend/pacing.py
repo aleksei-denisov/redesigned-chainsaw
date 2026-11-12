@@ -4,7 +4,8 @@
 frame on every ``k``-th vsync, so it runs at ``R / k`` fps with even frame spacing:
 120, 60, 40 and 30 fps on a 120 Hz display, 60 and 30 on a 60 Hz one. A fixed rate is
 kept as chosen. In *auto* mode the :class:`Pacer` keeps the highest rate that holds,
-judged by **missed frames** (a gap of more than 1.5 intervals between shown frames):
+judged by **missed frames** (a gap of more than ``MISSED`` intervals between shown frames,
+i.e. a vsync without a new frame; shorter late frames are jitter, not drops):
 
 * **step down** when more than ``MISS_FRACTION`` of the frames in the last second were
   missed, or when the 95th percentile of a frame's work exceeds the whole interval;
@@ -30,7 +31,8 @@ from collections import deque
 
 WINDOW_S = 1.0               # statistics over the last second
 DOWN_FRACTION = 1.0          # p95 work above this share of the interval → slower rate
-MISS_FRACTION = 0.05         # more missed frames than this → slower rate
+MISS_FRACTION = 0.10         # more missed frames than this → slower rate
+MISSED = 1.8                 # a gap longer than this many intervals: a frame was dropped
 UP_HOLD_S = 3.0              # this long without a missed frame → faster rate
 MAX_HOLD_S = 60.0            # (doubled after each failed try, up to this)
 FAILED_TRY_S = 5.0           # stepping down this soon after stepping up counts as a failed try
@@ -128,7 +130,7 @@ class Pacer:
         """A shown frame took ``cost_ms`` of work; ``now`` in seconds (monotonic)."""
         missed = False
         if self._last_shown is not None:
-            missed = (now - self._last_shown) * 1000.0 > 1.5 * self.interval_ms
+            missed = (now - self._last_shown) * 1000.0 > MISSED * self.interval_ms
         self._last_shown = now
         if self.mode != "auto":
             return
