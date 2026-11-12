@@ -9,6 +9,15 @@ no more than two memory copies per series.
 
 Registered before the QML engine starts (``app.py``); NumPy is imported on first use,
 so the registration does not slow down the loading screen.
+
+**Ownership.** Scene-graph nodes, geometries and materials are not QObjects: Qt deletes
+them (with the item, or when the scene graph is released) without telling Python. If
+their Python wrappers still owned them, Python would delete them a second time when the
+wrappers go – after the item is destroyed, e.g. on every side-panel edit – and corrupt
+the heap (the crash of *Move up* / *Move down*). So each object is handed to Qt right
+after it is attached (``Shiboken.invalidate``: the wrapper lets go without deleting),
+and the item keeps non-owning wrappers (``Shiboken.wrapInstance``) to update them. The
+vertex layout (``AttributeSet``) a geometry refers to is kept for the whole run.
 """
 
 from __future__ import annotations
@@ -28,6 +37,28 @@ from PySide6.QtQuick import (
 
 MAX_SERIES = 6
 NOTES: dict[str, str] = {}          # problems seen while drawing (shown in the performance report)
+_ATTRIBUTES: list = []              # the vertex layout every geometry refers to (never freed)
+
+
+def _attributes():
+    if not _ATTRIBUTES:
+        _ATTRIBUTES.append(QSGGeometry.defaultAttributes_ColoredPoint2D())
+    return _ATTRIBUTES[0]
+
+
+def _new_geometry(wide: bool) -> QSGGeometry:
+    geometry = QSGGeometry(_attributes(), 0, 0, _index_type(wide))
+    geometry.setDrawingMode(QSGGeometry.DrawingMode.DrawTriangles)
+    return geometry
+
+
+def _hand_over(obj, kind):
+    """Qt owns ``obj`` from now on: drop Python's ownership, keep a non-owning wrapper."""
+    from shiboken6 import Shiboken
+
+    address = Shiboken.getCppPointer(obj)[0]
+    Shiboken.invalidate(obj)
+    return Shiboken.wrapInstance(address, kind)
 
 
 def _index_type(wide: bool) -> int:
@@ -57,7 +88,7 @@ class GraphLines(QQuickItem):
         self._width = 2.0
         self._active = False
         self._pending = False                           # the view has new curves for the next sync
-        self._nodes: list[tuple] = []                   # (node, geometry, material, attributes, wide)
+        self._nodes: list[list] = []                    # [node, geometry, wide] (non-owning wrappers)
         self.widthChanged.connect(self._sync)
         self.heightChanged.connect(self._sync)
         self.visibleChanged.connect(self._sync)
@@ -158,17 +189,18 @@ class GraphLines(QQuickItem):
             root = QSGTransformNode()
             self._nodes = []
             for _ in range(MAX_SERIES):
-                attributes = QSGGeometry.defaultAttributes_ColoredPoint2D()
-                geometry = QSGGeometry(attributes, 0, 0, _index_type(False))
-                geometry.setDrawingMode(QSGGeometry.DrawingMode.DrawTriangles)
-                material = QSGVertexColorMaterial()
                 node = QSGGeometryNode()
+                geometry = _new_geometry(False)
                 node.setGeometry(geometry)
                 node.setFlag(QSGNode.Flag.OwnsGeometry)
+                material = QSGVertexColorMaterial()
                 node.setMaterial(material)
                 node.setFlag(QSGNode.Flag.OwnsMaterial)
-                root.appendChildNode(node)
-                self._nodes.append([node, geometry, material, attributes, False])
+                root.appendChildNode(node)               # OwnedByParent: deleted with the root
+                geometry = _hand_over(geometry, QSGGeometry)
+                _hand_over(material, QSGVertexColorMaterial)
+                node = _hand_over(node, QSGGeometryNode)
+                self._nodes.append([node, geometry, False])
             self._pending = True
         if not self._pending:
             return root
@@ -188,12 +220,11 @@ class GraphLines(QQuickItem):
                     node.markDirty(QSGNode.DirtyStateBit.DirtyGeometry)
                 continue
             wide = vertices.size > 65535
-            if wide != entry[4]:                         # index width changes: a new geometry
-                attributes = QSGGeometry.defaultAttributes_ColoredPoint2D()
-                geometry = QSGGeometry(attributes, 0, 0, _index_type(wide))
-                geometry.setDrawingMode(QSGGeometry.DrawingMode.DrawTriangles)
-                node.setGeometry(geometry)
-                entry[1], entry[3], entry[4] = geometry, attributes, wide
+            if wide != entry[2]:                         # index width changes: a new geometry
+                geometry = _new_geometry(wide)
+                node.setGeometry(geometry)               # (Qt deletes the old one: OwnsGeometry)
+                geometry = _hand_over(geometry, QSGGeometry)
+                entry[1], entry[2] = geometry, wide
             if geometry.vertexCount() != vertices.size or geometry.indexCount() != indices.size:
                 geometry.allocate(vertices.size, indices.size)
             _copy(geometry.vertexData(), np.ascontiguousarray(vertices))
