@@ -65,6 +65,20 @@ On the device: *Settings → Run performance test* (about 45 s; leave the tablet
 then *Copy report*. The report is saved after every phase, so if the app dies during the
 test, the next start offers what was measured (*Show report*).
 
+### If the app does not start
+
+Every start writes a journal (`pendulum_sim/quick/diagnostics.py`): its steps, Python
+exceptions, Qt warnings and – through `faulthandler` – native crashes. After a start that
+did not finish, the next start opens in *safe mode* (physics in a thread, no performance
+hints) and shows the journal with a *Copy* button. A copy is also kept where a file
+manager or a computer connected over USB can read it, without adb:
+
+`Android/media/com.adenisov.invertedpendulumquick/logs/` – `start.log` (the current start),
+`previous-start.log` and `previous-fault.log` (the start before).
+
+The journal is opened by `main.py` before anything else is imported, so even a failure
+while importing the app is recorded. With adb: `adb logcat -d | grep -iE "python|qt|DEBUG"`.
+
 ## Building the APK
 
 The Qt Quick app is a separate build target with its own application id

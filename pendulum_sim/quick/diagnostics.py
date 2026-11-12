@@ -8,7 +8,12 @@ for a few seconds is marked complete. If the previous start was not, the app sta
 recorded, with a button to copy it.
 
 Files live in the app's private storage on Android (``ANDROID_PRIVATE``) and in
-``~/.cache/pendulum-quick`` elsewhere.
+``~/.cache/pendulum-quick`` elsewhere. On Android a copy goes to the app's shared media
+folder, ``Android/media/<package>/logs`` (readable with a file manager or over USB without
+adb): the current ``start.log`` line by line, and the previous start's ``start.log`` and
+``fault.log`` as ``previous-start.log`` and ``previous-fault.log``. A native crash that
+repeats on every start is therefore readable from the second start on, even when the app
+never gets as far as showing its safe-mode screen.
 """
 
 from __future__ import annotations
@@ -34,10 +39,28 @@ def folder() -> Path:
     return path
 
 
+def public_folder() -> Path | None:
+    """``Android/media/<package>/logs`` on Android (``None`` elsewhere or if unavailable)."""
+    private = os.environ.get("ANDROID_PRIVATE")
+    if not private:
+        return None
+    package = next((part for part in Path(private).parts if part.count(".") >= 2), None)
+    if package is None:
+        return None
+    for root in ("/storage/emulated/0", "/sdcard"):
+        path = Path(root) / "Android" / "media" / package / "logs"
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+            return path
+        except OSError:
+            continue
+    return None
+
+
 class Journal:
     """The current start's log, and what the previous start left behind."""
 
-    def __init__(self, path: Path | None = None) -> None:
+    def __init__(self, path: Path | None = None, public: Path | None = None) -> None:
         self.dir = path or folder()
         self.log_path = self.dir / "start.log"
         self.fault_path = self.dir / "fault.log"
@@ -48,6 +71,15 @@ class Journal:
         self._lock = threading.Lock()
         self._log = self._open(self.log_path)
         self._fault = self._open(self.fault_path)
+        self.public = public if public is not None or path is not None else public_folder()
+        self._mirror = None
+        if self.public is not None:
+            for name, text in (("previous-start.log", self.previous), ("previous-fault.log", self.previous_fault)):
+                try:
+                    (self.public / name).write_text(text, encoding="utf-8")
+                except OSError:
+                    pass
+            self._mirror = self._open(self.public / "start.log")
         if self._fault is not None:
             try:
                 faulthandler.enable(file=self._fault, all_threads=True)
@@ -72,12 +104,13 @@ class Journal:
     def write(self, text: str) -> None:
         line = f"{time.monotonic() - self._t0:7.3f}  {text}"
         with self._lock:
-            if self._log is not None:
-                try:
-                    self._log.write(line + "\n")
-                    self._log.flush()
-                except (OSError, ValueError):
-                    pass
+            for f in (self._log, self._mirror):
+                if f is not None:
+                    try:
+                        f.write(line + "\n")
+                        f.flush()
+                    except (OSError, ValueError):
+                        pass
 
     def exception(self, where: str, exc_info=None) -> None:
         text = "".join(traceback.format_exception(*(exc_info or sys.exc_info())))

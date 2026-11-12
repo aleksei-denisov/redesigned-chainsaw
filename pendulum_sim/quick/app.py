@@ -62,11 +62,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     return args
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None, journal=None) -> int:
+    """``journal``: the start-up journal if the caller already opened one (Android entry point)."""
     args = parse_args(sys.argv[1:] if argv is None else argv)
-    from .diagnostics import Journal
+    if journal is None:
+        from .diagnostics import Journal
 
-    journal = Journal()
+        journal = Journal()
     journal.install_hooks()
     os.environ.setdefault("QT_QUICK_CONTROLS_STYLE", "Basic")
     if IS_ANDROID:

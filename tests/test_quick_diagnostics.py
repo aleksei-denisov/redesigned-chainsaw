@@ -44,3 +44,23 @@ def test_native_crash_output_is_included(tmp_path):
     nxt = Journal(tmp_path)
     assert "Segmentation fault" in nxt.report()
     _close(nxt)
+
+
+def test_journal_mirrors_to_a_public_folder(tmp_path):
+    private, public = tmp_path / "private", tmp_path / "public"
+    private.mkdir()
+    public.mkdir()
+    first = Journal(private, public)
+    first.write("step one")
+    assert "step one" in (public / "start.log").read_text()
+    second = Journal(private, public)                    # the first never completed
+    assert "step one" in (public / "previous-start.log").read_text()
+    assert (public / "previous-fault.log").exists()
+    assert second.previous_failed
+
+
+def test_public_folder_is_only_used_on_android(monkeypatch):
+    from pendulum_sim.quick.diagnostics import public_folder
+
+    monkeypatch.delenv("ANDROID_PRIVATE", raising=False)
+    assert public_folder() is None
