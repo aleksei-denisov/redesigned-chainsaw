@@ -225,7 +225,7 @@ jobs:
           $RUN --strict --panel-stress 60 || {
             echo "::group::native backtrace (gdb)"
             sudo apt-get install -y gdb > /dev/null
-            gdb -q -batch -ex "set follow-fork-mode parent" -ex "set detach-on-fork on" -ex run \
+            timeout -s KILL 150 xvfb-run -a -s "-screen 0 1280x800x24" gdb -q -batch -ex "set follow-fork-mode parent" -ex "set detach-on-fork on" -ex run \
               -ex "bt 60" -ex "info threads" --args python -X faulthandler -m pendulum_sim.quick --strict --panel-stress 60
             echo "::endgroup::"
             exit 1
