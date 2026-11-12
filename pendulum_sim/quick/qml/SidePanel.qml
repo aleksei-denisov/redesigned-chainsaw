@@ -256,53 +256,53 @@ Item {
             border.color: Theme.accent
             border.width: frame.isDropTarget ? 3 : 2
         }
-        Rectangle {                                                      // grip: drag to move
-            visible: panel.editing
-            x: 4
-            y: 4
-            width: 40
-            height: 40
-            radius: 20
-            color: Theme.accentSoft
-            border.color: Theme.accent
-            Text {
-                anchors.centerIn: parent
-                text: "≡"
-                color: Theme.accentSoftText
-                font.pixelSize: 22
-            }
-            MouseArea {
-                id: grip
-                anchors.fill: parent
-                anchors.margins: -4
-                preventStealing: true                                   // not a scroll of the panel
-                onPressed: (m) => sidePanel.dragStart(frame.tileId, grip, m.x, m.y)
-                onPositionChanged: (m) => sidePanel.dragMove(grip, m.x, m.y)
-                onReleased: sidePanel.dragEnd(true)
-                onCanceled: sidePanel.dragEnd(false)
-            }
-        }
-        Rectangle {                                                      // remove
+        Row {                                                            // grip (drag to move) and remove
             visible: panel.editing
             anchors.right: parent.right
             anchors.rightMargin: 4
             y: 4
-            width: 40
-            height: 40
-            radius: 20
-            color: removeArea.pressed ? Theme.border : Theme.surface
-            border.color: Theme.border
-            Text {
-                anchors.centerIn: parent
-                text: "×"
-                color: Theme.text
-                font.pixelSize: 22
+            spacing: 4
+            Rectangle {
+                width: 36
+                height: 36
+                radius: 18
+                color: Theme.accentSoft
+                border.color: Theme.accent
+                Text {
+                    anchors.centerIn: parent
+                    text: "≡"
+                    color: Theme.accentSoftText
+                    font.pixelSize: 20
+                }
+                MouseArea {
+                    id: grip
+                    anchors.fill: parent
+                    anchors.margins: -4
+                    preventStealing: true                               // not a scroll of the panel
+                    onPressed: (m) => sidePanel.dragStart(frame.tileId, grip, m.x, m.y)
+                    onPositionChanged: (m) => sidePanel.dragMove(grip, m.x, m.y)
+                    onReleased: sidePanel.dragEnd(true)
+                    onCanceled: sidePanel.dragEnd(false)
+                }
             }
-            MouseArea {
-                id: removeArea
-                anchors.fill: parent
-                anchors.margins: -4
-                onClicked: panel.remove(frame.tileId)
+            Rectangle {
+                width: 36
+                height: 36
+                radius: 18
+                color: removeArea.pressed ? Theme.border : Theme.surface
+                border.color: Theme.border
+                Text {
+                    anchors.centerIn: parent
+                    text: "×"
+                    color: Theme.text
+                    font.pixelSize: 20
+                }
+                MouseArea {
+                    id: removeArea
+                    anchors.fill: parent
+                    anchors.margins: -4
+                    onClicked: panel.remove(frame.tileId)
+                }
             }
         }
     }

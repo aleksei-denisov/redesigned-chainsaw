@@ -14,13 +14,24 @@ Card {
     radius: Theme.radiusCard
     readonly property bool twoAxes: view !== null && view.unitRight.length > 0
 
-    Caption {
+    Row {                                       // title (uppercase) and units (as written)
         x: 14
         y: 12
         width: legend.x - x - 8
-        elide: Text.ElideRight
-        text: (card.title.length ? card.title + "  ·  " : "")
-              + (card.view ? card.view.unit + (card.twoAxes ? "  |  " + card.view.unitRight : "") : "")
+        spacing: 8
+        clip: true
+        Caption {
+            id: titleText
+            visible: card.title.length > 0
+            text: card.title
+            anchors.verticalCenter: parent.verticalCenter
+        }
+        Mono {
+            text: card.view ? card.view.unit + (card.twoAxes ? " | " + card.view.unitRight : "") : ""
+            color: Theme.textMuted
+            font.pixelSize: 12
+            anchors.verticalCenter: parent.verticalCenter
+        }
     }
     Row {
         id: legend
