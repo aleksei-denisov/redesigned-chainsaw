@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import Property, QObject, Signal, Slot
 
-SCREENS = ["simulate", "graphs", "controller", "settings"]
+SCREENS = ["simulate", "graphs", "controller", "model", "settings"]
 
 
 class AppBridge(QObject):

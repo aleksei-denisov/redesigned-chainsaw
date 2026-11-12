@@ -244,7 +244,7 @@ jobs:
         run: |
           mkdir -p build/quick-preview
           for theme in light dark; do
-            for screen in simulate graphs controller settings; do
+            for screen in simulate graphs controller model settings; do
               $RUN --strict --theme $theme --screen $screen --screenshot build/quick-preview/$screen-$theme.png
             done
           done

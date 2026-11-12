@@ -48,7 +48,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--scenario", default=SCENARIO)
     parser.add_argument("--theme", choices=["system", "light", "dark"], default=None,
                         help="theme for this run (not saved)")
-    parser.add_argument("--screen", choices=["simulate", "graphs", "controller", "settings"], default="simulate")
+    parser.add_argument("--screen", choices=["simulate", "graphs", "controller", "model", "settings"], default="simulate")
     parser.add_argument("--panel", choices=["edit", "value", "graph"], default=None,
                         help="screenshots: side panel in edit mode, or the editor of its first value/graph tile")
     parser.add_argument("--panel-stress", type=int, metavar="STEPS", default=None,
@@ -377,10 +377,11 @@ class QuickApp:
             QTimer.singleShot(1500, self._stress_step)
         elif args.smoke_test is not None:
             started = time.perf_counter()
-            steps = [("graphs", None), ("controller", None), ("settings", None), ("settings", "dark"),
-                     ("controller", None), ("simulate", None), ("simulate", "light")]
+            steps = [("graphs", None), ("controller", None), ("model", None), ("settings", None),
+                     ("settings", "dark"), ("controller", None), ("model", None), ("simulate", None),
+                     ("simulate", "light")]
             for i, (screen, theme) in enumerate(steps):
-                QTimer.singleShot(400 * (i + 1), lambda s=screen, t=theme: self._smoke_step(s, t))
+                QTimer.singleShot(300 * (i + 1), lambda s=screen, t=theme: self._smoke_step(s, t))
             QTimer.singleShot(int(max(args.smoke_test, 2.5) * 1000), lambda: self._smoke_check(started))
 
     def _stress_step(self) -> None:

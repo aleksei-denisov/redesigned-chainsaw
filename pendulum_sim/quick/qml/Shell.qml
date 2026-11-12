@@ -50,7 +50,8 @@ Item {
                     visible: current
                     source: modelData === "simulate" ? "SimulateScreen.qml"
                           : modelData === "graphs" ? "GraphsScreen.qml"
-                          : modelData === "controller" ? "ControllerScreen.qml" : "SettingsScreen.qml"
+                          : modelData === "controller" ? "ControllerScreen.qml"
+                          : modelData === "model" ? "ModelScreen.qml" : "SettingsScreen.qml"
                     onCurrentChanged: if (current) visited = true
                     Component.onCompleted: if (current) visited = true
                     onLoaded: item.shown = Qt.binding(() => screenLoader.current && shell.visible)
@@ -89,7 +90,7 @@ Item {
                         spacing: 6
                         Repeater {
                             model: [["simulate", "Simulate"], ["graphs", "Graphs"], ["controller", "Controller"],
-                                    ["settings", "Settings"]]
+                                    ["model", "Model"], ["settings", "Settings"]]
                             Btn {
                                 required property var modelData
                                 text: modelData[1]
