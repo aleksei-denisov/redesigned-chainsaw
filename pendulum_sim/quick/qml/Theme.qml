@@ -29,6 +29,23 @@ QtObject {
     readonly property var palette: dark ? ["#7C97FF", "#F5A524", "#2ED3B7", "#A48AFB", "#F670C7"]
                                         : ["#2F5BFF", "#B54708", "#0E9384", "#7A5AF8", "#C11574"]
     readonly property var segments: [accent, segment2, segment3]
+    // curve colours of side-panel graph tiles, in signal order (θ amber, x blue as before)
+    readonly property var tilePalette: [angle, accent, segment3, palette[3], palette[4]]
+    // colour tokens a value tile can use (panel_model.COLORS)
+    readonly property var tokens: ["text", "accent", "angle", "segment2", "segment3", "success",
+                                   "palette0", "palette1", "palette2", "palette3", "palette4"]
+    function token(name) {
+        if (name && name.indexOf("palette") === 0)
+            return palette[parseInt(name.substring(7))] || text
+        switch (name) {
+        case "accent": return accent
+        case "angle": return angle
+        case "segment2": return segment2
+        case "segment3": return segment3
+        case "success": return success
+        default: return text
+        }
+    }
 
     readonly property string uiFont: "Space Grotesk"
     readonly property string monoFont: "JetBrains Mono"

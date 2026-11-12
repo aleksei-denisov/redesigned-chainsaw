@@ -150,11 +150,12 @@ def test_graph_views_only_compute_when_active(bridges):
     view = graphs.view("angle")
     view.setSize(300.0, 120.0)
     graphs.refresh()
-    assert view.runs == []                                # not active: nothing computed
+    assert view.output is None                            # not active: nothing computed
     view.setActive(True)
     graphs.refresh()
-    assert len(view.runs) == 3                            # θ1..θ3
-    assert all(xs.size > 1 and xs.size == ys.size for runs in view.runs for xs, ys in runs)
+    assert len(view.output.curves) == 3                   # θ1..θ3
+    assert all(v.size > 0 and i.size > 0 for v, i in view.output.curves)
+    assert [e["label"] for e in view.legend] == ["θ1", "θ2", "θ3"]
     assert view.ticks and all(0.0 <= t["y"] <= 120.0 for t in view.ticks)
 
 
@@ -203,3 +204,63 @@ def test_settings_theme_is_remembered(app):
     assert not s.isDark
     assert SettingsBridge().theme == "dark"
     SettingsBridge().theme = "system"
+
+
+class _DictStore(dict):
+    def get(self, key, default=None):
+        return super().get(key, default)
+
+    def set(self, key, value):
+        self[key] = value
+
+
+def test_panel_default_layout_values_and_graph_tile(bridges):
+    from pendulum_sim.quick.backend.panel import PanelBridge
+
+    sim, _model, _controller, graphs, _sent = bridges
+    panel = PanelBridge(sim, graphs, _DictStore())
+    kinds = [t["type"] for t in panel.tiles]
+    assert kinds == ["value"] * 4 + ["graph"]                 # the layout the screen had before
+    assert panel.rows == [[0, 1], [2, 3], [4]]
+    sim.start()
+    assert _wait(lambda: sim.source.stats()["t"] > 0.5)
+    panel.on_frame(1e9)
+    values = panel.values
+    theta = panel.tiles[0]
+    assert theta["unit"] == "°" and values[theta["id"]][0] in "+-"
+    graph_id = panel.tiles[4]["id"]
+    view = panel.view(graph_id)
+    view.setSize(300.0, 200.0)
+    view.setActive(True)
+    graphs.refresh()
+    assert len(view.output.curves) == 2 and view.unit == "°" and view.unitRight == "m"
+    assert view.ticks and view.ticksRight
+    assert len(view.ranges()) == 2
+
+
+def test_panel_editing_and_layouts(bridges):
+    from pendulum_sim.quick.backend.panel import PanelBridge
+
+    sim, _model, _controller, graphs, _sent = bridges
+    store = _DictStore()
+    panel = PanelBridge(sim, graphs, store)
+    panel.editing = True
+    status = panel.add("status")
+    assert panel.tiles[-1]["type"] == "status" and panel.status[status]
+    assert panel.status[status][0]["label"] == "Scenario"
+    panel.selected = status
+    panel.update(status, {"show_gains": False})
+    assert all(r["label"] in ("Scenario", "Controller") for r in panel.status[status])
+    panel.move(status, 0)
+    assert panel.tiles[0]["id"] == status
+    assert panel.saveAs("Mine")
+    panel.remove(status)
+    assert panel.selected == "" and len(panel.tiles) == 5
+    panel.load("Mine")
+    assert panel.layoutName == "Mine" and panel.tiles[0]["type"] == "status"
+    panel.editing = False
+    assert panel.selected == ""
+    again = PanelBridge(sim, graphs, store)                     # persisted
+    assert again.layoutName == "Mine" and again.tiles[0]["type"] == "status"
+    again.reset()
+    assert [t["type"] for t in again.tiles] == ["value"] * 4 + ["graph"]

@@ -16,6 +16,10 @@ Item {
         event.accepted = true
         if (reportOpen)
             reportOpen = false
+        else if (panel.selected.length)
+            panel.selected = ""                 // close the tile editor …
+        else if (panel.editing)
+            panel.editing = false               // … then leave the panel's edit mode
         else
             App.back()
     }
@@ -164,6 +168,11 @@ Item {
             font.pixelSize: 11
             text: sim.fpsText + " · " + frames.statsText
         }
+    }
+
+    // ------------------------------------------------- side-panel tile editor
+    TileEditor {
+        anchors.fill: parent
     }
 
     // -------------------------------------------------------- report sheet

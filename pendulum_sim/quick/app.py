@@ -6,7 +6,7 @@ Start-up order, built for a fast first frame:
 2. ``Main.qml`` – only the loading screen – is shown;
 3. after its first frame: NumPy and the simulation core, the physics process and the
    backend objects, exposed to QML as context objects (``sim``, ``model``,
-   ``controller``, ``graphs``, ``autotune``, ``scenarios``, ``frames``, ``bench``);
+   ``controller``, ``graphs``, ``panel``, ``autotune``, ``scenarios``, ``frames``, ``bench``);
 4. the app shell and the Simulate screen are built and fade in; other screens are
    built when first opened;
 5. once the Simulate screen is on screen: the frame loop's helpers start (Android
@@ -49,6 +49,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--theme", choices=["system", "light", "dark"], default=None,
                         help="theme for this run (not saved)")
     parser.add_argument("--screen", choices=["simulate", "graphs", "settings"], default="simulate")
+    parser.add_argument("--panel", choices=["edit", "value", "graph"], default=None,
+                        help="screenshots: side panel in edit mode, or the editor of its first value/graph tile")
     parser.add_argument("--smoke-test", type=float, metavar="SECONDS", default=None,
                         help="visit every screen, run the simulation for SECONDS, then exit (CI)")
     parser.add_argument("--screenshot", metavar="PNG", default=None, help="save the window after 2.5 s and exit")
@@ -203,7 +205,7 @@ class QuickApp:
             from PySide6.QtCore import QTimer
 
             QTimer.singleShot(90_000, self._watchdog)
-        self.sim = self.frames = self.graphs = self.bench = self.autotune = None
+        self.sim = self.frames = self.graphs = self.panel = self.bench = self.autotune = None
         app.applicationStateChanged.connect(self._on_application_state)
 
     # ------------------------------------------------------------ start-up
@@ -248,6 +250,7 @@ class QuickApp:
         from .backend.bench import Benchmark
         from .backend.frames import FrameDriver
         from .backend.graphs import GraphsBridge
+        from .backend.panel import PanelBridge
         from .backend.parameters import ControllerBridge, ModelBridge
         from .backend.settings import ScenarioBridge
         from .backend.simulation import SimulationBridge
@@ -260,6 +263,7 @@ class QuickApp:
         self.controller = ControllerBridge(self.sim)
         self.graphs = GraphsBridge(self.sim)
         self.graphs.rateHz = self.settings.graphRate
+        self.panel = PanelBridge(self.sim, self.graphs)
         self.autotune = AutotuneBridge(self.sim, self.controller)
         self.scenarios = ScenarioBridge(self.sim)
         screen = self.window.screen()
@@ -271,6 +275,7 @@ class QuickApp:
         self.window.frameSwapped.connect(self.frames.swapped, Qt.ConnectionType.QueuedConnection)
         self.frames.journal = self.journal
         self.frames.attach_graphs(self.graphs)
+        self.frames.listeners.append(self.panel)
         self.bench = Benchmark(self.shell, self.sim, self.graphs, self.frames)
         self.bench.window = self.window
         self.bench.warnings = self.warnings
@@ -278,7 +283,8 @@ class QuickApp:
         # started broke type checks in later files ("Cannot assign object of type …").
         context = self.engine.rootContext()
         for name, obj in (("sim", self.sim), ("model", self.model), ("controller", self.controller),
-                          ("graphs", self.graphs), ("autotune", self.autotune), ("scenarios", self.scenarios),
+                          ("graphs", self.graphs), ("panel", self.panel), ("autotune", self.autotune),
+                          ("scenarios", self.scenarios),
                           ("frames", self.frames), ("bench", self.bench)):
             context.setContextProperty(name, obj)
         s = self.settings
@@ -346,6 +352,11 @@ class QuickApp:
             self.bench.finished.connect(lambda: self._done(not self.warnings or not args.strict))
             QTimer.singleShot(1000, self.bench.start)
         elif args.screenshot:
+            if args.panel:
+                self.panel.editing = True
+                if args.panel != "edit":
+                    tile = next((t for t in self.panel.model.tiles if t["type"] == args.panel), None)
+                    self.panel.selected = tile["id"] if tile else ""
             QTimer.singleShot(2500, self._screenshot)
         elif args.smoke_test is not None:
             started = time.perf_counter()

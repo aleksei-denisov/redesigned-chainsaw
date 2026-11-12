@@ -49,6 +49,80 @@ Item {
             }
 
             Section {
+                title: "Side panel (Simulate screen)"
+                Body {
+                    width: parent.width
+                    color: Theme.textMuted
+                    text: "Long-press any tile on the right of the Simulate screen (under the pendulum in "
+                          + "portrait) to edit the panel. While editing:\n"
+                          + "•  tap a tile to choose what it shows – a value, a graph or the controller status – "
+                          + "and how (size, colour, curves, time window, scale, smoothing, height);\n"
+                          + "•  drag a tile by its ≡ grip onto another tile to move it there;\n"
+                          + "•  tap × to remove a tile, + Value / + Graph / + Status to add one;\n"
+                          + "•  tap Done or press Back to finish. Changes are kept at once."
+                }
+                Flow {
+                    width: parent.width
+                    spacing: 10
+                    Mono {
+                        height: Theme.touch
+                        verticalAlignment: Text.AlignVCenter
+                        text: "Layout: " + panel.layoutName
+                    }
+                    Btn { text: "Edit panel now"; onClicked: { panel.editing = true; App.screen = "simulate" } }
+                    Btn { text: "Reset to default"; onClicked: panel.reset() }
+                }
+                Flow {
+                    width: parent.width
+                    spacing: 10
+                    Field {
+                        id: layoutName
+                        width: 220
+                        placeholder: "Layout name"
+                        onAccepted: {}
+                    }
+                    Btn {
+                        text: "Save current as"
+                        filled: true
+                        enabled: layoutName.text.trim().length > 0
+                        onClicked: if (panel.saveAs(layoutName.text)) layoutName.text = ""
+                    }
+                }
+                Caption { text: "Saved layouts"; visible: panel.layoutNames.length > 0 }
+                Repeater {
+                    model: panel.layoutNames
+                    Flow {
+                        required property string modelData
+                        width: parent.width
+                        spacing: 8
+                        Mono {
+                            width: 180
+                            height: Theme.touch
+                            verticalAlignment: Text.AlignVCenter
+                            elide: Text.ElideRight
+                            text: modelData
+                            color: modelData === panel.layoutName ? Theme.accentSoftText : Theme.text
+                        }
+                        Btn { text: "Load"; active: modelData === panel.layoutName; onClicked: panel.load(modelData) }
+                        Btn { text: "Delete"; onClicked: panel.deleteLayout(modelData) }
+                    }
+                }
+                Seg {
+                    title: "Smoothing of new graphs"
+                    options: [["off", "Off"], ["light", "Light"], ["medium", "Medium"], ["strong", "Strong"]]
+                    value: graphs.smoothing
+                    onPicked: (v) => graphs.smoothing = v
+                }
+                Body {
+                    width: parent.width
+                    color: Theme.textMuted
+                    font.pixelSize: 13
+                    text: "Smoothing is for display only (a centred moving average over 10, 30 or 100 ms); "
+                          + "it also applies to the Graphs screen. Each graph tile keeps its own setting."
+                }
+            }
+
+            Section {
                 title: "Scenario"
                 Body { width: parent.width; text: sim.scenarioName; color: Theme.textMuted }
                 Flow {
