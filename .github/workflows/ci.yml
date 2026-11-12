@@ -218,6 +218,12 @@ jobs:
         env:
           QSG_RENDER_LOOP: basic
         run: $RUN --smoke-test 3 --strict
+      - name: Side-panel edits through the tile editor (move, add, remove, update)
+        env:
+          QSG_RENDER_LOOP: basic
+        run: |
+          $RUN --strict --panel-stress 60
+          QSG_RENDER_LOOP=threaded $RUN --strict --panel-stress 60
       - name: Start-up journal and safe mode after an unfinished start
         env:
           PENDULUM_QUICK_DIAG: ${{ runner.temp }}/diag

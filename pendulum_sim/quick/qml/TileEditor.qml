@@ -178,6 +178,7 @@ Rectangle {
                 font.weight: Font.DemiBold
             }
             Btn {
+                objectName: "tileMoveUp"
                 text: "Move up"
                 enabled: editor.tile !== null && panel.tiles.length > 0 && panel.tiles[0].id !== panel.selected
                 onClicked: {
@@ -187,6 +188,7 @@ Rectangle {
                 }
             }
             Btn {
+                objectName: "tileMoveDown"
                 text: "Move down"
                 enabled: editor.tile !== null && panel.tiles.length > 0
                          && panel.tiles[panel.tiles.length - 1].id !== panel.selected

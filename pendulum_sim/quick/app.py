@@ -51,6 +51,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--screen", choices=["simulate", "graphs", "settings"], default="simulate")
     parser.add_argument("--panel", choices=["edit", "value", "graph"], default=None,
                         help="screenshots: side panel in edit mode, or the editor of its first value/graph tile")
+    parser.add_argument("--panel-stress", type=int, metavar="STEPS", default=None,
+                        help="CI: edit the side panel STEPS times through the tile editor's buttons, then exit")
     parser.add_argument("--smoke-test", type=float, metavar="SECONDS", default=None,
                         help="visit every screen, run the simulation for SECONDS, then exit (CI)")
     parser.add_argument("--screenshot", metavar="PNG", default=None, help="save the window after 2.5 s and exit")
@@ -365,6 +367,9 @@ class QuickApp:
                     tile = next((t for t in self.panel.model.tiles if t["type"] == args.panel), None)
                     self.panel.selected = tile["id"] if tile else ""
             QTimer.singleShot(2500, self._screenshot)
+        elif args.panel_stress is not None:
+            self._stress_left = args.panel_stress
+            QTimer.singleShot(1500, self._stress_step)
         elif args.smoke_test is not None:
             started = time.perf_counter()
             steps = [("graphs", None), ("settings", None), ("settings", "dark"), ("simulate", None),
@@ -372,6 +377,46 @@ class QuickApp:
             for i, (screen, theme) in enumerate(steps):
                 QTimer.singleShot(400 * (i + 1), lambda s=screen, t=theme: self._smoke_step(s, t))
             QTimer.singleShot(int(max(args.smoke_test, 2.5) * 1000), lambda: self._smoke_check(started))
+
+    def _stress_step(self) -> None:
+        """One side-panel edit as a user makes it (buttons of the tile editor), then the next."""
+        import gc
+        import random
+
+        from PySide6.QtCore import QMetaObject, QObject
+
+        panel = self.panel
+        step = self.args.panel_stress - self._stress_left
+        if self._stress_left <= 0:
+            print(f"panel stress: {self.args.panel_stress} edits done, {len(panel.tiles)} tiles, "
+                  f"{len(self.warnings)} QML warnings", flush=True)
+            self._done(not self.args.strict or not self.warnings)
+            return
+        self._stress_left -= 1
+        rng = random.Random(step)
+        panel.editing = True
+        tiles = panel.model.tiles
+        action = ("up", "down", "up", "down", "add", "remove", "update")[step % 7]
+        if action == "add":
+            panel.add(rng.choice(["value", "graph", "status"]))
+        elif action == "remove" and len(tiles) > 3:
+            panel.remove(tiles[rng.randrange(len(tiles))]["id"])
+        elif action == "update":
+            graph = next((t for t in tiles if t["type"] == "graph"), None)
+            if graph:
+                panel.update(graph["id"], {"window": rng.choice([5, 10, 20]), "smoothing": rng.choice(["off", "light"])})
+        else:
+            panel.selected = tiles[rng.randrange(len(tiles))]["id"]
+            name = "tileMoveUp" if action == "up" else "tileMoveDown"
+            button = self.window.findChild(QObject, name)
+            if button is None:
+                print(f"panel stress: no {name} button", flush=True)
+                self._done(False)
+                return
+            QMetaObject.invokeMethod(button, "clicked")
+        print(f"panel stress {step}: {action}", flush=True)
+        gc.collect()
+        QTimer.singleShot(120, self._stress_step)
 
     def _smoke_step(self, screen: str, theme: str | None) -> None:
         self.shell.screen = screen
