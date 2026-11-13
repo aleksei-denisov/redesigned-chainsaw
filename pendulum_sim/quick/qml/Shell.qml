@@ -52,7 +52,8 @@ Item {
                           : modelData === "graphs" ? "GraphsScreen.qml"
                           : modelData === "controller" ? "ControllerScreen.qml"
                           : modelData === "model" ? "ModelScreen.qml"
-                          : modelData === "autotune" ? "AutotuneScreen.qml" : "SettingsScreen.qml"
+                          : modelData === "autotune" ? "AutotuneScreen.qml"
+                          : modelData === "experiments" ? "ExperimentsScreen.qml" : "SettingsScreen.qml"
                     onCurrentChanged: if (current) visited = true
                     Component.onCompleted: if (current) visited = true
                     onLoaded: item.shown = Qt.binding(() => screenLoader.current && shell.visible)
@@ -91,7 +92,8 @@ Item {
                         spacing: 6
                         Repeater {
                             model: [["simulate", "Simulate"], ["graphs", "Graphs"], ["controller", "Controller"],
-                                    ["model", "Model"], ["autotune", "Auto-tune"], ["settings", "Settings"]]
+                                    ["model", "Model"], ["autotune", "Auto-tune"], ["experiments", "Experiments"],
+                                    ["settings", "Settings"]]
                             Btn {
                                 required property var modelData
                                 text: modelData[1]

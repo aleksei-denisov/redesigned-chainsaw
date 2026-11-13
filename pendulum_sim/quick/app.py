@@ -48,11 +48,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--scenario", default=SCENARIO)
     parser.add_argument("--theme", choices=["system", "light", "dark"], default=None,
                         help="theme for this run (not saved)")
-    parser.add_argument("--screen", choices=["simulate", "graphs", "controller", "model", "autotune", "settings"], default="simulate")
+    parser.add_argument("--screen", choices=["simulate", "graphs", "controller", "model", "autotune", "experiments", "settings"], default="simulate")
     parser.add_argument("--panel", choices=["edit", "value", "graph"], default=None,
                         help="screenshots: side panel in edit mode, or the editor of its first value/graph tile")
     parser.add_argument("--autotune", choices=["running", "result"], default=None,
                         help="screenshots: start a quick auto-tune; shoot it running, or its result after a cancel")
+    parser.add_argument("--experiments", action="store_true",
+                        help="screenshots: run two experiments (the second with 1.5 x Kp of the first loop) first")
     parser.add_argument("--panel-stress", type=int, metavar="STEPS", default=None,
                         help="CI: edit the side panel STEPS times through the tile editor's buttons, then exit")
     parser.add_argument("--stress-gc", action="store_true", help="--panel-stress: collect garbage after each edit")
@@ -217,7 +219,7 @@ class QuickApp:
             from PySide6.QtCore import QTimer
 
             QTimer.singleShot(90_000, self._watchdog)
-        self.sim = self.frames = self.graphs = self.panel = self.trail = self.bench = self.autotune = None
+        self.sim = self.frames = self.graphs = self.panel = self.trail = self.experiments = self.bench = self.autotune = None
         app.applicationStateChanged.connect(self._on_application_state)
 
     # ------------------------------------------------------------ start-up
@@ -264,6 +266,7 @@ class QuickApp:
         from .backend.graphs import GraphsBridge
         from .backend.panel import PanelBridge
         from .backend.trail import TrailBridge
+        from .backend.experiments import ExperimentsBridge
         from .backend.parameters import ControllerBridge, ModelBridge
         from .backend.settings import ScenarioBridge
         from .backend.simulation import SimulationBridge
@@ -278,6 +281,7 @@ class QuickApp:
         self.graphs.rateHz = self.settings.graphRate
         self.panel = PanelBridge(self.sim, self.graphs)
         self.trail = TrailBridge(self.sim)
+        self.experiments = ExperimentsBridge(self.sim, self.controller)
         self.autotune = AutotuneBridge(self.sim, self.controller)
         self.scenarios = ScenarioBridge(self.sim)
         screen = self.window.screen()
@@ -299,6 +303,7 @@ class QuickApp:
         context = self.engine.rootContext()
         for name, obj in (("sim", self.sim), ("model", self.model), ("controller", self.controller),
                           ("graphs", self.graphs), ("panel", self.panel), ("trail", self.trail),
+                          ("experiments", self.experiments),
                           ("autotune", self.autotune),
                           ("scenarios", self.scenarios),
                           ("frames", self.frames), ("bench", self.bench)):
@@ -373,13 +378,17 @@ class QuickApp:
                 if args.panel != "edit":
                     tile = next((t for t in self.panel.model.tiles if t["type"] == args.panel), None)
                     self.panel.selected = tile["id"] if tile else ""
-            if args.autotune:
+            if args.experiments:
+                self.shell.screen = "experiments"
+                self._demo_runs = 0
+                QTimer.singleShot(800, self._demo_experiment)
+            elif args.autotune:
                 self.shell.screen = "autotune"
                 self.autotune.choose("quick")
                 QTimer.singleShot(800, self.autotune.start)
                 if args.autotune == "result":
                     QTimer.singleShot(9000, self.autotune.cancel)
-                QTimer.singleShot(7000 if args.autotune == "running" else 14000, self._screenshot)
+                QTimer.singleShot(3200 if args.autotune == "running" else 14000, self._screenshot)
             else:
                 QTimer.singleShot(2500, self._screenshot)
         elif args.panel_stress is not None:
@@ -388,11 +397,27 @@ class QuickApp:
         elif args.smoke_test is not None:
             started = time.perf_counter()
             steps = [("graphs", None), ("controller", None), ("model", None), ("autotune", None),
-                     ("settings", None), ("settings", "dark"), ("controller", None), ("model", None),
-                     ("autotune", None), ("simulate", None), ("simulate", "light")]
+                     ("experiments", None), ("settings", None), ("settings", "dark"), ("controller", None),
+                     ("model", None), ("autotune", None), ("experiments", None), ("simulate", None),
+                     ("simulate", "light")]
             for i, (screen, theme) in enumerate(steps):
-                QTimer.singleShot(240 * (i + 1), lambda s=screen, t=theme: self._smoke_step(s, t))
+                QTimer.singleShot(200 * (i + 1), lambda s=screen, t=theme: self._smoke_step(s, t))
             QTimer.singleShot(int(max(args.smoke_test, 2.5) * 1000), lambda: self._smoke_check(started))
+
+    def _demo_experiment(self) -> None:
+        """--experiments: two runs, the second with a changed gain, then the screenshot."""
+        if self.experiments.running:
+            QTimer.singleShot(200, self._demo_experiment)
+            return
+        if self._demo_runs == 1:
+            kp = self.sim.session.config.controller.loops[0].kp
+            self.controller._edit("loop0.kp", kp * 1.5)
+        if self._demo_runs < 2:
+            self._demo_runs += 1
+            self.experiments.run()
+            QTimer.singleShot(200, self._demo_experiment)
+            return
+        QTimer.singleShot(800, self._screenshot)
 
     def _stress_step(self) -> None:
         """One side-panel edit as a user makes it (buttons of the tile editor), then the next."""
@@ -512,6 +537,8 @@ class QuickApp:
             self.graphs.timer.stop()
         if self.autotune is not None:
             self.autotune.shutdown()
+        if self.experiments is not None:
+            self.experiments.shutdown()
         if self.sim is not None:
             self.sim.shutdown()
         self.window.close()

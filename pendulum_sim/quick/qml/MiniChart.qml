@@ -10,6 +10,7 @@ Item {
     property string unit: ""
     property string xLabel: ""
     property bool zeroLine: false
+    property var hlines: []                   // dashed reference lines (e.g. a settling band)
 
     function niceStep(span, n) {
         var raw = span / Math.max(n, 1)
@@ -42,6 +43,7 @@ Item {
         return { lo: Math.floor(lo / step) * step, hi: Math.ceil(hi / step) * step, step: step, xmin: xmin, xmax: xmax }
     }
     onSeriesChanged: canvas.requestPaint()
+    onHlinesChanged: canvas.requestPaint()
     onWidthChanged: canvas.requestPaint()
     onHeightChanged: canvas.requestPaint()
     Connections { target: Theme; function onDarkChanged() { canvas.requestPaint() } }
@@ -83,6 +85,18 @@ Item {
                 ctx.textAlign = "right"
                 ctx.textBaseline = "bottom"
                 ctx.fillText(chart.xLabel, left + w, height)
+            }
+            ctx.strokeStyle = Theme.textMuted
+            ctx.lineWidth = 1
+            for (var hv of chart.hlines) {
+                if (hv < r.lo || hv > r.hi)
+                    continue
+                ctx.beginPath()
+                for (var dx = left; dx < left + w; dx += 10) {
+                    ctx.moveTo(dx, Math.round(Y(hv)) + 0.5)
+                    ctx.lineTo(Math.min(dx + 5, left + w), Math.round(Y(hv)) + 0.5)
+                }
+                ctx.stroke()
             }
             for (var s of chart.series) {
                 var n = s.ys.length

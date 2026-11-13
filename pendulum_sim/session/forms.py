@@ -23,6 +23,7 @@ from dataclasses import dataclass, replace
 from ..control import AntiWindup, ControlAction, ControllerConfig, DerivativeMode, LQRWeights, PIDLoopConfig
 from ..physics import MAX_SEGMENTS, ActuatorParams, BaseType, PlantParams, SegmentParams
 from ..simulation import SimulationSettings
+from ..simulation.config import DisturbanceSettings, ExperimentSettings
 
 SEED_MAX = 9999                   # slider range of the noise seed (typing allows the same)
 GAIN_RANGE = 1e6
@@ -407,3 +408,50 @@ class ControllerForm(Form):
 
     def loop_signals(self) -> list[str]:
         return [lp.signal for lp in self._loops]
+
+
+# =============================================================== experiments
+EXPERIMENT_SECTION = Section("experiment", "Experiment", (
+    number("duration", "Duration", 0.1, 600.0, 1, "s", "log"),
+    number("tolerance", "Settling band ±", 0.01, 45.0, 2, "°", "log",
+           hint="settling time = first time after which every segment stays inside the band"),
+    Field("reuse", "Same start as the first run", "switch",
+          hint="plant, initial state and noise of the first run"),
+))
+
+DISTURBANCE_SECTION = Section("disturbance", "Scheduled disturbance", (
+    Field("dist_on", "Push the tip during the run", "switch"),
+    number("dist_time", "Start time", 0.0, 600.0, 2, "s"),
+    number("dist_force", "Force", -1000.0, 1000.0, 3, "N", "symlog"),
+    number("dist_dur", "Duration", 0.001, 10.0, 3, "s", "log"),
+), expanded=False)
+
+
+class ExperimentForm(Form):
+    """The *Experiments* screen's settings (as the Widgets experiment rows)."""
+
+    sections = (EXPERIMENT_SECTION, DISTURBANCE_SECTION)
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.set_settings(ExperimentSettings())
+        self._put("reuse", True)
+
+    def set_settings(self, e: ExperimentSettings) -> None:
+        self._put("duration", e.duration)
+        self._put("tolerance", e.settle_tolerance_deg)
+        self._put("dist_on", e.disturbance.enabled)
+        self._put("dist_time", e.disturbance.time)
+        self._put("dist_force", e.disturbance.force)
+        self._put("dist_dur", e.disturbance.duration)
+
+    def set(self, key: str, value) -> ExperimentSettings:
+        self._put(key, value)
+        return self.settings()
+
+    def settings(self) -> ExperimentSettings:
+        v = self.values
+        return ExperimentSettings(
+            duration=v["duration"], settle_tolerance_deg=v["tolerance"],
+            disturbance=DisturbanceSettings(enabled=v["dist_on"], time=v["dist_time"], force=v["dist_force"],
+                                            duration=v["dist_dur"]))

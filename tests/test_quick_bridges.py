@@ -291,3 +291,33 @@ def test_undo_redo_reset_of_controller_and_model(bridges):
     model.redo()
     model.reset()
     assert sim.session.config.plant.cart_mass == mass0
+
+
+def test_experiments_run_compare_and_use_gains(bridges):
+    from pendulum_sim.quick.backend.experiments import ExperimentsBridge
+
+    sim, _model, controller, _graphs, _sent = bridges
+    ex = ExperimentsBridge(sim, controller)
+    ex._model.apply("duration", 0.5)
+
+    def finish():
+        ex.run()
+        assert ex.running
+        assert _wait(lambda: (ex._poll() or True) and not ex.running, 30.0)
+
+    finish()
+    kp = sim.session.config.controller.loops[0].kp
+    controller._edit("loop0.kp", kp * 1.5)
+    finish()
+    runs = ex.runs
+    assert [r["name"] for r in runs] == ["Run 1", "Run 2"] and runs[1]["color"] == 1
+    assert {p["key"] for p in ex.plots} >= {"angle", "error", "effort"}
+    assert all(len(p["series"]) == 2 for p in ex.plots)
+    tol = ex.form.get("tolerance")
+    assert ex.plots[1]["hlines"] == [tol, -tol]
+    ex.toggleVisible(0)
+    assert all(len(p["series"]) == 1 for p in ex.plots)
+    ex.useGains(0)
+    assert sim.session.config.controller.loops[0].kp == kp
+    ex.remove(0)
+    assert len(ex.runs) == 1 and ex.runs[0]["color"] == 1      # colours stay with their run

@@ -24,6 +24,7 @@ QtObject {
     readonly property color accentSoftText: dark ? "#A9BCFF" : "#2F5BFF"
     readonly property color angle: dark ? "#F5A524" : "#B54708"
     readonly property color success: dark ? "#47CD89" : "#067647"
+    readonly property color danger: dark ? "#F97066" : "#D92D20"
     readonly property color segment2: dark ? "#A9BCFF" : "#1D3FCC"
     readonly property color segment3: dark ? "#2ED3B7" : "#0E9384"
     readonly property var palette: dark ? ["#7C97FF", "#F5A524", "#2ED3B7", "#A48AFB", "#F670C7"]
@@ -34,6 +35,11 @@ QtObject {
     // colour tokens a value tile can use (panel_model.COLORS)
     readonly property var tokens: ["text", "accent", "angle", "segment2", "segment3", "success",
                                    "palette0", "palette1", "palette2", "palette3", "palette4"]
+    // experiment runs (as the Widgets app's run colours; darker on the light theme)
+    readonly property var runColors: dark
+        ? ["#4FA3FF", "#FF6B6B", "#4CD07D", "#C792EA", "#FFA14A", "#7FDBCA", "#F78C6C", "#E0E0E0", "#FFCB6B", "#89DDFF"]
+        : ["#1F6FD1", "#D93F3F", "#1E9E50", "#8E52C9", "#D9771A", "#1F9C8A", "#C2552F", "#5B6474", "#B88A00", "#1A8FC2"]
+    function runColor(i) { return runColors[((i % runColors.length) + runColors.length) % runColors.length] }
     function token(name) {
         if (name && name.indexOf("palette") === 0)
             return palette[parseInt(name.substring(7))] || text
