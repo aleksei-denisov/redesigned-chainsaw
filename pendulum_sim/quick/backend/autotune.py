@@ -21,7 +21,7 @@ from ...session import texts
 from ...session.jobs import TuneWorker
 from ...simulation import parallel
 from ...simulation.tuning import TuneProgress, TuningResult, TuningSettings, estimate_seconds
-from ...simulation.tuning2 import DEFAULT_OPTIONS, budget, options_from_dict
+from ...simulation.tuning2 import DEFAULT_OPTIONS, HOLD_COST, HOLD_SECONDS, budget, options_from_dict
 from .simulation import SimulationBridge
 
 POLL_MS = 100
@@ -65,6 +65,7 @@ class AutotuneBridge(QObject):
             stored = {}
         self._options = {**DEFAULT_OPTIONS, **(stored if isinstance(stored, dict) else {})}
         sim.controllerChanged.connect(self.optionsChanged)      # the loop list
+        sim.configChanged.connect(self.optionsChanged)          # a scenario: loops, cart or not
         self.timer = QTimer(self)
         self.timer.setInterval(POLL_MS)
         self.timer.timeout.connect(self._poll)
@@ -77,7 +78,8 @@ class AutotuneBridge(QObject):
         if self.push_test_s is None:
             return "measuring this device…"
         settings = TuningSettings.preset(preset)
-        ratio = budget(settings, self._tune_options()) / max(settings.candidates, 1)
+        options = self._tune_options()
+        ratio = budget(settings, options) / max(settings.candidates, 1) * (HOLD_COST if options.hold else 1.0)
         return f"about {texts.fmt_duration(estimate_seconds(settings, self.push_test_s, self.workers) * ratio)}"
 
     presets = Property("QVariantList", lambda self: [
@@ -92,6 +94,7 @@ class AutotuneBridge(QObject):
         return options_from_dict(self._options, self._signals())
 
     options = Property("QVariantMap", lambda self: self._options, notify=optionsChanged)
+    hasCart = Property(bool, lambda self: self.sim.session.config.plant.has_cart, notify=optionsChanged)
     loopList = Property("QVariantList", lambda self: [
         {"signal": lp.signal, "name": lp.name, "enabled": lp.enabled}
         for lp in self.sim.session.config.controller.loops], notify=optionsChanged)
@@ -201,9 +204,19 @@ class AutotuneBridge(QObject):
             notes.insert(0, "Cancelled – this is the best result found so far.")
         if after <= before * 1.02:
             notes.append("The current gains are already about as robust as this search can find.")
+        if getattr(result, "hold", False) and not math.isnan(result.hold_residual):
+            notes.append(self._hold_note(result))
         notes.append(f"For testing, a tip push of about {result.recommended_push:g} N is half of what it "
                      f"recovers from (the push force is not changed).")
         return " ".join(notes)
+
+    @staticmethod
+    def _hold_note(result) -> str:
+        """How much of the steady-push offset of the held quantity is left at the end."""
+        def left(r: float) -> str:
+            return "–" if math.isnan(r) else f"{100 * r:.0f} %"
+        return (f"Steady push: {left(result.baseline_hold_residual)} → {left(result.hold_residual)} of the "
+                f"{result.held}'s offset left after {HOLD_SECONDS:g} s (0 % = back at its setpoint).")
 
     @Slot()
     def close(self) -> None:

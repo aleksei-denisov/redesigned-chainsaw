@@ -105,3 +105,40 @@ def test_only_switching_off_is_allowed():
     res = tune(cfg, FAST, TuneOptions(mode="loops", loops=["theta1"], terms=(), off_terms=("ki",)))
     loop = next(lp for lp in res.controller.loops if lp.signal == "theta1")
     assert loop.ki == 0.0 and loop.kp == 40.0
+
+
+# ------------------------------------------------------------- hold position
+def _with_cart_integral(cfg, ratio: float):
+    from pendulum_sim.simulation.tuning import DEFAULT_WEIGHTS
+    c = cfg.copy()
+    c.controller = full_controller(cfg, DEFAULT_WEIGHTS, [ratio] + [-99.0] * (len(cfg.controller.loops) - 1))
+    return c
+
+
+def test_hold_residual_tells_a_cart_integral_from_pd():
+    from pendulum_sim.simulation.tuning2 import OFF, hold_residual
+    cfg = scenario("single_cart_pid")
+    pd = hold_residual(_with_cart_integral(cfg, OFF), 0.2, FAST)
+    pid = hold_residual(_with_cart_integral(cfg, math.log10(0.3)), 0.2, FAST)
+    assert pd > 0.8                                   # a PD controller keeps the steady offset
+    assert pid < 0.2                                  # the cart integral brings the cart back
+    assert hold_residual(_with_cart_integral(cfg, OFF), 1e3, FAST) == 1.0     # it falls
+
+
+def test_hold_score_and_options():
+    from pendulum_sim.simulation.tuning2 import DEFAULT_OPTIONS, options_from_dict, score
+    assert DEFAULT_OPTIONS["hold"] is False and options_from_dict({}, ["cart"]).hold is False
+    assert options_from_dict({"hold": True}, ["cart"]).hold is True
+    assert score(2.0, 0.3, False) == 2.0 and score(2.0, math.nan, True) == 2.0
+    assert score(2.0, 1.0, True) == pytest.approx(1.0) and score(2.0, 0.0, True) == 2.0
+
+
+def test_tune_with_hold_reports_the_residuals():
+    cfg = scenario("single_cart_pid")
+    res = tune(cfg, FAST, TuneOptions(mode="full", integral=True, hold=True))
+    assert res.hold and res.held == "cart position"
+    assert 0.0 <= res.hold_residual <= 1.0 and 0.0 <= res.baseline_hold_residual <= 1.0
+    # the seeded cart-only integral holds position far better than the PD start
+    assert res.hold_residual < 0.5
+    off = tune(cfg, FAST, TuneOptions(mode="full", integral=True))
+    assert not off.hold and math.isnan(off.hold_residual)

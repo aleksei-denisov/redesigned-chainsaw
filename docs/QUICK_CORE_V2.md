@@ -51,6 +51,17 @@ cost), same parallel workers – new search options:
   search says so.
 * **Methods** (optional) – the other derivative source and anti-windup strategies,
   tried one change at a time for the tuned loops and kept if they help.
+* **Hold position under a steady push** (optional, off by default) – a second test per
+  candidate: a steady tip force of 5 % of its recoverable push for 12 s. Held quantity:
+  the cart position, or without a cart segment 1's angle (on a cart the pendulum must
+  lean against a steady force, so the cart is what can be brought back). Residual `r` =
+  mean |offset| over the last second / peak |offset| (0 = back at the setpoint, 1 = a PD
+  controller's steady offset, or a fall). Candidates are compared by
+  `push · (1 − 0.5 r)`: a controller that holds its position beats one that does not as
+  long as it recovers from at least half the push. With the integral search, the held
+  loop's integral alone at `Ki/Kp` = 0.1 / 0.2 / 0.3 1/s is tried too (the research
+  below found exactly that one useful). The result shows the residual before → after.
+  About 40 % more search time.
 
 Controller frequency and output limits are not tuned: they are hardware limits, and
 the search would always push them to the maximum.
@@ -98,5 +109,5 @@ a slope, a sensor or setpoint offset) – but only with the integral on the **ca
 position** loop, at a moderate rate (`Ki/Kp ≈ 0.1–0.3 /s`); integrals on the angle loops
 make things worse. The integral search therefore stays on by default and keeps an
 integral only where the metric improves; to make the benefit of a cart integral visible
-to the tuner, a steady-push criterion would have to be added to the metric (proposed,
-not implemented yet).
+to the tuner, the optional *Hold position under a steady push* criterion adds it to the
+metric (above).

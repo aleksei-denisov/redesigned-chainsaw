@@ -321,3 +321,19 @@ def test_experiments_run_compare_and_use_gains(bridges):
     assert sim.session.config.controller.loops[0].kp == kp
     ex.remove(0)
     assert len(ex.runs) == 1 and ex.runs[0]["color"] == 1      # colours stay with their run
+
+
+def test_autotune_hold_option_and_note(bridges):
+    from pendulum_sim.quick.backend.autotune import AutotuneBridge
+    from pendulum_sim.simulation.tuning2 import TuningResult2
+
+    sim, _model, controller, _graphs, _sent = bridges
+    at = AutotuneBridge(sim, controller)
+    assert at.options["hold"] is False and at.hasCart
+    at.setOptions({**at.options, "hold": True})
+    assert at._tune_options().hold is True
+    res = TuningResult2(controller=sim.session.config.controller, weights=None, max_push=1.0,
+                        baseline_max_push=1.0, recommended_push=0.5, evaluations=3, elapsed=1.0,
+                        hold=True, hold_residual=0.02, baseline_hold_residual=0.97, held="cart position")
+    assert "97 % → 2 %" in at._notes(res)
+    at.setOptions({**at.options, "hold": False})                  # the stored default stays off

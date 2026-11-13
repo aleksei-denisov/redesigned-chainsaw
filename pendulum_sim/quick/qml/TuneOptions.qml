@@ -196,6 +196,15 @@ Column {
         Note { text: (opts.o.loops || []).length === 0 ? "No loop chosen: all loops are searched." : "" ; visible: text.length > 0 }
     }
     Switch {
+        label: "Hold position under a steady push"
+        hint: "also test each candidate under a steady push at the tip and prefer the one that brings the "
+              + (autotune.hasCart ? "cart" : "first segment") + " back – usually an integral gain on the "
+              + (autotune.hasCart ? "cart position" : "segment 1") + " loop. Takes about 40 % longer."
+              + (opts.o.mode === "loops" ? " Set Ki of that loop to Tune." : "")
+        checked: opts.o.hold === true
+        onToggled: opts.put("hold", !checked)
+    }
+    Switch {
         label: "Also try the methods"
         hint: "derivative from the rate sensor or from the filtered error, and the anti-windup strategy"
         checked: opts.o.methods === true

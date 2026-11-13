@@ -23,6 +23,18 @@ the LQR search a design that breaks a limit is rejected (clipping an LQR design 
 make it unstable) – if no design within the limits recovers from any push, the search
 says so.
 
+**Hold position** (optional, off by default) – a second test per candidate: a steady
+tip force (``HOLD_FORCE`` × the candidate's recoverable push) for ``HOLD_SECONDS``. The
+*held quantity* is the cart position, or without a cart segment 1's angle (on a cart the
+pendulum must lean against a steady force, so the cart is what can be brought back). Its
+residual ``r`` = mean |offset| over the last second / peak |offset| (0: back at the
+setpoint, 1: a PD controller's steady offset, or it fell). Candidates are then compared by
+``push · (1 − HOLD_WEIGHT · r)`` instead of the push alone: a controller that holds its
+position wins against one that does not while it recovers from at least half the push.
+With the integral search, the cart (or segment 1) integral alone at ``HOLD_SEEDS`` is
+tried as well – the research found exactly that one useful
+(``docs/QUICK_CORE_V2.md``).
+
 **Methods** (optional) – after the gains: the alternative derivative source and
 anti-windup strategy are tried for the tuned loops, one change at a time, and kept if
 they help.
@@ -43,6 +55,7 @@ import numpy as np
 from ..control import AntiWindup, ControllerConfig, DerivativeMode, LQRWeights, lqr_controller
 from . import parallel
 from .config import AppConfig, config_from_dict, config_to_dict
+from .engine import SimulationDiverged, Simulator
 from .tuning import (
     DEFAULT_WEIGHTS,
     WEIGHT_BOUNDS,
@@ -62,6 +75,11 @@ from . import tuning as _tuning
 TERMS = ("kp", "ki", "kd")
 KI_RATIO_BOUNDS = (-2.0, 1.5)        # log10(Ki/Kp) [1/s]: integral time 30 s … 0.03 s
 OFF = -99.0                          # a search coordinate meaning "this term off"
+HOLD_FORCE = 0.05                    # steady tip force of the hold test, × the candidate's push
+HOLD_SECONDS = 12.0                  # s, length of the hold test
+HOLD_WEIGHT = 0.5                    # score = push · (1 − HOLD_WEIGHT · residual)
+HOLD_SEEDS = (-1.0, -0.7, -0.5)      # log10(Ki/Kp) of the held loop's integral tried with "hold"
+HOLD_COST = 1.4                      # rough factor on the search time with the hold test
 
 
 # ------------------------------------------------------------------ options
@@ -103,6 +121,17 @@ class TuneOptions:
     integral: bool = True                       # "full" mode: search integral gains after the design
     methods: bool = False                       # try derivative source / anti-windup
     limits: GainLimits = field(default_factory=GainLimits)
+    hold: bool = False                          # also score holding position under a steady push
+
+
+@dataclass
+class TuningResult2(TuningResult):
+    """:class:`.tuning.TuningResult` plus the hold test (``nan`` when it was not run)."""
+
+    hold: bool = False
+    hold_residual: float = math.nan             # of the result
+    baseline_hold_residual: float = math.nan    # of the controller before tuning
+    held: str = ""                              # "cart position" / "segment 1 angle"
 
 
 # ------------------------------------------------------------- controllers
@@ -242,6 +271,16 @@ def integral_space(cfg: AppConfig, options: TuneOptions, weights: LQRWeights) ->
                   weights=lambda z: weights)
 
 
+def hold_seeds(space: _Space) -> list[np.ndarray]:
+    """Integral rates with only the held loop's integral on (loop 0: the cart, or segment 1)."""
+    out = []
+    for r in HOLD_SEEDS:
+        z = space.z0.copy()
+        z[0] = r
+        out.append(space.clip(z))
+    return out
+
+
 def method_variants(ctrl: ControllerConfig, signals: set[str]) -> list[ControllerConfig]:
     """One change at a time: the other derivative source, the other anti-windup strategies."""
     out = []
@@ -263,24 +302,95 @@ def method_variants(ctrl: ControllerConfig, signals: set[str]) -> list[Controlle
 
 
 # ---------------------------------------------------------------- work unit
-def evaluate_controller(config_dict: dict, settings: TuningSettings, min_push: float = 0.0) -> tuple[float, float, int]:
-    """Picklable work unit: ``(max push, recovery cost, simulations)`` of the configured controller."""
+def held_name(cfg: AppConfig) -> str:
+    return "cart position" if cfg.plant.has_cart else "segment 1 angle"
+
+
+def hold_residual(cfg: AppConfig, force: float, settings: TuningSettings, seconds: float = HOLD_SECONDS) -> float:
+    """Residual of the held quantity under a steady tip force (0 = back at the setpoint, 1 = not).
+
+    The force acts from ``settings.push_time`` to the end. Held quantity: the cart
+    position, or without a cart segment 1's angle. ``r`` = mean |q| over the last second
+    divided by the peak |q|, clipped to [0, 1]; a fall counts as 1.
+    """
+    c = cfg.copy()
+    for seg in c.plant.segments:                 # exactly upright: the offset is the force's
+        seg.initial_angle = seg.initial_velocity = 0.0
+    c.simulation.telemetry_rate_hz = 20.0
+    sim = Simulator(c, telemetry_window_s=0.5)
+    sim.apply_disturbance(force, seconds + 1.0, start=settings.push_time)
+    dt = c.simulation.dt
+    steps = int(round(seconds / dt))
+    tail = int(round(1.0 / dt))
+    fall = math.radians(settings.fall_deg)
+    cart = sim.model.has_cart
+    peak, tail_sum, tail_n = 0.0, 0.0, 0
+    token = _tuning._active_token
+    try:
+        for k in range(steps):
+            sim.step()
+            q = abs(float(sim.state[0])) if cart else abs(float(sim.angles[0]))
+            peak = max(peak, q)
+            if k >= steps - tail:
+                tail_sum += q
+                tail_n += 1
+            if k % 10 == 0:
+                if float(np.max(np.abs(sim.angles))) > fall:
+                    return 1.0
+                if token is not None and k % 1000 == 0 and token.cancelled:
+                    raise TuningCancelled
+    except SimulationDiverged:
+        return 1.0
+    if peak < 1e-9:
+        return 0.0
+    return float(min(1.0, max(0.0, tail_sum / max(tail_n, 1) / peak)))
+
+
+def score(push: float, residual: float, hold: bool) -> float:
+    """What candidates are compared by: the push, reduced by a held quantity that stays off."""
+    if not hold or push <= 0.0 or math.isnan(residual):
+        return push
+    return push * (1.0 - HOLD_WEIGHT * residual)
+
+
+def evaluate_controller(config_dict: dict, settings: TuningSettings, min_push: float = 0.0,
+                        hold: bool = False) -> tuple[float, float, int, float]:
+    """Picklable work unit: ``(max push, recovery cost, simulations, hold residual)``.
+
+    ``min_push`` (pruning) is compared with the *score*: with ``hold`` a candidate whose
+    push is below it cannot win, since its score is at most its push. The residual is
+    ``nan`` without ``hold``.
+    """
     cfg = config_from_dict(config_dict)
     sims = [0]
+    resid = math.nan if not hold else 1.0
     try:
         cfg.validate()
     except ValueError:
-        return 0.0, math.inf, 0
+        return 0.0, math.inf, 0, resid
     if settings.prune and min_push > 0.0:
         sims[0] += 1
         if not _push_test(_upright_config(cfg), min_push, settings)[0]:
-            return 0.0, math.inf, sims[0]
+            return 0.0, math.inf, sims[0], resid
     push = max_recoverable_push(cfg, settings, counter=sims)
     if push <= 0.0:
-        return 0.0, math.inf, sims[0]
+        return 0.0, math.inf, sims[0], resid
     sims[0] += 1
     _, cost = _push_test(_upright_config(cfg), 0.5 * push, settings, allow_early_stop=False)
-    return push, cost, sims[0]
+    if hold:
+        sims[0] += 1
+        resid = hold_residual(cfg, HOLD_FORCE * push, settings)
+    return push, cost, sims[0], resid
+
+
+def evaluate_start(config_dict: dict, settings: TuningSettings, hold: bool = False) -> tuple[float, float, int, float]:
+    """Work unit for the controller before tuning: ``(max push, nan, sims, hold residual)``."""
+    push, _, sims = evaluate_baseline(config_dict, settings)
+    resid = math.nan
+    if hold:
+        sims += 1
+        resid = hold_residual(config_from_dict(config_dict), HOLD_FORCE * push, settings) if push > 0 else 1.0
+    return push, math.nan, sims, resid
 
 
 @dataclass
@@ -290,11 +400,14 @@ class _Best:
     cost: float
     weights: LQRWeights | None = None
     z: np.ndarray | None = None
+    residual: float = math.nan
+    score: float = 0.0
 
-    def beaten_by(self, push: float, cost: float, tol: float) -> bool:
-        if push > self.push * (1.0 + tol):
+    def beaten_by(self, value: float, cost: float, tol: float) -> bool:
+        """``value``: the challenger's score (= its push without the hold test)."""
+        if value > self.score * (1.0 + tol):
             return True
-        return push >= self.push * (1.0 - tol) and cost < self.cost
+        return value >= self.score * (1.0 - tol) and cost < self.cost
 
 
 def budget(settings: TuningSettings, options: TuneOptions) -> int:
@@ -302,6 +415,8 @@ def budget(settings: TuningSettings, options: TuneOptions) -> int:
     n = settings.candidates
     if options.mode == "full" and options.integral:
         n += 1 + settings.samples // 2 + settings.refine_rounds * settings.refine_samples // 2
+        if options.hold:
+            n += len(HOLD_SEEDS)
     if options.methods:
         n += 8
     return n
@@ -328,6 +443,7 @@ def tune(config: AppConfig, settings: TuningSettings | None = None, options: Tun
     best: _Best | None = None
     history: list[float] = []
     evaluations = 0
+    start_residual = [math.nan]
 
     def emit(phase: str, message: str) -> bool:
         state.phase, state.message = phase, message
@@ -349,31 +465,32 @@ def tune(config: AppConfig, settings: TuningSettings | None = None, options: Tun
             with_baseline: bool = False) -> bool:
         """Evaluate in input order (results do not depend on the number of workers)."""
         nonlocal best, evaluations
-        threshold = best.push * (1.0 - 2.0 * s.resolution) if (best is not None and s.prune) else 0.0
+        threshold = best.score * (1.0 - 2.0 * s.resolution) if (best is not None and s.prune) else 0.0
         tasks: list[parallel.Task] = []
         if with_baseline:
-            tasks.append((evaluate_baseline, (config_to_dict(cfg), s)))
+            tasks.append((evaluate_start, (config_to_dict(cfg), s, o.hold)))
         offset = len(tasks)
         index_of: dict[int, int] = {}
         for k, (ctrl, _meta) in enumerate(controllers):
             if ctrl is not None:
                 index_of[len(tasks)] = k
-                tasks.append((evaluate_controller, (config_with(ctrl), s, threshold)))
+                tasks.append((evaluate_controller, (config_with(ctrl), s, threshold, o.hold)))
         results: dict[int, tuple] = {}
         rejected = [k for k, (ctrl, _m) in enumerate(controllers) if ctrl is None]
         for k in rejected:                                   # outside the limits: counted, not run
-            results[k] = (0.0, math.inf, 0)
+            results[k] = (0.0, math.inf, 0, math.nan)
         next_k = 0
 
         def drain() -> None:
             nonlocal best, next_k, evaluations
             while next_k in results:
-                push, cost, _ = results.pop(next_k)
+                push, cost, _, resid = results.pop(next_k)
                 ctrl, meta = controllers[next_k]
                 evaluations += 1
-                if ctrl is not None and push > 0 and (best is None or best.beaten_by(push, cost, s.resolution)):
+                value = score(push, resid, o.hold)
+                if ctrl is not None and push > 0 and (best is None or best.beaten_by(value, cost, s.resolution)):
                     w, z = meta if isinstance(meta, tuple) else (None, meta)
-                    best = _Best(ctrl, push, cost, w, z)
+                    best = _Best(ctrl, push, cost, w, z, resid, value)
                     state.best_push, state.best_cost = push, cost
                     state.best_controller, state.best_weights = ctrl, w
                 history.append(best.push if best else 0.0)
@@ -389,6 +506,7 @@ def tune(config: AppConfig, settings: TuningSettings | None = None, options: Tun
             state.simulations += int(result[2])
             if index < offset:
                 state.baseline_push = result[0]
+                start_residual[0] = result[3]
             else:
                 state.candidates_done += 1
                 results[index_of[index]] = result
@@ -402,10 +520,10 @@ def tune(config: AppConfig, settings: TuningSettings | None = None, options: Tun
         return True
 
     def search(space: _Space, samples: int, rounds: int, per_round: int, phase: str, label: str,
-               with_baseline: bool = False, include_start: bool = True) -> bool:
+               with_baseline: bool = False, include_start: bool = True, seeds: list | None = None) -> bool:
         if space.z0.size == 0:                       # nothing searched (only gains switched off)
             samples, rounds = 0, 0
-        pts = ([space.z0] if include_start else []) + \
+        pts = ([space.z0] if include_start else []) + list(seeds or []) + \
               [space.clip(space.z0 + rng.normal(0.0, space.sigma, space.z0.size)) for _ in range(samples)]
         if not run([(space.build(z), (space.weights(z), z)) for z in pts], phase, f"{label} – exploring", with_baseline):
             return False
@@ -436,7 +554,7 @@ def tune(config: AppConfig, settings: TuningSettings | None = None, options: Tun
                 space = integral_space(cfg, o, best.weights)
                 best.z = space.z0.copy()                    # the PD design is the integral search's start
                 ok = search(space, s.samples // 2, s.refine_rounds, s.refine_samples // 2, "refine",
-                            "Integral gains", include_start=True)
+                            "Integral gains", include_start=True, seeds=hold_seeds(space) if o.hold else None)
         if ok and o.methods and best is not None:
             signals = set(o.loops) if o.mode == "loops" and o.loops else {lp.signal for lp in best.controller.loops}
             variants = method_variants(best.controller, signals)[:8]
@@ -464,15 +582,16 @@ def tune(config: AppConfig, settings: TuningSettings | None = None, options: Tun
     baseline = state.baseline_push
     if baseline is None:
         baseline = max_recoverable_push(cfg, s)
-    return TuningResult(controller=best.controller, weights=best.weights or LQRWeights(), max_push=best.push,
-                        baseline_max_push=baseline, recommended_push=round_nice(0.5 * best.push),
-                        evaluations=evaluations, elapsed=time.perf_counter() - started, cancelled=cancelled,
-                        history=history)
+    return TuningResult2(controller=best.controller, weights=best.weights or LQRWeights(), max_push=best.push,
+                         baseline_max_push=baseline, recommended_push=round_nice(0.5 * best.push),
+                         evaluations=evaluations, elapsed=time.perf_counter() - started, cancelled=cancelled,
+                         history=history, hold=o.hold, hold_residual=best.residual,
+                         baseline_hold_residual=start_residual[0], held=held_name(cfg))
 
 
 # ------------------------------------------------------------ plain data
-DEFAULT_OPTIONS = {"mode": "full", "integral": True, "methods": False, "loops": [], "terms": list(TERMS), "off_terms": [],
-                   "limit_mode": "none", "limits": {"general": {}, "per_loop": {}}}
+DEFAULT_OPTIONS = {"mode": "full", "integral": True, "methods": False, "hold": False, "loops": [],
+                   "terms": list(TERMS), "off_terms": [], "limit_mode": "none", "limits": {"general": {}, "per_loop": {}}}
 
 
 def _pair(v) -> tuple[float, float] | None:
@@ -511,4 +630,4 @@ def options_from_dict(d: dict | None, signals: list[str]) -> TuneOptions:
         limits = GainLimits(_term_limits(lim.get("general")),
                             {s: _term_limits(v) for s, v in per.items() if s in signals and v is not None})
     return TuneOptions(mode=mode, loops=loops, terms=terms, off_terms=off_terms, integral=bool(d.get("integral", True)),
-                       methods=bool(d.get("methods", False)), limits=limits)
+                       methods=bool(d.get("methods", False)), limits=limits, hold=bool(d.get("hold", False)))
