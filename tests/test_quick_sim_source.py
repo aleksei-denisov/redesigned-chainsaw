@@ -261,3 +261,23 @@ def test_thread_source_is_the_fallback():
     assert isinstance(src, ThreadSource)
     with pytest.raises(KeyError):
         src.send("no such command")
+
+
+def test_push_at_a_point_is_the_core_point_push(source):
+    """A push at a point of a segment (quick-core-v2) gives what the core gives."""
+    source.push(3.0, 0.1, 1, 0.5)
+    source.send("steps", 300)
+    assert wait_for(lambda: newest(source).steps == 300, 5.0)
+    ref = Simulator(scenario("triple_cart_lqr"))
+    ref.apply_disturbance(3.0, 0.1, segment=1, ratio=0.5)
+    for _ in range(300):
+        ref.step()
+    np.testing.assert_array_equal(newest(source).state[:ref.state.size], ref.state)
+
+
+def test_dragging_a_point(source):
+    source.set_running(True)
+    source.send("drag", 0.5, 0, 0.3)
+    assert wait_for(lambda: newest(source).tip == pytest.approx(0.5), 3.0)
+    source.send("drag", 0.0)
+    assert wait_for(lambda: newest(source).tip == 0.0, 3.0)

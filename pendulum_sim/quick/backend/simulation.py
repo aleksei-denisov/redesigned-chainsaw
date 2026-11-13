@@ -244,10 +244,24 @@ class SimulationBridge(QObject):
         self.source.push(force, PUSH_DURATION_S)
         self.message.emit("info", f"Tip push {force:+.2f} N for {PUSH_DURATION_S:g} s")
 
+    @Slot(int, int, float)
+    def pushAt(self, direction: int, segment: int, ratio: float) -> None:  # noqa: N802 - QML API
+        """A push pulse at ``ratio`` (0 … 1) along ``segment`` (0-based) – a tap on the pendulum."""
+        force = (1.0 if direction >= 0 else -1.0) * self.session.config.push_force
+        self.source.push(force, PUSH_DURATION_S, int(segment), float(ratio))
+        where = "tip" if segment < 0 or (segment == self.n - 1 and ratio >= 0.999) \
+            else f"segment {segment + 1} at {ratio * 100:.0f} %"
+        self.message.emit("info", f"Push {force:+.2f} N for {PUSH_DURATION_S:g} s at the {where}")
+
     @Slot(float)
     def drag(self, offset: float) -> None:
-        """Dragging the pendulum; ``offset`` relative to the pendulum's total length."""
+        """Dragging the pendulum by the tip; ``offset`` relative to the pendulum's total length."""
         self.source.send("drag", rules.drag_force(self.session.config.push_force, offset))
+
+    @Slot(float, int, float)
+    def dragAt(self, offset: float, segment: int, ratio: float) -> None:  # noqa: N802 - QML API
+        """Dragging the pendulum by a point (``segment``, ``ratio``) – same force law as the tip."""
+        self.source.send("drag", rules.drag_force(self.session.config.push_force, offset), int(segment), float(ratio))
 
     @Slot()
     def endDrag(self) -> None:  # noqa: N802 - QML API

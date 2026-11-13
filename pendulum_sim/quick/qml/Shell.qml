@@ -11,11 +11,14 @@ Item {
     focus: true
     readonly property bool wide: width >= height
     property bool reportOpen: false
+    property bool pushForceOpen: false
 
     Keys.onBackPressed: (event) => {
         event.accepted = true
         if (reportOpen)
             reportOpen = false
+        else if (pushForceOpen)
+            pushForceOpen = false
         else if (panel.selected.length)
             panel.selected = ""                 // close the tile editor …
         else if (panel.editing)
@@ -113,6 +116,12 @@ Item {
                     Caption { text: "Push"; visible: parent.pushHere; anchors.verticalCenter: parent.verticalCenter; rightPadding: 2 }
                     Btn { text: "Left"; visible: parent.pushHere; onClicked: sim.push(-1) }
                     Btn { text: "Right"; visible: parent.pushHere; onClicked: sim.push(1) }
+                    Btn {                                 // push strength (tap: presets / typed)
+                        visible: parent.pushHere
+                        text: Number(sim.pushForce.toPrecision(3)) + " N"
+                        active: shell.pushForceOpen
+                        onClicked: shell.pushForceOpen = !shell.pushForceOpen
+                    }
                     Item { width: 6; height: 1; visible: parent.pushHere }
                     Btn { text: "Reset"; onClicked: sim.reset() }
                     Btn { text: "Step"; onClicked: sim.step() }
@@ -188,6 +197,75 @@ Item {
             y: 6
             font.pixelSize: 11
             text: sim.fpsText + " · " + frames.statsText
+        }
+    }
+
+    // ----------------------------------------------------------- push strength
+    Card {
+        id: pushSheet
+        visible: shell.pushForceOpen
+        z: 5
+        width: Math.min(560, shell.width - 2 * Theme.pad)
+        anchors.right: parent.right
+        anchors.rightMargin: Theme.pad
+        anchors.bottom: parent.bottom
+        anchors.bottomMargin: dock.height + 2 * Theme.gap
+        implicitHeight: pushCol.implicitHeight + 28
+        radius: Theme.radiusCard
+        border.color: Theme.accent
+        TapHandler {}                             // keep taps here
+        Column {
+            id: pushCol
+            x: 14
+            y: 14
+            width: parent.width - 28
+            spacing: 10
+            Row {
+                width: parent.width
+                Caption { text: "Push force"; width: parent.width - doneBtn.width }
+                Btn { id: doneBtn; text: "Done"; filled: true; onClicked: shell.pushForceOpen = false }
+            }
+            Flow {
+                width: parent.width
+                spacing: 6
+                Repeater {
+                    model: [0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50, 100, 200]
+                    Btn {
+                        required property real modelData
+                        text: modelData + " N"
+                        textSize: 14
+                        implicitHeight: 42
+                        active: Math.abs(sim.pushForce - modelData) < 1e-9
+                        onClicked: sim.pushForce = modelData
+                    }
+                }
+            }
+            Row {
+                spacing: 8
+                Field {
+                    id: forceField
+                    width: 140
+                    mono: true
+                    placeholder: "other"
+                    inputMethodHints: Qt.ImhFormattedNumbersOnly
+                    onAccepted: {
+                        var v = parseFloat(text.replace(",", "."))
+                        if (!isNaN(v) && v > 0)
+                            sim.pushForce = Math.min(v, 1000)
+                        text = ""
+                    }
+                }
+                Mono { text: "N"; height: Theme.touch; verticalAlignment: Text.AlignVCenter; color: Theme.textMuted }
+            }
+            Text {
+                width: parent.width
+                wrapMode: Text.Wrap
+                text: "A 0.1 s pulse. Left / Right push the tip; tap the pendulum to push that point away "
+                      + "from your finger, or drag it to pull that point."
+                color: Theme.textMuted
+                font.family: Theme.uiFont
+                font.pixelSize: 13
+            }
         }
     }
 

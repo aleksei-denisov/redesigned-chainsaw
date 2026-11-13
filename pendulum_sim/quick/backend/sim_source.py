@@ -122,6 +122,7 @@ class SimLoop:
         self.running = False
         self.speed = 1.0
         self.drag = 0.0
+        self.drag_point = (-1, 1.0)
         self.last_wall: float | None = None
         self.steps_total = 0
         self.busy_s = 0.0
@@ -148,10 +149,12 @@ class SimLoop:
             self._jumped()
             self.running = name == "restart"
             self.last_wall = None
-        elif name == "push":
-            self.sim.apply_disturbance(float(args[0]), float(args[1]))
-        elif name == "drag":
+        elif name == "push":                # force, duration[, segment, ratio]: at the tip or a point
+            point = (int(args[2]), float(args[3])) if len(args) >= 4 else (-1, 1.0)
+            self.sim.apply_disturbance(float(args[0]), float(args[1]), segment=point[0], ratio=point[1])
+        elif name == "drag":                # force[, segment, ratio]
             self.drag = float(args[0])
+            self.drag_point = (int(args[1]), float(args[2])) if len(args) >= 3 else (-1, 1.0)
         elif name == "speed":
             self.speed = float(args[0])
         elif name == "step":                # one controller period, paused (the desktop's Step)
@@ -202,7 +205,7 @@ class SimLoop:
         sim = self.sim
         if self.drag != 0.0:                # dragging the pendulum: a force over this tick
             duration = max(min(wall, self.stepper.max_frame_s) * self.speed, sim.config.simulation.dt)
-            sim.apply_disturbance(self.drag, duration)
+            sim.apply_disturbance(self.drag, duration, segment=self.drag_point[0], ratio=self.drag_point[1])
         started = time.perf_counter()
         before = sim.steps
         try:
@@ -407,8 +410,8 @@ class SimSource:
     def reset(self) -> None:
         self.send("reset")
 
-    def push(self, force: float, duration: float = 0.1) -> None:
-        self.send("push", force, duration)
+    def push(self, force: float, duration: float = 0.1, segment: int = -1, ratio: float = 1.0) -> None:
+        self.send("push", force, duration, segment, ratio)
 
 
 # ------------------------------------------------------------------- thread
