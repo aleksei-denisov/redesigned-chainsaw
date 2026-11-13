@@ -73,8 +73,7 @@ Item {
                 ctx.lineTo(left + w, Math.round(Y(v)) + 0.5)
                 ctx.stroke()
                 ctx.fillStyle = Theme.textMuted
-                var digits = r.step >= 1 ? 0 : Math.min(3, Math.ceil(-Math.log(r.step) / Math.LN10))
-                ctx.fillText(v.toFixed(digits), left - 6, Y(v))
+                ctx.fillText(String(Number(v.toFixed(4))), left - 6, Y(v))       // 0.25, not 0.3
             }
             if (chart.unit.length) {
                 ctx.textAlign = "left"
