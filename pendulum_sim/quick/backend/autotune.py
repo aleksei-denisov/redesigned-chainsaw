@@ -1,6 +1,8 @@
 """QML context object ``autotune``: the foreground robustness search (set-up → running → result).
 
-The same flow as the Widgets app's auto-tune screen, on the shared worker
+The same flow as the Widgets app's auto-tune screen, with the search options of
+quick-core-v2 (``simulation.tuning2``: all loops by LQR design plus integral gains, or
+selected loops and gains by direct search; gain limits; methods), on the shared worker
 (:class:`~pendulum_sim.session.jobs.TuneWorker`, all CPU cores but one through the
 simulation's worker pool) and the shared texts. While a search runs the simulation is
 paused and ``busy`` is true – the QML shell locks navigation; leaving the app cancels it.
@@ -8,16 +10,18 @@ paused and ``busy`` is true – the QML shell locks navigation; leaving the app 
 
 from __future__ import annotations
 
+import json
 import math
 import time
 
 import numpy as np
-from PySide6.QtCore import Property, QObject, QTimer, Signal, Slot
+from PySide6.QtCore import Property, QObject, QSettings, QTimer, Signal, Slot
 
 from ...session import texts
 from ...session.jobs import TuneWorker
 from ...simulation import parallel
-from ...simulation.tuning import TuneProgress, TuningResult, TuningSettings
+from ...simulation.tuning import TuneProgress, TuningResult, TuningSettings, estimate_seconds
+from ...simulation.tuning2 import DEFAULT_OPTIONS, budget, options_from_dict
 from .simulation import SimulationBridge
 
 POLL_MS = 100
@@ -25,6 +29,7 @@ POLL_MS = 100
 
 class AutotuneBridge(QObject):
     changed = Signal()            # page, texts, presets
+    optionsChanged = Signal()
     progressChanged = Signal()    # bar and times (10 Hz while running)
     busyChanged = Signal()
     applied = Signal()
@@ -53,6 +58,13 @@ class AutotuneBridge(QObject):
         self._history: list[float] = []
         self._candidates: list[float] = []
         self._preview: list[dict] = []
+        self.store = QSettings()
+        try:
+            stored = json.loads(str(self.store.value("quick/autotune/options", "") or "{}"))
+        except ValueError:
+            stored = {}
+        self._options = {**DEFAULT_OPTIONS, **(stored if isinstance(stored, dict) else {})}
+        sim.controllerChanged.connect(self.optionsChanged)      # the loop list
         self.timer = QTimer(self)
         self.timer.setInterval(POLL_MS)
         self.timer.timeout.connect(self._poll)
@@ -61,9 +73,36 @@ class AutotuneBridge(QObject):
     page = Property(str, lambda self: self._page, notify=changed)
     busy = Property(bool, lambda self: self.worker is not None, notify=busyChanged)
     preset = Property(str, lambda self: self._preset, notify=changed)
+    def _estimate(self, preset: str) -> str:
+        if self.push_test_s is None:
+            return "measuring this device…"
+        settings = TuningSettings.preset(preset)
+        ratio = budget(settings, self._tune_options()) / max(settings.candidates, 1)
+        return f"about {texts.fmt_duration(estimate_seconds(settings, self.push_test_s, self.workers) * ratio)}"
+
     presets = Property("QVariantList", lambda self: [
-        {"key": k, "name": n, "description": d, "estimate": texts.tune_estimate(k, self.push_test_s, self.workers)}
+        {"key": k, "name": n, "description": d, "estimate": self._estimate(k)}
         for k, n, d in texts.TUNE_PRESETS], notify=changed)
+
+    # -------------------------------------------------------------- options
+    def _signals(self) -> list[str]:
+        return [lp.signal for lp in self.sim.session.config.controller.loops]
+
+    def _tune_options(self):
+        return options_from_dict(self._options, self._signals())
+
+    options = Property("QVariantMap", lambda self: self._options, notify=optionsChanged)
+    loopList = Property("QVariantList", lambda self: [
+        {"signal": lp.signal, "name": lp.name, "enabled": lp.enabled}
+        for lp in self.sim.session.config.controller.loops], notify=optionsChanged)
+
+    @Slot("QVariantMap")
+    def setOptions(self, options: dict) -> None:  # noqa: N802 - QML API
+        """The whole options map from the screen (see ``tuning2.options_from_dict``)."""
+        self._options = {**DEFAULT_OPTIONS, **dict(options)}
+        self.store.setValue("quick/autotune/options", json.dumps(self._options))
+        self.optionsChanged.emit()
+        self.changed.emit()                       # the estimates
     coresText = Property(str, lambda self: texts.tune_cores(self.workers, parallel.cpu_count()), constant=True)
     phaseText = Property(str, lambda self: self._texts["phase"], notify=progressChanged)
     activityText = Property(str, lambda self: self._texts["activity"], notify=progressChanged)
@@ -117,7 +156,18 @@ class AutotuneBridge(QObject):
         self._was_running = self.sim.running
         self.sim.pause()                         # all CPU cores for the search
         self._started = time.monotonic()
-        self.worker = TuneWorker(self.config, settings)
+        try:
+            options = self._tune_options()
+            if options.mode == "loops":
+                from ...simulation.tuning2 import loops_space
+
+                loops_space(self.config, options)          # "nothing to tune" before any work
+        except ValueError as exc:
+            self.sim.message.emit("warning", f"⚠ {exc}")
+            if self._was_running:
+                self.sim.start()
+            return
+        self.worker = TuneWorker(self.config, settings, options=options)
         self.worker.start()
         self.timer.start()
         self._page = "running"

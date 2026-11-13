@@ -1,5 +1,7 @@
 # redesigned-chainsaw — Interactive Inverted Pendulum Simulator
 
+> **Branch `quick-core-v2`:** a new physics core (pushes at any point) and a new auto-tune, used for now only by the Qt Quick Android app – see [docs/QUICK_CORE_V2.md](docs/QUICK_CORE_V2.md).
+
 A desktop engineering tool for simulating, visualising and controlling **1-, 2- and 3-segment
 inverted pendulums** on a moving cart or a motor-driven fixed pivot. It is built around a
 mathematically exact multibody model, an interactive multi-loop PID controller and an

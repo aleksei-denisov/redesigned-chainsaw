@@ -39,11 +39,15 @@ class TuneWorker:
     crashed PySide6 with Python 3.10 on Windows.
     """
 
-    def __init__(self, config: AppConfig, settings: TuningSettings | None, calibrate_only: bool = False) -> None:
+    def __init__(self, config: AppConfig, settings: TuningSettings | None, calibrate_only: bool = False,
+                 options=None) -> None:
+        """``options``: a ``tuning2.TuneOptions`` for the search with options (Qt Quick app,
+        quick-core-v2); ``None`` runs the original search (desktop, Widgets)."""
         self._thread = threading.Thread(target=self.run, name="autotune", daemon=True)
         self.config = config.copy()
         self.settings = settings
         self.calibrate_only = calibrate_only
+        self.options = options
         self.token = CancelToken()
         self._lock = threading.Lock()
         self._latest: TuneProgress | None = None
@@ -84,7 +88,12 @@ class TuneWorker:
                     self._latest = snap
                 return not self.token.cancelled
 
-            result = robust_tune(self.config, self.settings, on_update=update, cancel=self.token)
+            if self.options is not None:
+                from ..simulation.tuning2 import tune
+
+                result = tune(self.config, self.settings, self.options, on_update=update, cancel=self.token)
+            else:
+                result = robust_tune(self.config, self.settings, on_update=update, cancel=self.token)
             comparison = None
             try:
                 comparison = compare_responses(self.config, self.config.controller, result.controller,

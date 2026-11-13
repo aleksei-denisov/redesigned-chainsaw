@@ -6,6 +6,8 @@ developed next to the existing Qt Widgets mobile app (`pendulum_sim/mobile`, see
 Qt Quick version reaches feature parity. The simulation, controllers, LQR and autotune code
 are shared and unchanged.
 
+> Branch `quick-core-v2`: this app uses the **new physics core** (a push at any point of a segment) and the **new auto-tune** (integral gains, gain limits, selected loops, methods) – see [QUICK_CORE_V2.md](QUICK_CORE_V2.md). The desktop and Widgets apps are unchanged.
+
 **Status: Phase 3 – screens.** The backend for every screen exists; the QML has the
 Simulate, Graphs, Controller, Model, Auto-tune, Experiments and Settings
 screens. Still to come: watching a run, files (set-up, results, CSV) and scenario files.

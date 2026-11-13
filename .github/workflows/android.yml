@@ -32,8 +32,9 @@ jobs:
       fail-fast: false
       matrix:
         # widgets = the Qt Widgets app, quick = the Qt Quick app (own application id, see
-        # docs/ANDROID_QTQUICK.md). The qtquick-ui work branch only changes the Qt Quick app.
-        ui: ${{ fromJSON(github.ref_name == 'qtquick-ui' && '["quick"]' || '["widgets", "quick"]') }}
+        # docs/ANDROID_QTQUICK.md). The qtquick-ui and quick-core-v2 work branches only change the
+        # Qt Quick app.
+        ui: ${{ fromJSON((github.ref_name == 'qtquick-ui' || github.ref_name == 'quick-core-v2') && '["quick"]' || '["widgets", "quick"]') }}
     env:
       STAGING: build/android/${{ matrix.ui == 'quick' && 'app-quick' || 'app' }}
     steps:
@@ -129,10 +130,11 @@ jobs:
 
       # The Qt Quick app installs next to the Widgets app (own application id), so both can be compared.
       - name: Publish rolling pre-release (Qt Quick app)
-        if: matrix.ui == 'quick' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/qtquick-ui')
+        if: matrix.ui == 'quick' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/qtquick-ui' || github.ref == 'refs/heads/quick-core-v2')
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref == 'refs/heads/qtquick-ui' && 'android-qtquick-ui' || 'android-quick-latest' }}
+          # quick-core-v2: the Qt Quick app with the new physics core (point pushes) and auto-tune
+          TAG: ${{ github.ref == 'refs/heads/qtquick-ui' && 'android-qtquick-ui' || github.ref == 'refs/heads/quick-core-v2' && 'android-quick-core-v2' || 'android-quick-latest' }}
         run: |
           cp dist/*.apk PendulumQuick-debug.apk
           gh release delete "$TAG" --yes --cleanup-tag || true

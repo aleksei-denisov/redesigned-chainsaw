@@ -54,8 +54,9 @@ Item {
                 title: "Auto-tune"
                 Body {
                     width: parent.width
-                    text: "Searches for PID gains that keep the pendulum up after the largest possible push at "
-                          + "the tip, starting from the current controller. The simulation pauses while it runs; "
+                    text: "Searches for the controller that keeps the pendulum up after the largest possible "
+                          + "push at the tip – all loops by LQR design plus integral gains, or only the loops and "
+                          + "gains you choose, optionally within gain limits. The simulation pauses while it runs; "
                           + "you can cancel at any time and keep the best gains found so far."
                 }
                 Note { text: autotune.coresText }
@@ -97,6 +98,11 @@ Item {
                     }
                     TapHandler { onTapped: autotune.choose(modelData.key) }
                 }
+            }
+            Panel {
+                width: parent.width
+                title: "Options"
+                TuneOptions { width: parent.width }
             }
             Btn {
                 width: parent.width
