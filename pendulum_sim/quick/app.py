@@ -406,6 +406,8 @@ class QuickApp:
 
     def _demo_experiment(self) -> None:
         """--experiments: two runs, the second with a changed gain, then the screenshot."""
+        from PySide6.QtCore import QTimer
+
         if self.experiments.running:
             QTimer.singleShot(200, self._demo_experiment)
             return
