@@ -165,10 +165,31 @@ class MultiLinkPendulum:
         gen[:-1] -= tau[1:]          # reaction on the segment below
         return gen
 
+    def push_arms(self, segment: int, ratio: float) -> np.ndarray:
+        """Lever arms ``a_j`` of a horizontal force at ``ratio`` (0 … 1) along ``segment``
+        (0-based; ``-1`` or the last segment at ratio 1: the tip).
+
+        The point's horizontal position is ``x + Σ_{j<k} L_j sin θ_j + r L_k sin θ_k``, so a
+        force ``F`` there adds ``F`` to the cart coordinate and ``F a_j cos θ_j`` to angle
+        ``j`` with ``a_j = L_j`` below the segment, ``r L_k`` on it and 0 above it
+        (``Q = Jᵀ F``). At the tip ``a = L`` – the tip push.
+        """
+        if segment < 0 or segment >= self.n:
+            return self.lengths.copy()
+        a = np.zeros(self.n)
+        a[:segment] = self.lengths[:segment]
+        a[segment] = min(max(float(ratio), 0.0), 1.0) * self.lengths[segment]
+        return a
+
     def generalized_forces(
-        self, q: np.ndarray, qd: np.ndarray, actuator: float, tip_force: float
+        self, q: np.ndarray, qd: np.ndarray, actuator: float, tip_force: float,
+        arms: np.ndarray | None = None,
     ) -> np.ndarray:
-        """Sum of non-conservative generalised forces ``Q``."""
+        """Sum of non-conservative generalised forces ``Q``.
+
+        ``tip_force``: total horizontal push force; ``arms``: ``Σ F_i a_i`` (see
+        :meth:`push_arms`) when pushes act at points other than the tip, else ``None``.
+        """
         p = self.params
         Q = np.zeros(self.n + 1)
         Q[1:] += self.joint_friction_torques(qd)
@@ -177,7 +198,11 @@ class MultiLinkPendulum:
             Q[0] += self._end_stop_force(q[0], qd[0])
         else:
             Q[1] += actuator            # motor torque between ground and segment 1
-        if tip_force != 0.0:
+        if arms is not None:
+            # Horizontal forces at points of the segments: Q = Σ Jᵢᵀ Fᵢ.
+            Q[0] += tip_force
+            Q[1:] += np.asarray(arms) * np.cos(q[1:])
+        elif tip_force != 0.0:
             # Horizontal force at the tip: Q = Jᵀ F with ∂x_tip/∂θj = L_j cos θj.
             Q[0] += tip_force
             Q[1:] += tip_force * self.lengths * np.cos(q[1:])
@@ -192,11 +217,12 @@ class MultiLinkPendulum:
         return 0.0
 
     def accelerations(
-        self, state: np.ndarray, actuator: float = 0.0, tip_force: float = 0.0
+        self, state: np.ndarray, actuator: float = 0.0, tip_force: float = 0.0,
+        arms: np.ndarray | None = None,
     ) -> np.ndarray:
         n1 = self.n + 1
         q, qd = state[:n1], state[n1:]
-        rhs = self.generalized_forces(q, qd, actuator, tip_force) - self.bias_forces(q, qd)
+        rhs = self.generalized_forces(q, qd, actuator, tip_force, arms) - self.bias_forces(q, qd)
         M = self.mass_matrix(q)
         if self.has_cart:
             return np.linalg.solve(M, rhs)
@@ -205,24 +231,27 @@ class MultiLinkPendulum:
         return qdd
 
     def derivative(
-        self, state: np.ndarray, actuator: float = 0.0, tip_force: float = 0.0
+        self, state: np.ndarray, actuator: float = 0.0, tip_force: float = 0.0,
+        arms: np.ndarray | None = None,
     ) -> np.ndarray:
         """State derivative ``ṡ = [q̇, q̈]``."""
         n1 = self.n + 1
         ds = np.empty_like(state)
         ds[:n1] = state[n1:]
-        ds[n1:] = self.accelerations(state, actuator, tip_force)
+        ds[n1:] = self.accelerations(state, actuator, tip_force, arms)
         if not self.has_cart:
             ds[0] = 0.0
         return ds
 
-    def rk4_step(self, state: np.ndarray, actuator: float, tip_force: float, dt: float) -> np.ndarray:
+    def rk4_step(self, state: np.ndarray, actuator: float, tip_force: float, dt: float,
+                 arms: np.ndarray | None = None) -> np.ndarray:
         """One RK4 step using the fast scalar evaluation of the same equations.
 
         Equivalent to ``integrators.rk4_step(lambda s: self.derivative(s, u, f), state, dt)``
         (verified in the tests) but several times faster for 1–3 segments.
         """
-        return np.array(self._scalar.rk4_step(state.tolist(), actuator, tip_force, dt))
+        a = None if arms is None else [float(v) for v in arms]
+        return np.array(self._scalar.rk4_step(state.tolist(), actuator, tip_force, dt, a))
 
     # ------------------------------------------------------------ energetics
     def kinetic_energy(self, state: np.ndarray) -> float:

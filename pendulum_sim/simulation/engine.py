@@ -36,6 +36,12 @@ class Disturbance:
     start: float
     end: float
     force: float
+    segment: int = -1          # where it acts: 0-based segment and ratio along it; -1 = the tip
+    ratio: float = 1.0
+
+    @property
+    def at_tip(self) -> bool:
+        return self.segment < 0
 
 
 class Simulator:
@@ -67,6 +73,7 @@ class Simulator:
         self.last_control = ControllerOutput(loops=[])
         self.applied = 0.0
         self.tip_force = 0.0
+        self.push_arms = None          # Σ F a per angle when a push acts below the tip
         self._next_record = 0.0
         self.telemetry.clear()
         self.telemetry.loop_names = [loop.name for loop in self.config.controller.loops]
@@ -95,10 +102,14 @@ class Simulator:
         self.controller.set_config(controller)
         self.telemetry.loop_names = [loop.name for loop in controller.loops]
 
-    def apply_disturbance(self, force: float, duration: float = 0.1, start: float | None = None) -> None:
-        """Schedule a horizontal force pulse [N] at the pendulum tip."""
+    def apply_disturbance(self, force: float, duration: float = 0.1, start: float | None = None,
+                          segment: int = -1, ratio: float = 1.0) -> None:
+        """Schedule a horizontal force pulse [N] at the pendulum tip, or at ``ratio`` (0 … 1)
+        along ``segment`` (0-based) when ``segment`` ≥ 0."""
         t0 = self.time if start is None else start
-        self.disturbances.append(Disturbance(t0, t0 + duration, force))
+        if segment >= self.model.n or (segment == self.model.n - 1 and ratio >= 1.0):
+            segment = -1                                   # that point is the tip
+        self.disturbances.append(Disturbance(t0, t0 + duration, force, int(segment), float(ratio)))
 
     # ------------------------------------------------------------- stepping
     def _measure(self) -> tuple[np.ndarray, np.ndarray]:
@@ -115,12 +126,19 @@ class Simulator:
         return q, qd
 
     def _tip_force(self) -> float:
+        """Total push force now; :attr:`push_arms` gets ``Σ F a`` if a push acts below the tip."""
+        self.push_arms = None
         if not self.disturbances:
             return 0.0
         force = 0.0
-        for d in self.disturbances:
-            if d.start <= self.time < d.end:
-                force += d.force
+        active = [d for d in self.disturbances if d.start <= self.time < d.end]
+        for d in active:
+            force += d.force
+        if any(not d.at_tip for d in active):
+            arms = np.zeros(self.model.n)
+            for d in active:
+                arms += d.force * self.model.push_arms(d.segment, d.ratio)
+            self.push_arms = arms
         self.disturbances = [d for d in self.disturbances if d.end > self.time]
         return force
 
@@ -134,7 +152,7 @@ class Simulator:
         self.applied = self.actuator.step(command, dt)
         self.tip_force = self._tip_force()
         u, f = self.applied, self.tip_force
-        self.state = self.model.rk4_step(self.state, u, f, dt)
+        self.state = self.model.rk4_step(self.state, u, f, dt, self.push_arms)
         self.steps += 1
         self.time += dt  # dt may be changed by the user between steps
         # "not <=" is also true for NaN, so this one comparison catches non-finite states.

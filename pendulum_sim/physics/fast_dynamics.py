@@ -42,8 +42,12 @@ class ScalarDynamics:
         self.c_stop = float(model.stop_damping)
 
     # ------------------------------------------------------------------
-    def accelerations(self, s: list[float], u: float, f: float) -> list[float]:
-        """q̈ for state ``s = [x, θ1..θn, ẋ, θ̇1..θ̇n]`` (list of floats)."""
+    def accelerations(self, s: list[float], u: float, f: float, arms: list[float] | None = None) -> list[float]:
+        """q̈ for state ``s = [x, θ1..θn, ẋ, θ̇1..θ̇n]`` (list of floats).
+
+        ``f``: total horizontal push force; ``arms``: ``Σ F_i a_ij`` per angle for pushes at
+        points other than the tip (see ``model.push_arms``), ``None`` for a push at the tip.
+        """
         n = self.n
         n1 = n + 1
         th = s[1:n1]
@@ -90,10 +94,14 @@ class ScalarDynamics:
             rhs[0] = q0 - c0
         else:
             rhs[1] += u
-        if f != 0.0:
+        if f != 0.0 or arms is not None:
             rhs[0] += f
-            for j in range(n):
-                rhs[j + 1] += f * self.L[j] * cos_t[j]
+            if arms is None:
+                for j in range(n):
+                    rhs[j + 1] += f * self.L[j] * cos_t[j]
+            else:
+                for j in range(n):
+                    rhs[j + 1] += arms[j] * cos_t[j]
 
         # Mass matrix (lower triangle is enough for Cholesky).
         size = n1 if self.has_cart else n
@@ -119,12 +127,13 @@ class ScalarDynamics:
             return sol
         return [0.0] + sol
 
-    def rk4_step(self, s: list[float], u: float, f: float, dt: float) -> list[float]:
+    def rk4_step(self, s: list[float], u: float, f: float, dt: float,
+                 arms: list[float] | None = None) -> list[float]:
         n1 = self.n + 1
         acc = self.accelerations
 
         def deriv(state: list[float]) -> list[float]:
-            return state[n1:] + acc(state, u, f)
+            return state[n1:] + acc(state, u, f, arms)
 
         k1 = deriv(s)
         s2 = [a + 0.5 * dt * b for a, b in zip(s, k1)]
