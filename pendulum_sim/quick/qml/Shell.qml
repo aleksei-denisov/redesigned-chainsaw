@@ -51,7 +51,8 @@ Item {
                     source: modelData === "simulate" ? "SimulateScreen.qml"
                           : modelData === "graphs" ? "GraphsScreen.qml"
                           : modelData === "controller" ? "ControllerScreen.qml"
-                          : modelData === "model" ? "ModelScreen.qml" : "SettingsScreen.qml"
+                          : modelData === "model" ? "ModelScreen.qml"
+                          : modelData === "autotune" ? "AutotuneScreen.qml" : "SettingsScreen.qml"
                     onCurrentChanged: if (current) visited = true
                     Component.onCompleted: if (current) visited = true
                     onLoaded: item.shown = Qt.binding(() => screenLoader.current && shell.visible)
@@ -90,7 +91,7 @@ Item {
                         spacing: 6
                         Repeater {
                             model: [["simulate", "Simulate"], ["graphs", "Graphs"], ["controller", "Controller"],
-                                    ["model", "Model"], ["settings", "Settings"]]
+                                    ["model", "Model"], ["autotune", "Auto-tune"], ["settings", "Settings"]]
                             Btn {
                                 required property var modelData
                                 text: modelData[1]
@@ -105,10 +106,12 @@ Item {
                 Row {
                     spacing: 6
                     Layout.alignment: shell.wide ? Qt.AlignRight : Qt.AlignLeft
-                    Caption { text: "Push"; anchors.verticalCenter: parent.verticalCenter; rightPadding: 2 }
-                    Btn { text: "Left"; onClicked: sim.push(-1) }
-                    Btn { text: "Right"; onClicked: sim.push(1) }
-                    Item { width: 6; height: 1 }
+                    // pushes only where the pendulum or its graphs are in view
+                    readonly property bool pushHere: App.screen === "simulate" || App.screen === "graphs"
+                    Caption { text: "Push"; visible: parent.pushHere; anchors.verticalCenter: parent.verticalCenter; rightPadding: 2 }
+                    Btn { text: "Left"; visible: parent.pushHere; onClicked: sim.push(-1) }
+                    Btn { text: "Right"; visible: parent.pushHere; onClicked: sim.push(1) }
+                    Item { width: 6; height: 1; visible: parent.pushHere }
                     Btn { text: "Reset"; onClicked: sim.reset() }
                     Btn { text: "Step"; onClicked: sim.step() }
                     Btn {

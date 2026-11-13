@@ -244,7 +244,7 @@ jobs:
         run: |
           mkdir -p build/quick-preview
           for theme in light dark; do
-            for screen in simulate graphs controller model settings; do
+            for screen in simulate graphs controller model autotune settings; do
               $RUN --strict --theme $theme --screen $screen --screenshot build/quick-preview/$screen-$theme.png
             done
           done
@@ -253,6 +253,8 @@ jobs:
             $RUN --strict --theme dark --panel $panel --screenshot build/quick-preview/panel-$panel-dark.png
           done
           $RUN --strict --theme light --panel graph --screenshot build/quick-preview/panel-graph-light.png
+          $RUN --strict --theme dark --autotune running --screenshot build/quick-preview/autotune-running-dark.png
+          $RUN --strict --theme light --autotune result --screenshot build/quick-preview/autotune-result-light.png
       - name: Performance test
         if: always()
         run: |

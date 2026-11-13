@@ -48,9 +48,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--scenario", default=SCENARIO)
     parser.add_argument("--theme", choices=["system", "light", "dark"], default=None,
                         help="theme for this run (not saved)")
-    parser.add_argument("--screen", choices=["simulate", "graphs", "controller", "model", "settings"], default="simulate")
+    parser.add_argument("--screen", choices=["simulate", "graphs", "controller", "model", "autotune", "settings"], default="simulate")
     parser.add_argument("--panel", choices=["edit", "value", "graph"], default=None,
                         help="screenshots: side panel in edit mode, or the editor of its first value/graph tile")
+    parser.add_argument("--autotune", choices=["running", "result"], default=None,
+                        help="screenshots: start a quick auto-tune; shoot it running, or its result after a cancel")
     parser.add_argument("--panel-stress", type=int, metavar="STEPS", default=None,
                         help="CI: edit the side panel STEPS times through the tile editor's buttons, then exit")
     parser.add_argument("--stress-gc", action="store_true", help="--panel-stress: collect garbage after each edit")
@@ -371,17 +373,25 @@ class QuickApp:
                 if args.panel != "edit":
                     tile = next((t for t in self.panel.model.tiles if t["type"] == args.panel), None)
                     self.panel.selected = tile["id"] if tile else ""
-            QTimer.singleShot(2500, self._screenshot)
+            if args.autotune:
+                self.shell.screen = "autotune"
+                self.autotune.choose("quick")
+                QTimer.singleShot(800, self.autotune.start)
+                if args.autotune == "result":
+                    QTimer.singleShot(9000, self.autotune.cancel)
+                QTimer.singleShot(7000 if args.autotune == "running" else 14000, self._screenshot)
+            else:
+                QTimer.singleShot(2500, self._screenshot)
         elif args.panel_stress is not None:
             self._stress_left = args.panel_stress
             QTimer.singleShot(1500, self._stress_step)
         elif args.smoke_test is not None:
             started = time.perf_counter()
-            steps = [("graphs", None), ("controller", None), ("model", None), ("settings", None),
-                     ("settings", "dark"), ("controller", None), ("model", None), ("simulate", None),
-                     ("simulate", "light")]
+            steps = [("graphs", None), ("controller", None), ("model", None), ("autotune", None),
+                     ("settings", None), ("settings", "dark"), ("controller", None), ("model", None),
+                     ("autotune", None), ("simulate", None), ("simulate", "light")]
             for i, (screen, theme) in enumerate(steps):
-                QTimer.singleShot(300 * (i + 1), lambda s=screen, t=theme: self._smoke_step(s, t))
+                QTimer.singleShot(240 * (i + 1), lambda s=screen, t=theme: self._smoke_step(s, t))
             QTimer.singleShot(int(max(args.smoke_test, 2.5) * 1000), lambda: self._smoke_check(started))
 
     def _stress_step(self) -> None:
