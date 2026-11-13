@@ -31,15 +31,25 @@ Item {
                 form: screen.plantForm
             }
         }
-        Card {
+        ColumnLayout {
             Layout.preferredWidth: screen.wide ? 380 : -1
             Layout.fillWidth: !screen.wide
             Layout.fillHeight: true
-            radius: Theme.radiusPanel
-            FormView {
-                anchors.fill: parent
-                anchors.margins: 12
-                form: screen.simulationForm
+            spacing: Theme.gap
+            EditBar {
+                Layout.fillWidth: true
+                target: model
+                onReset: model.reset()
+            }
+            Card {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                radius: Theme.radiusPanel
+                FormView {
+                    anchors.fill: parent
+                    anchors.margins: 12
+                    form: screen.simulationForm
+                }
             }
         }
     }

@@ -4,8 +4,9 @@ import Instrument 1.0
 // A parameter form (backend FormModel: rows of sections and fields) as a touch list.
 // Section header: tap to fold; its note (e.g. a loop's live output) in monospace.
 // Number: label, value (tap to type), − / slider / +; the slider follows the shared
-// mapping (session/sliders.py through form.position / form.valueAt) and applies on
-// release, so the simulation is not rebuilt for every pixel of a drag.
+// mapping (session/sliders.py through form.position / form.valueAt), moves only with
+// a deliberate sideways drag (vertical movement scrolls the list, a tap does nothing),
+// and applies on release, so the simulation is not rebuilt for every pixel of a drag.
 // Switch, choice (chips) and stepper (− n +) rows. Rows that cannot be edited are dimmed.
 ListView {
     id: list
@@ -231,14 +232,36 @@ ListView {
                                 border.color: Theme.accent
                                 border.width: 2
                             }
+                            // A slider moves only with a deliberate sideways drag: a touch that
+                            // starts moving up or down scrolls the list instead (the list takes
+                            // the touch over), and a tap changes nothing. Once the drag is
+                            // sideways it keeps the touch, and the value follows the finger's x.
                             MouseArea {
+                                id: dragArea
                                 anchors.fill: parent
                                 enabled: row.editable
-                                preventStealing: true                 // a horizontal drag is not a scroll
+                                preventStealing: num.dragging
+                                property real startX: 0
+                                property real startY: 0
+                                readonly property real threshold: 14
                                 function at(mx) { return Math.min(Math.max((mx - 12) / Math.max(track.width - 24, 1), 0), 1) }
-                                onPressed: (m) => { num.dragT = at(m.x); num.dragging = true }
-                                onPositionChanged: (m) => num.dragT = at(m.x)
+                                onPressed: (m) => { startX = m.x; startY = m.y }
+                                onPositionChanged: (m) => {
+                                    if (!num.dragging) {
+                                        var dx = Math.abs(m.x - startX), dy = Math.abs(m.y - startY)
+                                        // vertical first: the list scrolls (it takes the touch over)
+                                        if (dx < threshold || dx < 1.5 * dy)
+                                            return
+                                        num.dragT = list.form.position(row.key, Number(row.value))
+                                        num.dragging = true
+                                        grabOffset = (num.dragT * Math.max(track.width - 24, 1) + 12) - m.x
+                                    }
+                                    num.dragT = at(m.x + grabOffset)
+                                }
+                                property real grabOffset: 0                 // the handle does not jump to the finger
                                 onReleased: {
+                                    if (!num.dragging)
+                                        return
                                     var v = list.form.valueAt(row.key, num.dragT)
                                     num.dragging = false
                                     list.form.setValue(row.key, v)

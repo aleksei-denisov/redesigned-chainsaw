@@ -13,6 +13,11 @@ Item {
 
     component Actions: Column {
         spacing: Theme.gap
+        EditBar {
+            width: parent.width
+            target: controller
+            onReset: controller.restoreGains()
+        }
         Card {
             width: parent.width
             implicitHeight: liveCol.implicitHeight + 28
@@ -58,7 +63,6 @@ Item {
                     font.family: Theme.uiFont
                     font.pixelSize: 13
                 }
-                Btn { width: parent.width; text: "Restore previous gains"; onClicked: controller.restoreGains() }
                 Btn { width: parent.width; text: "Reset integrators"; onClicked: controller.resetIntegrators() }
             }
         }

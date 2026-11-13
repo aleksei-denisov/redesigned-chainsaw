@@ -27,6 +27,7 @@ from .rules import (
     initial_conditions_changed,
     prepare_config,
     restored_controller,
+    same_structure,
 )
 
 Operation = tuple
@@ -48,6 +49,8 @@ class Session:
     def __init__(self, config: AppConfig) -> None:
         self.config: AppConfig
         self.original_controller: ControllerConfig
+        self.original_plant: PlantParams
+        self.original_simulation: SimulationSettings
         self.load(config)
 
     # ----------------------------------------------------------- loading
@@ -56,6 +59,8 @@ class Session:
         prepare_config(config)
         self.config = config
         self.original_controller = copy.deepcopy(config.controller)
+        self.original_plant = copy.deepcopy(config.plant)
+        self.original_simulation = copy.deepcopy(config.simulation)
         return [("config", config)]
 
     # ------------------------------------------------------------- edits
@@ -75,6 +80,29 @@ class Session:
         initial = initial_conditions_changed(plant, self.config.plant)
         self.config.plant = plant
         return PlantChange([("plant", plant)], reset_if_idle=initial)
+
+    def restore_model(self, plant: PlantParams, simulation: SimulationSettings,
+                      controller: ControllerConfig) -> PlantChange:
+        """Plant, simulation settings and – where the structure changes back – the controller
+        of a snapshot (undo / redo / reset of the *Model* screen). Raises ``ValueError``."""
+        plant, simulation = copy.deepcopy(plant), copy.deepcopy(simulation)
+        plant.validate()
+        simulation.validate()
+        ops: list[Operation] = []
+        if simulation != self.config.simulation:
+            self.config.simulation = simulation
+            ops.append(("simulation", simulation))
+        if not same_structure(plant, self.config.plant):
+            ctrl = restored_controller(controller, plant)
+            self.config.plant, self.config.controller = plant, ctrl
+            return PlantChange(ops + [("structure", plant, ctrl)], structural=True, controller=ctrl)
+        initial = initial_conditions_changed(plant, self.config.plant)
+        self.config.plant = plant
+        return PlantChange(ops + [("plant", plant)], reset_if_idle=initial)
+
+    def restore_controller(self, controller: ControllerConfig) -> list[Operation]:
+        """A controller snapshot (undo / redo), loops completed for the current plant."""
+        return self.change_controller(restored_controller(controller, self.config.plant))
 
     def change_controller(self, controller: ControllerConfig) -> list[Operation]:
         controller.validate()

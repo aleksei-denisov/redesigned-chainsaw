@@ -266,3 +266,28 @@ def test_panel_editing_and_layouts(bridges):
     assert again.layoutName == "Mine" and again.tiles[0]["type"] == "status"
     again.reset()
     assert [t["type"] for t in again.tiles] == ["value"] * 4 + ["graph"]
+
+
+def test_undo_redo_reset_of_controller_and_model(bridges):
+    sim, model, controller, _graphs, _sent = bridges
+    kp0 = sim.session.config.controller.loops[0].kp
+    controller._edit("loop0.kp", kp0 + 5.0)
+    assert controller.canUndo and sim.session.config.controller.loops[0].kp == kp0 + 5.0
+    controller.undo()
+    assert sim.session.config.controller.loops[0].kp == kp0 and controller.canRedo
+    controller.redo()
+    assert sim.session.config.controller.loops[0].kp == kp0 + 5.0
+    controller.restoreGains()                                 # Reset
+    assert sim.session.config.controller.loops[0].kp == kp0
+    controller.undo()
+    assert sim.session.config.controller.loops[0].kp == kp0 + 5.0
+
+    mass0 = sim.session.config.plant.cart_mass
+    model._edit_plant("cart_mass", mass0 * 2)
+    assert model.canUndo and sim.session.config.plant.cart_mass == mass0 * 2
+    model.undo()
+    assert sim.session.config.plant.cart_mass == mass0
+    assert model.plantModel.form.values["cart_mass"] == mass0  # the form follows
+    model.redo()
+    model.reset()
+    assert sim.session.config.plant.cart_mass == mass0
