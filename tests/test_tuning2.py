@@ -85,3 +85,23 @@ def test_options_from_plain_data():
     assert options_from_dict(d, ["cart"]).limits.per_loop == {}
     d["limit_mode"] = "none"
     assert options_from_dict(d, ["cart"]).limits.general.kp is None
+
+
+def test_tuned_integral_stays_on_and_switched_off_gains_are_zero():
+    cfg = scenario("double_cart_lqr")
+    o = TuneOptions(mode="loops", loops=["cart"], terms=("kp", "ki"), off_terms=("kd",))
+    space = loops_space(cfg, o)
+    for z in (space.z0, space.lo, space.hi):
+        ctrl = space.build(z)
+        cart = next(lp for lp in ctrl.loops if lp.signal == "cart")
+        assert cart.ki != 0.0 and cart.i_enabled                 # a gain chosen for tuning stays on
+        assert cart.kd == 0.0 and not cart.d_enabled              # switched off
+        other = [lp for lp in ctrl.loops if lp.signal != "cart"]
+        assert all(a.kd == b.kd for a, b in zip(other, [lp for lp in cfg.controller.loops if lp.signal != "cart"]))
+
+
+def test_only_switching_off_is_allowed():
+    cfg = scenario("single_cart_pid")
+    res = tune(cfg, FAST, TuneOptions(mode="loops", loops=["theta1"], terms=(), off_terms=("ki",)))
+    loop = next(lp for lp in res.controller.loops if lp.signal == "theta1")
+    assert loop.ki == 0.0 and loop.kp == 40.0

@@ -38,6 +38,16 @@ Column {
         d[term] = (pair[0] === null && pair[1] === null) ? null : pair
         autotune.setOptions(c)
     }
+    function setTerm(term, state) {                // "tune" | "keep" | "off"
+        var c = JSON.parse(JSON.stringify(o))
+        var tune = (c.terms || []).filter(t => t !== term)
+        var off = (c.off_terms || []).filter(t => t !== term)
+        if (state === "tune") tune.push(term)
+        if (state === "off") off.push(term)
+        c.terms = tune
+        c.off_terms = off
+        autotune.setOptions(c)
+    }
     function hasOwn(signal) { return !!((o.limits || {}).per_loop || {})[signal] }
     function setOwn(signal, on) {
         var c = JSON.parse(JSON.stringify(o))
@@ -130,8 +140,8 @@ Column {
     }
     Note {
         text: opts.o.mode === "loops"
-              ? "Only the loops and gains chosen below are searched, starting from their current values; "
-                + "every other loop keeps its settings."
+              ? "Only the chosen loops are changed: a gain set to Tune is searched (starting from its current "
+                + "value, and it stays on), Keep leaves it as it is, Off sets it to 0. Other loops keep their settings."
               : "Every loop at once: a search over LQR designs (always stabilising), mapped onto Kp and Kd, "
                 + "then each loop's integral gain."
     }
@@ -162,17 +172,24 @@ Column {
                 }
             }
         }
-        Text { text: "Gains"; color: Theme.textMuted; font.family: Theme.uiFont; font.pixelSize: 13 }
-        Flow {
-            width: parent.width
-            spacing: 6
-            Repeater {
-                model: [["kp", "Kp"], ["ki", "Ki"], ["kd", "Kd"]]
-                Btn {
-                    required property var modelData
-                    text: modelData[1]
-                    active: (opts.o.terms || []).indexOf(modelData[0]) >= 0
-                    onClicked: opts.toggleIn("terms", modelData[0])
+        Text { text: "Gains of the chosen loops"; color: Theme.textMuted; font.family: Theme.uiFont; font.pixelSize: 13 }
+        Repeater {
+            model: [["kp", "Kp"], ["ki", "Ki"], ["kd", "Kd"]]
+            Row {
+                required property var modelData
+                readonly property string termState: (opts.o.off_terms || []).indexOf(modelData[0]) >= 0 ? "off"
+                                              : (opts.o.terms || []).indexOf(modelData[0]) >= 0 ? "tune" : "keep"
+                spacing: 6
+                Mono { width: 40; height: Theme.touch; verticalAlignment: Text.AlignVCenter; text: modelData[1] }
+                Repeater {
+                    model: [["tune", "Tune"], ["keep", "Keep as is"], ["off", "Off (0)"]]
+                    Btn {
+                        required property var modelData
+                        text: modelData[1]
+                        textSize: 14
+                        active: parent.termState === modelData[0]
+                        onClicked: opts.setTerm(parent.modelData[0], modelData[0])
+                    }
                 }
             }
         }

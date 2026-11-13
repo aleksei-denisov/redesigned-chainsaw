@@ -14,26 +14,23 @@ Item {
     readonly property QtObject plantForm: model.plantModel
     readonly property QtObject simulationForm: model.simulationModel
 
-    GridLayout {
+    // landscape: the model on the left, edits and simulation settings on the right
+    RowLayout {
         anchors.fill: parent
-        columns: screen.wide ? 2 : 1
-        rowSpacing: Theme.gap
-        columnSpacing: Theme.gap
-
+        spacing: Theme.gap
+        visible: screen.wide
         Card {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            Layout.preferredHeight: screen.wide ? -1 : screen.height * 0.6
             radius: Theme.radiusPanel
             FormView {
                 anchors.fill: parent
                 anchors.margins: 12
-                form: screen.plantForm
+                form: screen.wide ? screen.plantForm : null
             }
         }
         ColumnLayout {
-            Layout.preferredWidth: screen.wide ? 380 : -1
-            Layout.fillWidth: !screen.wide
+            Layout.preferredWidth: 380
             Layout.fillHeight: true
             spacing: Theme.gap
             EditBar {
@@ -48,8 +45,37 @@ Item {
                 FormView {
                     anchors.fill: parent
                     anchors.margins: 12
-                    form: screen.simulationForm
+                    form: screen.wide ? screen.simulationForm : null
                 }
+            }
+        }
+    }
+
+    // portrait: edits on top, then one list – the model or the simulation settings
+    ColumnLayout {
+        id: portrait
+        anchors.fill: parent
+        spacing: Theme.gap
+        visible: !screen.wide
+        property bool simulation: false
+        EditBar {
+            Layout.fillWidth: true
+            target: model
+            onReset: model.reset()
+        }
+        Row {
+            spacing: 6
+            Btn { text: "Model"; active: !portrait.simulation; onClicked: portrait.simulation = false }
+            Btn { text: "Simulation settings"; active: portrait.simulation; onClicked: portrait.simulation = true }
+        }
+        Card {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            radius: Theme.radiusPanel
+            FormView {
+                anchors.fill: parent
+                anchors.margins: 12
+                form: screen.wide ? null : (portrait.simulation ? screen.simulationForm : screen.plantForm)
             }
         }
     }

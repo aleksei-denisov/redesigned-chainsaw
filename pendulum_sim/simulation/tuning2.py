@@ -97,7 +97,9 @@ class GainLimits:
 class TuneOptions:
     mode: str = "full"                          # "full" | "loops"
     loops: list[str] = field(default_factory=list)   # "loops" mode: signals to tune (empty: all)
-    terms: tuple[str, ...] = TERMS              # "loops" mode: gains to tune
+    terms: tuple[str, ...] = TERMS              # "loops" mode: gains to tune …
+    off_terms: tuple[str, ...] = ()             # … and gains to switch off (0) in the selected loops;
+                                                # the others keep their values
     integral: bool = True                       # "full" mode: search integral gains after the design
     methods: bool = False                       # try derivative source / anti-windup
     limits: GainLimits = field(default_factory=GainLimits)
@@ -163,13 +165,17 @@ def loops_space(cfg: AppConfig, options: TuneOptions) -> _Space:
     except Exception:  # noqa: BLE001 - a reference for zero gains only
         ref = {}
     chosen = set(options.loops) or {lp.signal for lp in base.loops}
-    dims: list[tuple[int, str, float, bool]] = []          # (loop index, term, sign, may be off)
+    dims: list[tuple[int, str, float]] = []                # (loop index, term, sign)
+    off_loops: list[int] = []                              # selected loops whose off_terms become 0
     z0, lo, hi = [], [], []
     for i, lp in enumerate(base.loops):
         if lp.signal not in chosen or not lp.enabled:
             continue
         lim = options.limits.for_loop(lp.signal)
+        off_loops.append(i)
         for term in options.terms:
+            if term in options.off_terms:
+                continue
             cur = getattr(lp, term)
             if term == "ki":
                 kp = abs(lp.kp) or abs(getattr(ref.get(lp.signal), "kp", 1.0)) or 1.0
@@ -182,29 +188,24 @@ def loops_space(cfg: AppConfig, options: TuneOptions) -> _Space:
             b = _magnitude_bounds(sign, lim.get(term), start)
             if b is None:
                 continue
-            off = term == "ki"
-            dims.append((i, term, sign, off))
-            if term == "ki" and not cur:
-                z0.append(b[0] - 0.25)                  # integral off at the start
-            else:
-                z0.append(min(max(math.log10(start), b[0]), b[1]))
-            lo.append(b[0] - (0.5 if off else 0.0))     # the lowest half decade of Ki means "off"
+            # a gain chosen for tuning stays on: the search looks for its best non-zero value
+            dims.append((i, term, sign))
+            z0.append(min(max(math.log10(start), b[0]), b[1]))
+            lo.append(b[0])
             hi.append(b[1])
-    if not dims:
+    if not dims and not (off_loops and options.off_terms):
         raise ValueError("nothing to tune: choose at least one loop and one gain (and check the gain limits)")
     lo_a = np.array(lo)
 
     def build(z: np.ndarray) -> ControllerConfig | None:
         ctrl = copy.deepcopy(base)
-        for k, (i, term, sign, off) in enumerate(dims):
-            lp = ctrl.loops[i]
-            if off and z[k] < lo_a[k] + 0.5:
-                value = 0.0
-            else:
-                value = sign * 10.0 ** float(z[k])
-            setattr(lp, term, value)
-            if value != 0.0:
-                setattr(lp, term[1] + "_enabled", True)     # p_enabled / i_enabled / d_enabled
+        for i in off_loops:
+            for term in options.off_terms:
+                setattr(ctrl.loops[i], term, 0.0)
+                setattr(ctrl.loops[i], term[1] + "_enabled", False)
+        for k, (i, term, sign) in enumerate(dims):
+            setattr(ctrl.loops[i], term, sign * 10.0 ** float(z[k]))
+            setattr(ctrl.loops[i], term[1] + "_enabled", True)       # p_enabled / i_enabled / d_enabled
         return ctrl if options.limits.allows(ctrl) else None
 
     return _Space(np.array(z0), lo_a, np.array(hi), build, sigma=0.5)
@@ -402,6 +403,8 @@ def tune(config: AppConfig, settings: TuningSettings | None = None, options: Tun
 
     def search(space: _Space, samples: int, rounds: int, per_round: int, phase: str, label: str,
                with_baseline: bool = False, include_start: bool = True) -> bool:
+        if space.z0.size == 0:                       # nothing searched (only gains switched off)
+            samples, rounds = 0, 0
         pts = ([space.z0] if include_start else []) + \
               [space.clip(space.z0 + rng.normal(0.0, space.sigma, space.z0.size)) for _ in range(samples)]
         if not run([(space.build(z), (space.weights(z), z)) for z in pts], phase, f"{label} – exploring", with_baseline):
@@ -468,7 +471,7 @@ def tune(config: AppConfig, settings: TuningSettings | None = None, options: Tun
 
 
 # ------------------------------------------------------------ plain data
-DEFAULT_OPTIONS = {"mode": "full", "integral": True, "methods": False, "loops": [], "terms": list(TERMS),
+DEFAULT_OPTIONS = {"mode": "full", "integral": True, "methods": False, "loops": [], "terms": list(TERMS), "off_terms": [],
                    "limit_mode": "none", "limits": {"general": {}, "per_loop": {}}}
 
 
@@ -497,7 +500,8 @@ def options_from_dict(d: dict | None, signals: list[str]) -> TuneOptions:
     d = {**DEFAULT_OPTIONS, **(d or {})}
     mode = d["mode"] if d["mode"] in ("full", "loops") else "full"
     loops = [s for s in d.get("loops") or [] if s in signals]
-    terms = tuple(t for t in TERMS if t in (d.get("terms") or TERMS)) or TERMS
+    off_terms = tuple(t for t in TERMS if t in (d.get("off_terms") or []))
+    terms = tuple(t for t in TERMS if t in (d.get("terms") or []) and t not in off_terms)
     lim = d.get("limits") or {}
     limit_mode = d.get("limit_mode", "none")
     if limit_mode == "none":
@@ -506,5 +510,5 @@ def options_from_dict(d: dict | None, signals: list[str]) -> TuneOptions:
         per = lim.get("per_loop") or {} if limit_mode == "per_loop" else {}
         limits = GainLimits(_term_limits(lim.get("general")),
                             {s: _term_limits(v) for s, v in per.items() if s in signals and v is not None})
-    return TuneOptions(mode=mode, loops=loops, terms=terms, integral=bool(d.get("integral", True)),
+    return TuneOptions(mode=mode, loops=loops, terms=terms, off_terms=off_terms, integral=bool(d.get("integral", True)),
                        methods=bool(d.get("methods", False)), limits=limits)

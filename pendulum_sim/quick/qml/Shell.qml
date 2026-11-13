@@ -75,7 +75,7 @@ Item {
                 anchors.right: parent.right
                 anchors.verticalCenter: parent.verticalCenter
                 anchors.margins: 12
-                columns: shell.wide ? 3 : 1
+                columns: 1                      // screens on the first row, simulation controls on the second
                 rowSpacing: 10
                 columnSpacing: 10
 
@@ -107,10 +107,9 @@ Item {
                         }
                     }
                 }
-                Item { Layout.fillWidth: true; visible: shell.wide; implicitHeight: 1 }
                 Row {
                     spacing: 6
-                    Layout.alignment: shell.wide ? Qt.AlignRight : Qt.AlignLeft
+                    Layout.alignment: Qt.AlignLeft
                     // pushes only where the pendulum or its graphs are in view
                     readonly property bool pushHere: App.screen === "simulate" || App.screen === "graphs"
                     Caption { text: "Push"; visible: parent.pushHere; anchors.verticalCenter: parent.verticalCenter; rightPadding: 2 }

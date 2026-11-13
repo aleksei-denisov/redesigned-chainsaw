@@ -121,6 +121,22 @@ def drag_force(push_force: float, offset: float) -> float:
     return float(np.clip(f, -limit, limit))
 
 
+GRAB_GAIN = 2.0          # grab force = GRAB_GAIN · pendulum weight · (offset / total length) …
+GRAB_LIMIT = 1.0         # … clamped to ±GRAB_LIMIT · pendulum weight
+
+
+def grab_force(plant, offset: float) -> float:
+    """Force while a point of the pendulum is dragged (Qt Quick app, quick-core-v2).
+
+    Scaled by the pendulum's weight (``Σ m g``), not by the push-force setting: a finger
+    half the pendulum's length away pulls with its full weight at most, whatever the
+    push force is (after an auto-tune that is a tiny test value, and the old law then
+    left a dragged point practically still). ``offset`` is relative to the total length.
+    """
+    weight = sum(seg.mass for seg in plant.segments) * plant.gravity
+    return float(np.clip(GRAB_GAIN * weight * offset, -GRAB_LIMIT * weight, GRAB_LIMIT * weight))
+
+
 def loop_labels(controller: ControllerConfig) -> list[str]:
     """Short loop names for graphs: ``cart``, ``θ1``, ``θ2`` …"""
     return ["cart" if loop.signal == "cart" else f"θ{loop.signal[5:]}" for loop in controller.loops]

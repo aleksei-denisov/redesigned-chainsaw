@@ -260,8 +260,9 @@ class SimulationBridge(QObject):
 
     @Slot(float, int, float)
     def dragAt(self, offset: float, segment: int, ratio: float) -> None:  # noqa: N802 - QML API
-        """Dragging the pendulum by a point (``segment``, ``ratio``) – same force law as the tip."""
-        self.source.send("drag", rules.drag_force(self.session.config.push_force, offset), int(segment), float(ratio))
+        """Dragging the pendulum by a point (``segment``, ``ratio``; -1: the tip): a pull that
+        grows with the finger's distance, scaled by the pendulum's weight (``rules.grab_force``)."""
+        self.source.send("drag", rules.grab_force(self.session.config.plant, offset), int(segment), float(ratio))
 
     @Slot()
     def endDrag(self) -> None:  # noqa: N802 - QML API

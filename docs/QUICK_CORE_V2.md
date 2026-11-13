@@ -21,10 +21,16 @@ the old path, bit for bit. `Simulator.apply_disturbance(force, duration, segment
 Tests: `tests/test_point_force.py` (tip equivalence, joints, fast vs reference, virtual
 power `Q·q̇ = F·ẋ_point`).
 
-In the app: a **tap** on the pendulum pushes the nearest point away from the finger; a
-**drag** that starts on the pendulum pulls that point towards the finger (the Widgets
-app's force law); *Push Left / Right* push the tip. The **push force** is set in the dock
-(presets 0.05–200 N or typed).
+In the app: a **tap** on the pendulum pushes the nearest point away from the finger with
+the push force; a **drag** that starts on the pendulum pulls that point towards the finger
+with a force scaled by the pendulum's weight (`rules.grab_force`: 2 · Σ m g · offset /
+total length, at most Σ m g – independent of the push force, which after an auto-tune
+may be a tiny test value); *Push Left / Right* push the tip. The **push force** is set in
+the dock (presets 0.05–200 N or typed); applying an auto-tune result no longer changes it.
+
+A push near the pivot mostly moves the cart: its lever arms on the angles are small
+(`a_1 = r L_1`, nothing above), so with a stiff controller the segments move almost
+together – correct physics, not a single rigid body (`tests/test_point_force.py`).
 
 ## Auto-tune with options (`simulation/tuning2.py`)
 
@@ -35,8 +41,9 @@ cost), same parallel workers – new search options:
   each loop's `Ki/Kp` (1/s, log scale, "off" included) searched with the best design
   fixed; integral action is kept only where it makes the controller more robust.
   `Ki` is no longer forced to zero.
-* **Selected loops** – only the chosen loops and gains (Kp, Ki, Kd) by a direct search
-  around the current values (sign kept); every other loop keeps its settings.
+* **Selected loops** – only the chosen loops, each gain set to *Tune* (searched around its
+  current value, sign kept, and kept non-zero), *Keep as is* or *Off (0)*; every other
+  loop keeps its settings.
 * **Gain limits** – none, the same for every loop, or per loop (a loop's own limits, the
   general ones for the others); signed `[min, max]`, each side optional. In the direct
   search they bound the search; an LQR design breaking them is rejected (clipping a

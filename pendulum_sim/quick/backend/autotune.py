@@ -187,9 +187,23 @@ class AutotuneBridge(QObject):
     @Slot()
     def apply(self) -> None:
         if self.result is not None:
+            push = float(self.sim.session.config.push_force)
             self.controller.apply_tuning(self.result)
+            self.sim._set_push_force(push)          # the push force stays the user's choice
             self.applied.emit()
         self.close()
+
+    def _notes(self, result) -> str:
+        """The shared notes, without "applying sets the push force" (this app keeps it)."""
+        before, after = result.baseline_max_push, result.max_push
+        notes = [f"{result.evaluations} candidates in {texts.fmt_duration(result.elapsed)}."]
+        if result.cancelled:
+            notes.insert(0, "Cancelled – this is the best result found so far.")
+        if after <= before * 1.02:
+            notes.append("The current gains are already about as robust as this search can find.")
+        notes.append(f"For testing, a tip push of about {result.recommended_push:g} N is half of what it "
+                     f"recovers from (the push force is not changed).")
+        return " ".join(notes)
 
     @Slot()
     def close(self) -> None:
@@ -255,7 +269,7 @@ class AutotuneBridge(QObject):
         old = texts.gains_text(self.config.controller if self.config else None)
         if worker.outcome is not None:
             self.result, self.comparison = worker.outcome
-            self._texts.update(headline=texts.tune_headline(self.result), notes=texts.tune_notes(self.result),
+            self._texts.update(headline=texts.tune_headline(self.result), notes=self._notes(self.result),
                                old=old, new=texts.gains_text(self.result.controller))
         else:
             self.result, self.comparison = None, None

@@ -420,7 +420,8 @@ EXPERIMENT_SECTION = Section("experiment", "Experiment", (
 ))
 
 DISTURBANCE_SECTION = Section("disturbance", "Scheduled disturbance", (
-    Field("dist_on", "Push the tip during the run", "switch"),
+    Field("dist_on", "Push the tip during the run", "switch",
+          hint="off: the run starts from the initial state with no push – the values below are not used"),
     number("dist_time", "Start time", 0.0, 600.0, 2, "s"),
     number("dist_force", "Force", -1000.0, 1000.0, 3, "N", "symlog"),
     number("dist_dur", "Duration", 0.001, 10.0, 3, "s", "log"),
@@ -448,6 +449,10 @@ class ExperimentForm(Form):
     def set(self, key: str, value) -> ExperimentSettings:
         self._put(key, value)
         return self.settings()
+
+    def editable(self, key: str) -> bool:
+        """The push's time, force and duration only matter when the push is switched on."""
+        return self.values["dist_on"] if key in ("dist_time", "dist_force", "dist_dur") else True
 
     def settings(self) -> ExperimentSettings:
         v = self.values

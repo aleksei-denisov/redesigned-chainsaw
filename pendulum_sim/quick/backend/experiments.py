@@ -60,7 +60,8 @@ class ExperimentsBridge(QObject):
         self.controller = controller
         self.form = ExperimentForm()
         self.form.set_settings(sim.session.config.experiment)
-        self._model = FormModel(self.form, self._edit, expanded={"disturbance": False}, parent=self)
+        self._model = FormModel(self.form, self._edit, editable=self.form.editable,
+                                expanded={"disturbance": True}, parent=self)
         self.results: list[ExperimentResult] = []
         self.colors: list[int] = []                      # colour index per run (kept when runs are removed)
         self.worker: ExperimentWorker | None = None
