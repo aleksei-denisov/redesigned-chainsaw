@@ -199,7 +199,7 @@ Column {
         label: "Hold position under a steady push"
         hint: "also test each candidate under a steady push at the tip and prefer the one that brings the "
               + (autotune.hasCart ? "cart" : "first segment") + " back – usually an integral gain on the "
-              + (autotune.hasCart ? "cart position" : "segment 1") + " loop. Takes about 40 % longer."
+              + (autotune.hasCart ? "cart position" : "segment 1") + " loop. The search takes about 2–3 times as long."
               + (opts.o.mode === "loops" ? " Set Ki of that loop to Tune." : "")
         checked: opts.o.hold === true
         onToggled: opts.put("hold", !checked)

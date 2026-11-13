@@ -79,7 +79,7 @@ HOLD_FORCE = 0.05                    # steady tip force of the hold test, × the
 HOLD_SECONDS = 12.0                  # s, length of the hold test
 HOLD_WEIGHT = 0.5                    # score = push · (1 − HOLD_WEIGHT · residual)
 HOLD_SEEDS = (-1.0, -0.7, -0.5)      # log10(Ki/Kp) of the held loop's integral tried with "hold"
-HOLD_COST = 1.4                      # rough factor on the search time with the hold test
+HOLD_COST = 2.4                      # rough factor on the search time with the hold test
 
 
 # ------------------------------------------------------------------ options

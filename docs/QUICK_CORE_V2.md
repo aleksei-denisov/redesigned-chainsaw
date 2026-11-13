@@ -61,7 +61,14 @@ cost), same parallel workers – new search options:
   long as it recovers from at least half the push. With the integral search, the held
   loop's integral alone at `Ki/Kp` = 0.1 / 0.2 / 0.3 1/s is tried too (the research
   below found exactly that one useful). The result shows the residual before → after.
-  About 40 % more search time.
+  The search takes about 2–3 times as long (*Quick* preset, one core per row below).
+
+  | Scenario | push off / on | residual: start → result | integral found |
+  |---|---|---|---|
+  | single_cart_pid | 4.48 / 4.48 N | 100 % → 2 % | cart, Ki/Kp 0.27 1/s |
+  | double_cart_lqr | 0.46 / 0.46 N | 100 % → 6 % | cart, 0.20 1/s |
+  | double_fixed_lqr | 0.78 / 0.78 N | 100 % → 18 % (θ1) | θ1, 0.27 1/s |
+  | triple_cart_lqr | 0.12 / 0.12 N | 100 % → 8 % | cart, 0.20 1/s |
 
 Controller frequency and output limits are not tuned: they are hardware limits, and
 the search would always push them to the maximum.
