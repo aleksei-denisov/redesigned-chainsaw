@@ -20,6 +20,7 @@ vertex layout (``AttributeSet``) a geometry refers to is kept for the whole run.
 from __future__ import annotations
 
 import ctypes
+import weakref
 
 from PySide6.QtCore import Property, QObject, Signal
 from PySide6.QtGui import QColor, QMatrix4x4
@@ -35,6 +36,7 @@ from PySide6.QtQuick import (
 MAX_SERIES = 6
 NOTES: dict[str, str] = {}          # problems seen while drawing (shown in the performance report)
 _ATTRIBUTES: list = []              # the vertex layout every geometry refers to (never freed)
+INSTANCES: "weakref.WeakSet[GraphLines]" = weakref.WeakSet()     # for diagnostics (--graph-stress)
 
 
 def _attributes():
@@ -83,6 +85,7 @@ class GraphLines(QQuickItem):
         self._window_dpr = 0.0                          # from windowChanged; see _dpr()
         self.windowChanged.connect(self._on_window)
         self.setClip(True)                              # curves scroll in from the right, out at the left
+        INSTANCES.add(self)
 
     # ------------------------------------------------------------ properties
     def _set_view(self, view: QObject | None) -> None:

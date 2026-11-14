@@ -58,6 +58,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--panel-stress", type=int, metavar="STEPS", default=None,
                         help="CI: edit the side panel STEPS times through the tile editor's buttons, then exit")
     parser.add_argument("--stress-gc", action="store_true", help="--panel-stress: collect garbage after each edit")
+    parser.add_argument("--graph-stress", type=int, metavar="CHANGES", default=None,
+                        help="Graphs screen: change window / smoothing CHANGES times while the pendulum flails, "
+                             "check that every card shows curves (CI)")
+    parser.add_argument("--graph-stress-dir", default="", help="--graph-stress: save screenshots of blank cards here")
     parser.add_argument("--smoke-test", type=float, metavar="SECONDS", default=None,
                         help="visit every screen, run the simulation for SECONDS, then exit (CI)")
     parser.add_argument("--screenshot", metavar="PNG", default=None, help="save the window after 2.5 s and exit")
@@ -81,7 +85,7 @@ def main(argv: list[str] | None = None, journal=None) -> int:
     if IS_ANDROID:
         os.environ.setdefault("QT_ANDROID_DISABLE_ACCESSIBILITY", "1")   # as in the Widgets app
     sys.setswitchinterval(GUI_SWITCH_INTERVAL_S)
-    if args.screenshot:
+    if args.screenshot or args.graph_stress is not None:
         # grabWindow() blocks the GUI thread – holding the GIL – until the render thread has
         # drawn; with a threaded loop GraphLines.updatePaintNode (Python, on the render
         # thread) then waits for the GIL: a deadlock. The basic loop grabs on this thread.
@@ -394,6 +398,13 @@ class QuickApp:
         elif args.panel_stress is not None:
             self._stress_left = args.panel_stress
             QTimer.singleShot(1500, self._stress_step)
+        elif args.graph_stress is not None:
+            self._graph_step = 0
+            self._graph_blank = 0
+            self.shell.screen = "graphs"
+            for key in ("angular_velocity", "cart_position", "cart_velocity", "control"):
+                self.graphs.select(key, True)
+            QTimer.singleShot(1500, self._graph_stress_step)
         elif args.smoke_test is not None:
             started = time.perf_counter()
             steps = [("graphs", None), ("controller", None), ("model", None), ("autotune", None),
@@ -486,6 +497,65 @@ class QuickApp:
             self._done(False)
             return
         QTimer.singleShot(120, self._stress_step)
+
+    def _graph_stress_step(self) -> None:
+        """--graph-stress: check the cards drawn after the previous change, then the next change."""
+        import random
+
+        from PySide6.QtCore import QPointF, QTimer
+
+        from .backend import lineitem
+
+        step = self._graph_step
+        if step > 0:
+            grab = getattr(self.window, "grabWindow", None)
+            image = grab() if grab is not None else self.window.screen().grabWindow(self.window.winId()).toImage()
+            scale = image.width() / max(self.window.width(), 1)
+            report = []
+            blank = False
+            for item in list(lineitem.INSTANCES):
+                view = item.view
+                if view is None or not item.isVisible() or item.width() < 20:
+                    continue
+                top = item.mapToScene(QPointF(0, 0))
+                x0, y0 = int(top.x() * scale), int(top.y() * scale)
+                w, h = int(item.width() * scale), int(item.height() * scale)
+                coloured = 0
+                for yy in range(y0, min(y0 + h, image.height()), 3):
+                    for xx in range(x0, min(x0 + w, image.width()), 3):
+                        c = image.pixelColor(xx, yy)
+                        if max(c.red(), c.green(), c.blue()) - min(c.red(), c.green(), c.blue()) > 60:
+                            coloured += 1
+                out = view.output
+                sizes = [int(i.size) for _v, i in out.curves] if out is not None else None
+                nodes = [int(e[1].indexCount()) for e in item._nodes] if item._nodes else []
+                axes = [(round(a.lo, 3), round(a.hi, 3)) for a in out.axes] if out is not None else []
+                report.append(f"{view.key}: pixels {coloured}, indices {sizes}, nodes {nodes[:4]}, "
+                              f"dx {out.dx if out is not None else None:.1f}, axes {axes}, active {view.active}")
+                if coloured < 20:
+                    blank = True
+            spec = self.graphs._window, self.graphs._smoothing
+            print(f"graph stress {step}: window {spec[0]} s, smoothing {spec[1]}: "
+                  + ("BLANK " if blank else "") + "; ".join(report)
+                  + (f"; notes {lineitem.NOTES}" if lineitem.NOTES else ""), flush=True)
+            if blank:
+                self._graph_blank += 1
+                if self.args.graph_stress_dir:
+                    image.save(f"{self.args.graph_stress_dir}/graph-stress-{step}.png")
+        if step >= self.args.graph_stress:
+            print(f"graph stress: {step} changes, {self._graph_blank} with a blank card, "
+                  f"{len(self.warnings)} QML warnings", flush=True)
+            self._done(self._graph_blank == 0 and (not self.args.strict or not self.warnings))
+            return
+        rng = random.Random(step)
+        if step % 4 == 0:                                   # knock it over now and then: large values
+            self.sim.source.push(rng.choice((-30.0, 30.0)), 0.1)
+        if step % 2 == 0:
+            self.graphs.windowS = rng.choice([5, 10, 20, 30])
+        else:
+            self.graphs.smoothing = rng.choice(["off", "light", "medium", "strong"])
+        self._graph_step += 1
+        QTimer.singleShot(900, self._graph_stress_step)
 
     def _smoke_step(self, screen: str, theme: str | None) -> None:
         self.shell.screen = screen

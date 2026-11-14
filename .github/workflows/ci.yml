@@ -232,6 +232,9 @@ jobs:
           }
           $RUN --strict --panel-stress 60 --stress-gc
           QSG_RENDER_LOOP=threaded $RUN --strict --panel-stress 60 --stress-gc
+          mkdir -p build/quick-preview
+          $RUN --strict --graph-stress 50 --graph-stress-dir build/quick-preview \
+            || echo "::warning title=graph stress::a graph card stayed blank after a window / smoothing change"
       - name: Start-up journal and safe mode after an unfinished start
         env:
           PENDULUM_QUICK_DIAG: ${{ runner.temp }}/diag

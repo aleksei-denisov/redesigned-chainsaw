@@ -75,3 +75,12 @@ def test_engine_tip_push_unchanged_and_point_push_differs():
         runs[label] = sim.state.copy()
     assert np.array_equal(runs["tip"], runs["tip2"])        # the top of the last segment is the tip
     assert not np.allclose(runs["tip"], runs["mid"])
+
+
+def test_dragging_a_point_pulls_at_most_with_the_push_force():
+    from pendulum_sim.session.rules import point_drag_force
+    assert point_drag_force(1.0, 0.0) == 0.0
+    assert point_drag_force(1.0, 0.25) == pytest.approx(0.5)            # closer: less
+    assert point_drag_force(1.0, 0.9) == pytest.approx(1.0)             # never more than the push force
+    assert point_drag_force(1.0, -3.0) == pytest.approx(-1.0)
+    assert point_drag_force(0.2, 2.0) == pytest.approx(0.2)

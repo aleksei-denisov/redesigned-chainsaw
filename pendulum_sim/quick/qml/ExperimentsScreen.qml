@@ -223,6 +223,7 @@ Item {
         visible: screen.wide
         ColumnLayout {
             Layout.preferredWidth: 380
+            Layout.fillWidth: false            // (the cards' fillWidth would make the column take everything)
             Layout.fillHeight: true
             spacing: Theme.gap
             Card {

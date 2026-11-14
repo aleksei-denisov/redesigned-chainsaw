@@ -23,10 +23,10 @@ power `Q·q̇ = F·ẋ_point`).
 
 In the app: a **tap** on the pendulum pushes the nearest point away from the finger with
 the push force; a **drag** that starts on the pendulum pulls that point towards the finger
-with a force scaled by the pendulum's weight (`rules.grab_force`: 2 · Σ m g · offset /
-total length, at most Σ m g – independent of the push force, which after an auto-tune
-may be a tiny test value); *Push Left / Right* push the tip. The **push force** is set in
-the dock (presets 0.05–200 N or typed); applying an auto-tune result no longer changes it.
+with a force that grows with the finger's distance up to the push force
+(`rules.point_drag_force`: 2 · push force · offset / total length, at most the push
+force), so a pull is never stronger than a tap; *Push Left / Right* push the tip. The
+**push force** is set in the dock (presets 0.05–200 N or typed); applying an auto-tune result no longer changes it.
 
 A push near the pivot mostly moves the cart: its lever arms on the angles are small
 (`a_1 = r L_1`, nothing above), so with a stiff controller the segments move almost

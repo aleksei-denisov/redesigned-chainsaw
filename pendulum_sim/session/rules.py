@@ -121,20 +121,19 @@ def drag_force(push_force: float, offset: float) -> float:
     return float(np.clip(f, -limit, limit))
 
 
-GRAB_GAIN = 2.0          # grab force = GRAB_GAIN · pendulum weight · (offset / total length) …
-GRAB_LIMIT = 1.0         # … clamped to ±GRAB_LIMIT · pendulum weight
+POINT_DRAG_GAIN = 2.0    # point drag = POINT_DRAG_GAIN · push force · (offset / total length) …
+POINT_DRAG_LIMIT = 1.0   # … clamped to ±POINT_DRAG_LIMIT · push force
 
 
-def grab_force(plant, offset: float) -> float:
+def point_drag_force(push_force: float, offset: float) -> float:
     """Force while a point of the pendulum is dragged (Qt Quick app, quick-core-v2).
 
-    Scaled by the pendulum's weight (``Σ m g``), not by the push-force setting: a finger
-    half the pendulum's length away pulls with its full weight at most, whatever the
-    push force is (after an auto-tune that is a tiny test value, and the old law then
-    left a dragged point practically still). ``offset`` is relative to the total length.
+    The push force is the strongest pull: a finger half the pendulum's length away (or
+    farther) pulls with exactly the push force, a closer one with less – as strong as
+    a tap or *Push Left / Right* at most. ``offset`` is relative to the total length.
     """
-    weight = sum(seg.mass for seg in plant.segments) * plant.gravity
-    return float(np.clip(GRAB_GAIN * weight * offset, -GRAB_LIMIT * weight, GRAB_LIMIT * weight))
+    limit = POINT_DRAG_LIMIT * abs(push_force)
+    return float(np.clip(POINT_DRAG_GAIN * abs(push_force) * offset, -limit, limit))
 
 
 def loop_labels(controller: ControllerConfig) -> list[str]:

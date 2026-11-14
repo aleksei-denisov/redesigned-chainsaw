@@ -54,6 +54,7 @@ Item {
         }
         ColumnLayout {
             Layout.preferredWidth: 340
+            Layout.fillWidth: false            // (EditBar's fillWidth would make the column take everything)
             Layout.fillHeight: true
             spacing: Theme.gap
             EditBar {
