@@ -50,6 +50,16 @@ Item {
             }
         }
 
+        Text {                                   // a drawing / computing error instead of a silently blank graph
+            Layout.fillWidth: true
+            visible: graphs.problem.length > 0
+            wrapMode: Text.Wrap
+            text: "Graph problem (please send a screenshot): " + graphs.problem
+            color: Theme.danger
+            font.family: Theme.monoFont
+            font.pixelSize: 12
+        }
+
         GridLayout {
             id: grid
             Layout.fillWidth: true

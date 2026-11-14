@@ -80,7 +80,7 @@ class TrailBridge(QObject):
         pass
 
     @Slot(bool)
-    def setActive(self, on: bool) -> None:  # noqa: N802 - QML API
+    def setActive(self, on: bool, owner: object | None = None) -> None:  # noqa: N802 - item API
         if bool(on) != self.active:
             self.active = bool(on)
             self._draw()

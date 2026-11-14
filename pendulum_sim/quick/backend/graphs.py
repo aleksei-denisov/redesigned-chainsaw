@@ -17,6 +17,7 @@ from PySide6.QtCore import Property, QObject, QSettings, QTimer, Signal, Slot
 from ...mobile.plot_math import DEFAULT_SELECTION, GRAPHS, MAX_VISIBLE, graph_available, graph_series
 from ...session import rules
 from .curves import SMOOTHING_S, WINDOWS_S, GraphSpec, GraphState, Output, Style
+from .lineitem import NOTES
 from .signals import by_key, catalogue
 from .simulation import SimulationBridge
 
@@ -39,6 +40,8 @@ class GraphView(QObject):
         self.height = 0.0
         self.dpr = 1.0
         self.active = False
+        self._wanted: set[int] = set()        # the items that show this view (a card being replaced and
+                                              # its successor can both be there for a moment)
         self.state = GraphState(spec, owner.catalogue, owner.rate_telemetry)
         self.output: Output | None = None
         self._ticks: list[list[dict]] = [[], []]
@@ -57,9 +60,19 @@ class GraphView(QObject):
     def setSize(self, width: float, height: float) -> None:  # noqa: N802 - QML API
         self.width, self.height = float(width), float(height)
 
-    @Slot(bool)
-    def setActive(self, on: bool) -> None:  # noqa: N802 - QML API
-        self.active = bool(on)
+    def setActive(self, on: bool, owner: object | None = None) -> None:  # noqa: N802 - item API
+        """Shown or not by ``owner`` (a GraphLines item); computed while any item shows it.
+
+        A single flag was wrong when cards are rebuilt: the old card, torn down after its
+        successor started, switched the shared view off – the new card then never got
+        curves (blank, or frozen) until the screen was left and opened again.
+        """
+        key = id(owner) if owner is not None else 0
+        if on:
+            self._wanted.add(key)
+        else:
+            self._wanted.discard(key)
+        self.active = bool(self._wanted)
 
     @Slot(result="QVariantList")
     def ranges(self) -> list:
@@ -94,6 +107,7 @@ class GraphsBridge(QObject):
     rateChanged = Signal()
     smoothingChanged = Signal()
     catalogueChanged = Signal()
+    problemChanged = Signal()
 
     def __init__(self, sim: SimulationBridge, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -113,6 +127,7 @@ class GraphsBridge(QObject):
         self.ms = 0.0                                     # last refresh, for reports
         self.recording: list[float] | None = None
         self._due = 0.0
+        self._problem = ""
         # Refreshed from the frame loop (on_frame) once a frame driver is attached, so a
         # refresh never triggers a render between paced frames; the timer is the fallback.
         self.timer = QTimer(self)
@@ -137,6 +152,12 @@ class GraphsBridge(QObject):
                          notify=selectionChanged)
     maxVisible = Property(int, lambda self: MAX_VISIBLE, constant=True)
     windows = Property("QVariantList", lambda self: list(WINDOWS_S), constant=True)
+    # a drawing or computing error (shown on the Graphs screen instead of silently blank graphs)
+    problem = Property(str, lambda self: self._problem, notify=problemChanged)
+
+    @staticmethod
+    def _notes_text() -> str:
+        return "; ".join(f"{k}: {v}" for k, v in NOTES.items())
     smoothings = Property("QVariantList", lambda self: list(SMOOTHING_S), constant=True)
     loopLabels = Property("QVariantList", lambda self: self._labels(), notify=availableChanged)
     signals = Property("QVariantList", lambda self: [s.to_dict() for s in self.catalogue.values()],
@@ -161,6 +182,7 @@ class GraphsBridge(QObject):
             self.settings.setValue("quick/graphs/window_s", self._window)
             self._reconfigure_cards()
             self.windowChanged.emit()
+            self.refresh()                           # new curves now, not one graph period later
 
     windowS = Property(int, lambda self: self._window, _set_window, notify=windowChanged)
 
@@ -170,6 +192,7 @@ class GraphsBridge(QObject):
             self.settings.setValue("quick/graphs/smoothing", level)
             self._reconfigure_cards()
             self.smoothingChanged.emit()
+            self.refresh()
 
     smoothing = Property(str, lambda self: self._smoothing, _set_smoothing, notify=smoothingChanged)
 
@@ -274,7 +297,13 @@ class GraphsBridge(QObject):
         data = self.sim.source.tail(names, window + 0.5)
         now = time.monotonic()
         for v in active:
-            v.compute(data, now)
+            try:
+                v.compute(data, now)
+            except Exception as exc:  # noqa: BLE001 - one graph must not stop the others
+                NOTES[f"graph {v.key}"] = f"{type(exc).__name__}: {exc}"
+        if NOTES and self._problem != self._notes_text():
+            self._problem = self._notes_text()
+            self.problemChanged.emit()
         self.ms = (time.perf_counter() - started) * 1000.0
         if self.recording is not None:
             self.recording.append(self.ms)

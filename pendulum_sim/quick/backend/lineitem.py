@@ -96,7 +96,7 @@ class GraphLines(QQuickItem):
                 self._view.updated.disconnect(self._rebuild)
             except (RuntimeError, TypeError):
                 pass
-            self._view.setActive(False)
+            self._view.setActive(False, self)
         self._view = view
         if view is not None:
             view.updated.connect(self._rebuild)
@@ -160,7 +160,7 @@ class GraphLines(QQuickItem):
         if view.dpr != self._dpr():
             view.dpr = self._dpr()
             self._style_changed()
-        view.setActive(self._active and self.isVisible() and w > 2 and h > 2)
+        view.setActive(self._active and self.isVisible() and w > 2 and h > 2, self)
 
     # -------------------------------------------------------------- geometry
     def _style_changed(self) -> None:
@@ -183,6 +183,7 @@ class GraphLines(QQuickItem):
             return self._update_nodes(old)
         except Exception as exc:  # noqa: BLE001 - keep drawing the rest of the app
             NOTES["GraphLines"] = f"drawing failed: {type(exc).__name__}: {exc}"
+            self._pending = True                         # try again with the next curves
             return old
 
     def _update_nodes(self, old):

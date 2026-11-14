@@ -375,3 +375,16 @@ def test_folding_a_section_keeps_the_list_and_pages_filter_sections(bridges):
                  if ctrl.data(ctrl.index(i), ROLE_IDS["rowType"]) == "section"]
     assert loop_keys and all(k.startswith("loop") for k in loop_keys)
     ctrl.setSections([])
+
+
+def test_a_graph_view_stays_active_while_any_item_shows_it(bridges):
+    """A card being replaced must not switch off the view its successor shows."""
+    _sim, _model, _controller, graphs, _sent = bridges
+    view = graphs.view("angle")
+    old, new = object(), object()
+    view.setActive(True, old)
+    view.setActive(True, new)
+    view.setActive(False, old)                  # the old card's teardown
+    assert view.active
+    view.setActive(False, new)
+    assert not view.active
