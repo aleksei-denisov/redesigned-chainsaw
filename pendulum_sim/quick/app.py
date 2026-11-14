@@ -502,7 +502,7 @@ class QuickApp:
         """--graph-stress: check the cards drawn after the previous change, then the next change."""
         import random
 
-        from PySide6.QtCore import QPointF, QTimer
+        from PySide6.QtCore import SIGNAL, QPointF, QTimer
 
         from .backend import lineitem
 
@@ -513,7 +513,13 @@ class QuickApp:
             scale = image.width() / max(self.window.width(), 1)
             report = []
             blank = False
+            from shiboken6 import Shiboken
+
+            dead = 0
             for item in list(lineitem.INSTANCES):
+                if not Shiboken.isValid(item):
+                    dead += 1
+                    continue
                 view = item.view
                 if view is None or not item.isVisible() or item.width() < 20:
                     continue
@@ -530,12 +536,13 @@ class QuickApp:
                 sizes = [int(i.size) for _v, i in out.curves] if out is not None else None
                 nodes = [int(e[1].indexCount()) for e in item._nodes] if item._nodes else []
                 axes = [(round(a.lo, 3), round(a.hi, 3)) for a in out.axes] if out is not None else []
-                report.append(f"{view.key}: pixels {coloured}, indices {sizes}, nodes {nodes[:4]}, "
+                receivers = view.receivers(SIGNAL("updated()"))
+                report.append(f"{view.key}: pixels {coloured}, receivers {receivers}, indices {sizes}, nodes {nodes[:4]}, "
                               f"dx {out.dx if out is not None else None:.1f}, axes {axes}, active {view.active}")
                 if coloured < 20:
                     blank = True
             spec = self.graphs._window, self.graphs._smoothing
-            print(f"graph stress {step}: window {spec[0]} s, smoothing {spec[1]}: "
+            print(f"graph stress {step}: window {spec[0]} s, smoothing {spec[1]}, {dead} deleted items alive in Python: "
                   + ("BLANK " if blank else "") + "; ".join(report)
                   + (f"; notes {lineitem.NOTES}" if lineitem.NOTES else ""), flush=True)
             if blank:
