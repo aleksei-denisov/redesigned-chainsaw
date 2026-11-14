@@ -8,10 +8,16 @@ import Instrument 1.0
 // a deliberate sideways drag (vertical movement scrolls the list, a tap does nothing),
 // and applies on release, so the simulation is not rebuilt for every pixel of a drag.
 // Switch, choice (chips) and stepper (− n +) rows. Rows that cannot be edited are dimmed.
+// Folding a section keeps the scroll position (the model inserts / removes its rows).
 ListView {
     id: list
     property QtObject form
+    // the sections this list shows (a sub-page of a screen; "loop*" matches by prefix), [] = all
+    property var sections: []
     model: form
+    function showSections() { if (form) form.setSections(sections) }
+    onFormChanged: showSections()
+    onSectionsChanged: showSections()
     clip: true
     spacing: 0
     boundsBehavior: Flickable.StopAtBounds

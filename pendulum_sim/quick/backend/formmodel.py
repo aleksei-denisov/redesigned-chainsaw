@@ -4,6 +4,10 @@ Rows are section headers and fields, in screen order; hidden sections (the cart 
 fixed pivot, unused segments) are left out. QML shows each row with a delegate chosen
 by ``kind`` and edits with :meth:`FormModel.setValue`; the owner (a bridge) decides what
 an edit means and calls :meth:`refresh` / :meth:`update_values` afterwards.
+
+A rebuild changes only the rows that differ (folding a section inserts or removes its
+fields), so the list keeps its scroll position; a sub-page (``setSections``: the
+sections one page of a screen shows) starts at the top.
 """
 
 from __future__ import annotations
@@ -35,25 +39,69 @@ class FormModel(QAbstractListModel):
         self._editable = editable or (lambda _key: True)
         self._note = note
         self._expanded: dict[str, bool] = dict(expanded or {})     # overrides of the sections' defaults
+        self._pages: list[str] = []                    # sections of the current sub-page (empty: all)
         self._rows: list[tuple[str, object]] = []      # ("section", Section) | ("field", (Field, section key))
         self._index: dict[str, int] = {}
         self.refresh()
 
     # ---------------------------------------------------------- structure
-    def refresh(self) -> None:
-        """Rebuild the rows (sections shown, loops rebuilt …)."""
-        self.beginResetModel()
+    def _on_page(self, key: str) -> bool:
+        """Whether section ``key`` belongs to the current sub-page (``"loop*"``: a prefix)."""
+        if not self._pages:
+            return True
+        return any(key.startswith(p[:-1]) if p.endswith("*") else key == p for p in self._pages)
+
+    def _build(self) -> list[tuple[str, object]]:
         rows: list[tuple[str, object]] = []
         for section in self.form.sections:
-            if not self._visible(section.key):
+            if not self._visible(section.key) or not self._on_page(section.key):
                 continue
             expanded = self._expanded.setdefault(section.key, section.expanded)
             rows.append(("section", section))
             if expanded:
                 rows.extend(("field", (f, section.key)) for f in section.fields)
-        self._rows = rows
-        self._index = {row[1][0].key: i for i, row in enumerate(rows) if row[0] == "field"}
-        self.endResetModel()
+        return rows
+
+    @staticmethod
+    def _row_id(row: tuple[str, object]) -> tuple[str, str]:
+        return ("section", row[1].key) if row[0] == "section" else ("field", row[1][0].key)
+
+    def refresh(self, reset: bool = False) -> None:
+        """Rebuild the rows (sections shown, folded, loops rebuilt …).
+
+        Only the changed middle part is removed and inserted (rows equal at the start
+        and at the end stay), so a list view keeps its position; ``reset`` rebuilds all.
+        """
+        new = self._build()
+        old = self._rows
+        if reset or not old or not new:
+            self.beginResetModel()
+            self._rows = new
+            self._index = self._make_index()
+            self.endResetModel()
+            return
+        old_ids, new_ids = [self._row_id(r) for r in old], [self._row_id(r) for r in new]
+        head = 0
+        while head < min(len(old), len(new)) and old_ids[head] == new_ids[head]:
+            head += 1
+        tail = 0
+        while tail < min(len(old), len(new)) - head and old_ids[-1 - tail] == new_ids[-1 - tail]:
+            tail += 1
+        if len(old) - tail > head:
+            self.beginRemoveRows(QModelIndex(), head, len(old) - tail - 1)
+            self._rows = old[:head] + old[len(old) - tail:]
+            self.endRemoveRows()
+        if len(new) - tail > head:
+            self.beginInsertRows(QModelIndex(), head, len(new) - tail - 1)
+            self._rows = new
+            self.endInsertRows()
+        self._rows = new
+        self._index = self._make_index()
+        # rows kept may show other content (a loop's title, a section's fold mark)
+        self.dataChanged.emit(self.index(0), self.index(len(new) - 1), [])
+
+    def _make_index(self) -> dict[str, int]:
+        return {row[1][0].key: i for i, row in enumerate(self._rows) if row[0] == "field"}
 
     def update_values(self) -> None:
         """Values changed from outside (configuration loaded, LQR seeding …)."""
@@ -124,6 +172,14 @@ class FormModel(QAbstractListModel):
                 self._expanded[section_key] = on
                 self.refresh()
         self._later(change)
+
+    @Slot("QVariantList")
+    def setSections(self, keys) -> None:  # noqa: N802 - QML API
+        """Show only these sections (a sub-page; ``"loop*"`` matches by prefix; empty: all)."""
+        pages = [str(k) for k in (keys or [])]
+        if pages != self._pages:
+            self._pages = pages
+            self.refresh(reset=True)                 # another page: from its top
 
     @Slot(str, result="QVariant")
     def value(self, key: str):

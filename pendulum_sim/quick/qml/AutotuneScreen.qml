@@ -3,7 +3,7 @@ import QtQuick.Layouts
 import Instrument 1.0
 
 // Auto-tune screen: the robustness search of the shared worker, in three steps.
-// Set-up: preset (with this device's time estimate) and Start. Running: progress, the
+// Set-up: sub-pages Preset (with this device's time estimate) and Options, Start below. Running: progress, the
 // best result so far with its gains, the best push per round and the candidates of the
 // last round; Cancel keeps the best found so far. Result: headline, old → new gains,
 // response metrics before / after and both responses to the same push; Apply (undoable
@@ -38,78 +38,96 @@ Item {
     }
 
     // ================================================================ set-up
-    Flickable {
+    // sub-pages: the preset (with this device's time estimate) and the options; Start below both
+    property int setupPage: 0
+    onSetupPageChanged: setupFlick.contentY = 0
+    ColumnLayout {
         anchors.fill: parent
         visible: autotune.page === "setup"
-        contentHeight: setupCol.implicitHeight
-        boundsBehavior: Flickable.StopAtBounds
-        clip: true
-        Column {
-            id: setupCol
-            width: Math.min(parent.width, 820)
-            anchors.horizontalCenter: parent.horizontalCenter
-            spacing: Theme.gap
-            Panel {
-                width: parent.width
-                title: "Auto-tune"
-                Body {
+        spacing: Theme.gap
+        SubPages {
+            Layout.preferredWidth: Math.min(screen.width, 820)
+            Layout.alignment: Qt.AlignHCenter
+            pages: ["Preset", "Options"]
+            current: screen.setupPage
+            onChosen: (i) => screen.setupPage = i
+        }
+        Flickable {
+            id: setupFlick
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            contentHeight: setupCol.implicitHeight
+            boundsBehavior: Flickable.StopAtBounds
+            clip: true
+            Column {
+                id: setupCol
+                width: Math.min(parent.width, 820)
+                anchors.horizontalCenter: parent.horizontalCenter
+                spacing: Theme.gap
+                Panel {
                     width: parent.width
-                    text: "Searches for the controller that keeps the pendulum up after the largest possible "
-                          + "push at the tip – all loops by LQR design plus integral gains, or only the loops and "
-                          + "gains you choose, optionally within gain limits. The simulation pauses while it runs; "
-                          + "you can cancel at any time and keep the best gains found so far."
-                }
-                Note { text: autotune.coresText }
-            }
-            Repeater {
-                model: autotune.presets
-                Card {
-                    required property var modelData
-                    readonly property bool chosen: autotune.preset === modelData.key
-                    width: setupCol.width
-                    implicitHeight: presetCol.implicitHeight + 28
-                    radius: Theme.radiusCard
-                    border.color: chosen ? Theme.accent : Theme.border
-                    border.width: chosen ? 2 : 1
-                    color: chosen ? Theme.accentSoft : Theme.surface
-                    Column {
-                        id: presetCol
-                        x: 16
-                        y: 14
-                        width: parent.width - 32
-                        spacing: 4
-                        Row {
-                            spacing: 10
-                            Text {
-                                text: modelData.name
-                                color: Theme.text
-                                font.family: Theme.uiFont
-                                font.pixelSize: 18
-                                font.weight: Font.DemiBold
-                            }
-                            Text {
-                                text: modelData.description
-                                color: Theme.textMuted
-                                font.family: Theme.uiFont
-                                font.pixelSize: 14
-                            }
-                        }
-                        Mono { text: modelData.estimate; color: Theme.textMuted; font.pixelSize: 13 }
+                    visible: screen.setupPage === 0
+                    title: "Auto-tune"
+                    Body {
+                        width: parent.width
+                        text: "Searches for the controller that keeps the pendulum up after the largest possible "
+                              + "push at the tip – all loops by LQR design plus integral gains, or only the loops and "
+                              + "gains you choose, optionally within gain limits (Options). The simulation pauses while "
+                              + "it runs; you can cancel at any time and keep the best gains found so far."
                     }
-                    TapHandler { onTapped: autotune.choose(modelData.key) }
+                    Note { text: autotune.coresText }
+                }
+                Repeater {
+                    model: screen.setupPage === 0 ? autotune.presets : []
+                    Card {
+                        required property var modelData
+                        readonly property bool chosen: autotune.preset === modelData.key
+                        width: setupCol.width
+                        implicitHeight: presetCol.implicitHeight + 28
+                        radius: Theme.radiusCard
+                        border.color: chosen ? Theme.accent : Theme.border
+                        border.width: chosen ? 2 : 1
+                        color: chosen ? Theme.accentSoft : Theme.surface
+                        Column {
+                            id: presetCol
+                            x: 16
+                            y: 14
+                            width: parent.width - 32
+                            spacing: 4
+                            Row {
+                                spacing: 10
+                                Text {
+                                    text: modelData.name
+                                    color: Theme.text
+                                    font.family: Theme.uiFont
+                                    font.pixelSize: 18
+                                    font.weight: Font.DemiBold
+                                }
+                                Text {
+                                    text: modelData.description
+                                    color: Theme.textMuted
+                                    font.family: Theme.uiFont
+                                    font.pixelSize: 14
+                                }
+                            }
+                            Mono { text: modelData.estimate; color: Theme.textMuted; font.pixelSize: 13 }
+                        }
+                        TapHandler { onTapped: autotune.choose(modelData.key) }
+                    }
+                }
+                Panel {
+                    width: parent.width
+                    visible: screen.setupPage === 1
+                    TuneOptions { width: parent.width }
                 }
             }
-            Panel {
-                width: parent.width
-                title: "Options"
-                TuneOptions { width: parent.width }
-            }
-            Btn {
-                width: parent.width
-                text: "Start auto-tune"
-                filled: true
-                onClicked: autotune.start()
-            }
+        }
+        Btn {
+            Layout.preferredWidth: Math.min(screen.width, 820)
+            Layout.alignment: Qt.AlignHCenter
+            text: "Start auto-tune"
+            filled: true
+            onClicked: autotune.start()
         }
     }
 

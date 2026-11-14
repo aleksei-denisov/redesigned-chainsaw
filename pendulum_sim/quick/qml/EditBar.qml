@@ -20,8 +20,8 @@ Card {
             width: parent.width
             spacing: 6
             readonly property real third: (width - 2 * spacing) / 3
-            Btn { width: parent.third; text: "↶ Undo"; enabled: bar.target && bar.target.canUndo; onClicked: bar.target.undo() }
-            Btn { width: parent.third; text: "↷ Redo"; enabled: bar.target && bar.target.canRedo; onClicked: bar.target.redo() }
+            Btn { width: parent.third; text: "Undo"; enabled: bar.target && bar.target.canUndo; onClicked: bar.target.undo() }
+            Btn { width: parent.third; text: "Redo"; enabled: bar.target && bar.target.canRedo; onClicked: bar.target.redo() }
             Btn { width: parent.third; text: "Reset"; onClicked: bar.reset() }
         }
         Text {

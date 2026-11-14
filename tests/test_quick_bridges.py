@@ -337,3 +337,41 @@ def test_autotune_hold_option_and_note(bridges):
                         hold=True, hold_residual=0.02, baseline_hold_residual=0.97, held="cart position")
     assert "97 % → 2 %" in at._notes(res)
     at.setOptions({**at.options, "hold": False})                  # the stored default stays off
+
+
+def test_folding_a_section_keeps_the_list_and_pages_filter_sections(bridges):
+    """Unfolding inserts only that section's rows (no reset: the list keeps its scroll
+    position); a sub-page shows only its sections and starts from a reset."""
+    _sim, model, controller, _graphs, _sent = bridges
+    form = model.plantModel
+    events = {"reset": 0, "inserted": 0, "removed": 0}
+    form.modelReset.connect(lambda: events.__setitem__("reset", events["reset"] + 1))
+    form.rowsInserted.connect(lambda *a: events.__setitem__("inserted", events["inserted"] + 1))
+    form.rowsRemoved.connect(lambda *a: events.__setitem__("removed", events["removed"] + 1))
+
+    from pendulum_sim.quick.backend.formmodel import ROLE_IDS
+
+    def keys():
+        return [form.data(form.index(i), ROLE_IDS["key"]) for i in range(form.rowCount())]
+
+    rows = form.rowCount()
+    form.setExpanded("seg1", True)                       # folded by default
+    assert _wait(lambda: form.rowCount() > rows)
+    assert events == {"reset": 0, "inserted": 1, "removed": 0}
+    assert keys().index("seg2") > keys().index("seg1")   # rows after it kept their order
+    form.setExpanded("seg1", False)
+    assert _wait(lambda: form.rowCount() == rows)
+    assert events["removed"] == 1 and events["reset"] == 0
+
+    form.setSections(["seg*"])
+    assert events["reset"] == 1
+    assert "seg0" in keys() and not {"pendulum", "cart", "actuator"} & set(keys())
+    form.setSections([])
+    assert "pendulum" in keys()
+
+    ctrl = controller.model
+    ctrl.setSections(["loop*"])
+    loop_keys = [ctrl.data(ctrl.index(i), ROLE_IDS["key"]) for i in range(ctrl.rowCount())
+                 if ctrl.data(ctrl.index(i), ROLE_IDS["rowType"]) == "section"]
+    assert loop_keys and all(k.startswith("loop") for k in loop_keys)
+    ctrl.setSections([])

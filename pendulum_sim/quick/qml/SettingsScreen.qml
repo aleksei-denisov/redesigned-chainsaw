@@ -3,11 +3,13 @@ import QtQuick.Layouts
 import PendulumApp 1.0
 import Instrument 1.0
 
-// Settings (Phase 2 subset): theme, scenario, performance options and the performance
-// test. Vertical touch scrolling only.
+// Settings in sub-pages: appearance, the Simulate screen's side panel, the scenario,
+// performance options and the performance test. Vertical touch scrolling only.
 Item {
     id: screen
     property bool shown: false
+    property int page: 0
+    onPageChanged: flick.contentY = 0
 
     component Section: Card {
         id: section
@@ -25,9 +27,18 @@ Item {
         }
     }
 
+    SubPages {
+        id: tabs
+        width: parent.width
+        pages: ["Appearance", "Side panel", "Scenario", "Performance"]
+        current: screen.page
+        onChosen: (i) => screen.page = i
+    }
+
     Flickable {
         id: flick
         anchors.fill: parent
+        anchors.topMargin: tabs.height + Theme.gap
         contentHeight: column.implicitHeight
         flickableDirection: Flickable.VerticalFlick
         boundsBehavior: Flickable.StopAtBounds
@@ -40,6 +51,7 @@ Item {
 
             Section {
                 title: "Appearance"
+                visible: screen.page === 0
                 Seg {
                     title: "Theme"
                     options: [["system", "System"], ["light", "Light"], ["dark", "Dark"]]
@@ -63,6 +75,7 @@ Item {
 
             Section {
                 title: "Side panel (Simulate screen)"
+                visible: screen.page === 1
                 Body {
                     width: parent.width
                     color: Theme.textMuted
@@ -137,6 +150,7 @@ Item {
 
             Section {
                 title: "Scenario"
+                visible: screen.page === 2
                 Body { width: parent.width; text: sim.scenarioName; color: Theme.textMuted }
                 Flow {
                     width: parent.width
@@ -157,6 +171,7 @@ Item {
 
             Section {
                 title: "Performance"
+                visible: screen.page === 3
                 Flow {
                     width: parent.width
                     spacing: 10
@@ -196,6 +211,7 @@ Item {
 
             Section {
                 title: "Performance test"
+                visible: screen.page === 3
                 Body {
                     width: parent.width
                     color: Theme.textMuted

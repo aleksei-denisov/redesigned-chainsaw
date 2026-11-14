@@ -2,10 +2,11 @@ import QtQuick
 import QtQuick.Layouts
 import Instrument 1.0
 
-// Model screen: the pendulum (base, segments, gravity), cart, actuator and each segment
-// (length, mass, centre of mass, inertia, joint friction, initial state); on the side
-// the simulation settings (time step, telemetry, sensor noise). Structural changes
-// (base, number of segments) rebuild the controller's loops as in the Widgets app.
+// Model screen in sub-pages: the model (pendulum: base, segments, gravity; cart;
+// actuator), the segments (length, mass, centre of mass, inertia, joint friction, initial
+// state) and the simulation settings (time step, telemetry, sensor noise). Structural
+// changes (base, number of segments) rebuild the controller's loops as in the Widgets
+// app. Portrait: edits, tabs, the page. Landscape: tabs and the page, edits on the side.
 Item {
     id: screen
     property bool shown: false
@@ -14,11 +15,21 @@ Item {
     readonly property QtObject plantForm: model.plantModel
     readonly property QtObject simulationForm: model.simulationModel
 
-    // landscape: the model on the left, edits and simulation settings on the right
-    RowLayout {
-        anchors.fill: parent
+    property int page: 0
+    readonly property var pages: ["Model", "Segments", "Simulation settings"]
+    readonly property var pageSections: [["pendulum", "cart", "actuator"], ["seg*"], []]
+    readonly property QtObject pageForm: page === 2 ? simulationForm : plantForm
+
+    component Page: ColumnLayout {
+        id: pg
+        property bool active
         spacing: Theme.gap
-        visible: screen.wide
+        SubPages {
+            Layout.fillWidth: true
+            pages: screen.pages
+            current: screen.page
+            onChosen: (i) => screen.page = i
+        }
         Card {
             Layout.fillWidth: true
             Layout.fillHeight: true
@@ -26,11 +37,23 @@ Item {
             FormView {
                 anchors.fill: parent
                 anchors.margins: 12
-                form: screen.wide ? screen.plantForm : null
+                sections: screen.pageSections[screen.page]
+                form: pg.active ? screen.pageForm : null
             }
         }
+    }
+
+    RowLayout {
+        anchors.fill: parent
+        spacing: Theme.gap
+        visible: screen.wide
+        Page {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            active: screen.wide
+        }
         ColumnLayout {
-            Layout.preferredWidth: 380
+            Layout.preferredWidth: 340
             Layout.fillHeight: true
             spacing: Theme.gap
             EditBar {
@@ -38,45 +61,23 @@ Item {
                 target: model
                 onReset: model.reset()
             }
-            Card {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                radius: Theme.radiusPanel
-                FormView {
-                    anchors.fill: parent
-                    anchors.margins: 12
-                    form: screen.wide ? screen.simulationForm : null
-                }
-            }
+            Item { Layout.fillHeight: true }
         }
     }
 
-    // portrait: edits on top, then one list – the model or the simulation settings
     ColumnLayout {
-        id: portrait
         anchors.fill: parent
         spacing: Theme.gap
         visible: !screen.wide
-        property bool simulation: false
         EditBar {
             Layout.fillWidth: true
             target: model
             onReset: model.reset()
         }
-        Row {
-            spacing: 6
-            Btn { text: "Model"; active: !portrait.simulation; onClicked: portrait.simulation = false }
-            Btn { text: "Simulation settings"; active: portrait.simulation; onClicked: portrait.simulation = true }
-        }
-        Card {
+        Page {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            radius: Theme.radiusPanel
-            FormView {
-                anchors.fill: parent
-                anchors.margins: 12
-                form: screen.wide ? null : (portrait.simulation ? screen.simulationForm : screen.plantForm)
-            }
+            active: !screen.wide
         }
     }
 }

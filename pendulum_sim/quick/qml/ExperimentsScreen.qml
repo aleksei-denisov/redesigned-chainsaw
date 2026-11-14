@@ -7,13 +7,18 @@ import Instrument 1.0
 // settings (duration, settling band, same start, a scheduled tip push), name, Run /
 // Cancel with progress. Right: the comparison (angle, control error with the settling
 // band, actuator output, cart position; segment chips) and one card per run with its
-// status, metrics and gains – Show / Hide, Use gains (undoable), Remove.
+// status, metrics and gains – Show / Hide, Use gains (undoable), Remove. Portrait: the
+// set-up and the runs as sub-pages, the run bar below both; a finished run opens Runs.
 Item {
     id: screen
     property bool shown: false
     readonly property bool wide: width >= height
     // the context object, read here: inside a FormView (a ListView) `model` means its own model
     readonly property QtObject settingsForm: experiments.model
+    property int page: 0                     // portrait: 0 set-up, 1 runs
+    property int runCount: experiments.runs.length
+    property int seenRuns: 0
+    onRunCountChanged: { if (runCount > seenRuns) page = 1; seenRuns = runCount }    // a run finished: show it
 
     component RunBar: Column {
         spacing: 8
@@ -56,6 +61,8 @@ Item {
     }
 
     component Comparison: Column {
+        id: cmp
+        property bool active: true            // only the shown copy builds its charts and cards
         spacing: Theme.gap
         Card {
             width: parent.width
@@ -93,7 +100,7 @@ Item {
             columns: width > 640 ? 2 : 1
             spacing: Theme.gap
             Repeater {
-                model: experiments.plots
+                model: cmp.active ? experiments.plots : []
                 Card {
                     required property var modelData
                     width: (plotGrid.width - (plotGrid.columns - 1) * plotGrid.spacing) / plotGrid.columns
@@ -113,7 +120,7 @@ Item {
             }
         }
         Repeater {
-            model: experiments.runs
+            model: cmp.active ? experiments.runs : []
             Card {
                 required property var modelData
                 width: parent.width
@@ -209,17 +216,14 @@ Item {
         }
     }
 
-    GridLayout {
+    // landscape: set-up and run bar on the left, the comparison on the right
+    RowLayout {
         anchors.fill: parent
-        columns: screen.wide ? 2 : 1
-        rowSpacing: Theme.gap
-        columnSpacing: Theme.gap
-
+        spacing: Theme.gap
+        visible: screen.wide
         ColumnLayout {
-            Layout.preferredWidth: screen.wide ? 380 : -1
-            Layout.fillWidth: !screen.wide
-            Layout.fillHeight: screen.wide
-            Layout.preferredHeight: screen.wide ? -1 : screen.height * 0.45
+            Layout.preferredWidth: 380
+            Layout.fillHeight: true
             spacing: Theme.gap
             Card {
                 Layout.fillWidth: true
@@ -228,28 +232,62 @@ Item {
                 FormView {
                     anchors.fill: parent
                     anchors.margins: 12
-                    form: screen.settingsForm
+                    form: screen.wide ? screen.settingsForm : null
                 }
             }
             Card {
                 Layout.fillWidth: true
-                implicitHeight: runBar.implicitHeight + 24
+                implicitHeight: wideRunBar.implicitHeight + 24
                 radius: Theme.radiusCard
-                RunBar {
-                    id: runBar
-                    x: 12
-                    y: 12
-                    width: parent.width - 24
-                }
+                RunBar { id: wideRunBar; x: 12; y: 12; width: parent.width - 24 }
             }
         }
         Flickable {
             Layout.fillWidth: true
             Layout.fillHeight: true
+            contentHeight: wideComparison.implicitHeight
+            boundsBehavior: Flickable.StopAtBounds
+            clip: true
+            Comparison { id: wideComparison; width: parent.width; active: screen.wide }
+        }
+    }
+
+    // portrait: sub-pages Set-up / Runs, the run bar always at the bottom
+    ColumnLayout {
+        anchors.fill: parent
+        spacing: Theme.gap
+        visible: !screen.wide
+        SubPages {
+            Layout.fillWidth: true
+            pages: ["Set-up", experiments.runs.length ? "Runs (" + experiments.runs.length + ")" : "Runs"]
+            current: screen.page
+            onChosen: (i) => screen.page = i
+        }
+        Card {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            visible: screen.page === 0
+            radius: Theme.radiusPanel
+            FormView {
+                anchors.fill: parent
+                anchors.margins: 12
+                form: screen.wide ? null : screen.settingsForm
+            }
+        }
+        Flickable {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            visible: screen.page === 1
             contentHeight: comparison.implicitHeight
             boundsBehavior: Flickable.StopAtBounds
             clip: true
-            Comparison { id: comparison; width: parent.width }
+            Comparison { id: comparison; width: parent.width; active: !screen.wide && screen.page === 1 }
+        }
+        Card {
+            Layout.fillWidth: true
+            implicitHeight: runBar.implicitHeight + 24
+            radius: Theme.radiusCard
+            RunBar { id: runBar; x: 12; y: 12; width: parent.width - 24 }
         }
     }
 }
