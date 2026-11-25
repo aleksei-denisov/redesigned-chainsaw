@@ -18,6 +18,7 @@
 #include "backend/graphs.h"
 #include "backend/lineitem.h"
 #include "backend/panel.h"
+#include "backend/parameters.h"
 #include "backend/placeholders.h"
 #include "backend/settings.h"
 #include "backend/simulation.h"
@@ -35,6 +36,8 @@ struct Backend {
     ScenarioBridge* scenarios = nullptr;
     FrameDriver* frames = nullptr;
     Benchmark* bench = nullptr;
+    ModelBridge* model = nullptr;
+    ControllerBridge* controller = nullptr;
 };
 
 }  // namespace
@@ -135,7 +138,11 @@ int main(int argc, char* argv[]) {
             ctx->setContextProperty("scenarios", b.scenarios);
             ctx->setContextProperty("frames", b.frames);
             ctx->setContextProperty("bench", b.bench);
-            for (const char* name : {"model", "controller", "experiments", "autotune"})
+            b.model = new ModelBridge(b.sim, &app);
+            b.controller = new ControllerBridge(b.sim, &app);
+            ctx->setContextProperty("model", b.model);
+            ctx->setContextProperty("controller", b.controller);
+            for (const char* name : {"experiments", "autotune"})
                 ctx->setContextProperty(name, placeholder);
             QObject::connect(settings, &SettingsBridge::frameRateChanged, b.frames,
                              [&] { b.frames->setMode(settings->frameRate()); });

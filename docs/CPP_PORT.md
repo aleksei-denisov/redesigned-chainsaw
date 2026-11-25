@@ -66,7 +66,7 @@ The JSON library is nlohmann/json (config and result files, reference data).
 | 2 | Done — physics and controllers, matching the reference data (physics to 1e-12) |
 | 3 | Done — simulation engine, experiments, scenarios, auto-tune (improvements 1–4 included) |
 | 4 | Done — session layer: edit rules, Session + operations, undo/redo, slider mappings, forms, texts, background jobs |
-| 5 | In progress — stage 1 done: app shell, Simulate, Graphs and Settings screens on the C++ core; Android APK in CI |
+| 5 | In progress — stage 1 done: app shell, Simulate, Graphs and Settings screens on the C++ core; Android APK in CI. Stage 2 done: Controller and Model screens |
 
 ### Phase 5, stage 1: the app on the C++ core
 
@@ -85,7 +85,20 @@ bridges.
 | `panel` | `panel_model.py`, `panel.py`, `trail.py`, `trailgeom.py` | `panel` (tiles, layouts, values, status), `trail` |
 | `benchmark` | `bench.py` | `bench`: four phases (Simulate 1×, pushes, 4×, Graphs), `--benchmark` prints the report |
 
-Still placeholders (next stages): `controller`, `model`, `autotune`, `experiments`.
+Still placeholders (next stages): `autotune`, `experiments`.
+
+### Phase 5, stage 2: Controller and Model screens
+
+| C++ (`cpp/app/backend`) | Python original | Notes |
+|---|---|---|
+| `formmodel` | `formmodel.py` | A core form as a QML list model: section and field rows, folding, sub-pages, partial rebuilds that keep the scroll position, slider position / value / − + through the core's `sliders` |
+| `parameters` | `parameters.py` | `model` (plant + simulation settings) and `controller` (loops, LQR weights, seeding, restore gains, reset integrators, live outputs at 5 Hz); undo / redo / reset with the core's `EditHistory`; `applyTuning` and `useRunGains` ready for Auto-tune and Experiments |
+
+The backend is now a static library (`pendulum_app_backend`) shared by the app and its tests:
+`cpp/app/tests/test_parameters.cpp` (GoogleTest, headless) checks structural edits rebuilding
+the loops, undo / redo / reset, simulation settings in ms, LQR seeding and restoring gains, a
+new scenario clearing the history, the slider helpers, sub-pages and live outputs. CI runs them
+in the app job (`ctest -R ^App`) and adds Controller and Model screenshots.
 
 ```bash
 cmake -S cpp -B cpp/build -DPENDULUM_BUILD_APP=ON && cmake --build cpp/build --parallel
