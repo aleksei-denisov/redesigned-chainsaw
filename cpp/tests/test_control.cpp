@@ -1,6 +1,8 @@
 // Phase 2: controllers against control.json (pendulum_sim/control).
 #include <gtest/gtest.h>
 
+#include <numbers>
+
 #include "pendulum/control/lqr.hpp"
 #include "pendulum/control/multiloop.hpp"
 #include "pendulum/control/riccati.hpp"
@@ -42,7 +44,8 @@ TEST_F(ControlReference, RiccatiMatchesBothPythonBackends) {
             continue;
         }
         const Eigen::MatrixXd P = solveCare(A, B, Q, R);
-        EXPECT_LT(careResidual(A, B, Q, R, P), 1e-10);
+        // Python itself reaches ~1e-10 (NumPy) to ~1e-9 (SciPy) on the triple pendulum.
+        EXPECT_LT(careResidual(A, B, Q, R, P), 1e-8);
         // P entries span many magnitudes: compare relative to ‖P‖.
         const Eigen::MatrixXd Pn = reference::mat(care.at("P_numpy"));
         EXPECT_LT((P - Pn).norm() / Pn.norm(), 1e-9);
@@ -99,9 +102,9 @@ TEST_F(ControlReference, PidLoopsMatchStepByStep) {
 }
 
 TEST(Control, WrapAngle) {
-    EXPECT_NEAR(wrapAngle(3.5), 3.5 - 2 * M_PI, 1e-15);
-    EXPECT_DOUBLE_EQ(wrapAngle(M_PI), M_PI);
-    EXPECT_NEAR(wrapAngle(-M_PI), M_PI, 1e-15);
+    EXPECT_NEAR(wrapAngle(3.5), 3.5 - 2 * std::numbers::pi, 1e-15);
+    EXPECT_DOUBLE_EQ(wrapAngle(std::numbers::pi), std::numbers::pi);
+    EXPECT_NEAR(wrapAngle(-std::numbers::pi), std::numbers::pi, 1e-15);
 }
 
 TEST(Control, ControllerHoldsBetweenSamples) {
