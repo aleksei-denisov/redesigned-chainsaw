@@ -15,6 +15,7 @@ python cpp/reference/generate.py physics     # selected groups
 | `control.json` | Linearisation A, B; CARE solution (NumPy and SciPy backends); LQR gain; 200 scripted steps of every PID loop | 1e-8 / 1e-10 |
 | `simulation.json` | Every scenario for 4 s: state every 50 ms and telemetry at 20 Hz, plain and with a 1 N point push at mid-segment (v2 path) | 1e-7 / 1e-9 |
 | `experiment.json` | `run_experiment` metrics per scenario | 1e-6 / 1e-9 |
+| `session.json` | Form fields and values, a scripted 16-step session (configuration and simulator state after each step), slider mappings, rules, texts | 1e-9 / 1e-12 |
 | `tuning.json` | `max_recoverable_push`, `tuning2.evaluate_controller` for fixed controllers, and every evaluation of one seeded `tuning2.tune` run (quick preset, 1 worker) | 1e-9 / 1e-12 |
 
 Not reproduced on purpose:

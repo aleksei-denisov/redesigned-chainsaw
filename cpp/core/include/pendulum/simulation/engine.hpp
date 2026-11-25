@@ -39,6 +39,7 @@ public:
     /// segments or the base type differ – those need reset().
     bool updatePlant(const PlantParams& plant);
     void updateController(const ControllerConfig& controller);
+    void resetIntegrators() { controller_.resetIntegrators(); }
     /// Horizontal force pulse [N] at the tip, or at `ratio` along `segment` (0-based) when ≥ 0.
     void applyDisturbance(double force, double duration = 0.1, std::optional<double> start = std::nullopt,
                           int segment = -1, double ratio = 1.0);

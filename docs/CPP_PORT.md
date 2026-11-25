@@ -65,7 +65,24 @@ The JSON library is nlohmann/json (config and result files, reference data).
 | 1 | Done — golden data in `cpp/reference/data`, see [cpp/reference/README.md](../cpp/reference/README.md) |
 | 2 | Done — physics and controllers, matching the reference data (physics to 1e-12) |
 | 3 | Done — simulation engine, experiments, scenarios, auto-tune (improvements 1–4 included) |
-| 4 | Next — session layer and files |
+| 4 | Done — session layer: edit rules, Session + operations, undo/redo, slider mappings, forms, texts, background jobs |
+| 5 | Next — the Qt Quick app in C++ (QML reused) |
+
+### Phase 4 contents
+
+| C++ (`cpp/core/.../session`) | Python original | Notes |
+|---|---|---|
+| `rules` | `session/rules.py` | Loops per structure, structure changes, restoring gains, run gains, drag forces |
+| `session` | `session.py`, `operations.py` | Edits return `Operation`s (a `std::variant`), applied to the simulator wherever it runs |
+| `history` | `history.py` | `EditHistory<T>` |
+| `sliders` | `sliders.py` | linear / log / symlog mappings, − / + steps |
+| `forms` | `forms.py` | Plant, simulation, controller and experiment editors: identical fields, ranges, units, hints |
+| `texts` | `texts.py` | Same strings; new: "Saturated" metric, saturation note, "current gains kept" note |
+| `jobs` | `jobs.py` | `TuneWorker`, `ExperimentWorker` on `std::thread` (polled), `ReplayData` |
+
+Checked against `session.json`: every field of the four forms, and a scripted session of 16 edits
+(form edits, structure changes, LQR seeding, controller edits, restoring gains and the model, run
+gains, simulation settings) – operations, resulting configuration and simulator state after each.
 
 ### Phase 2 contents
 

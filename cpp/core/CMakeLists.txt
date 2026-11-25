@@ -17,6 +17,12 @@ add_library(pendulum_core
     src/simulation/experiment.cpp
     src/simulation/scenarios.cpp
     src/simulation/tuning.cpp
+    src/session/rules.cpp
+    src/session/session.cpp
+    src/session/sliders.cpp
+    src/session/forms.cpp
+    src/session/texts.cpp
+    src/session/jobs.cpp
 )
 target_include_directories(pendulum_core PUBLIC include)
 find_package(Threads REQUIRED)

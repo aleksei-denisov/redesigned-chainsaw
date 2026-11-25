@@ -17,6 +17,9 @@ control      linearisation (A, B), CARE solution P (NumPy and SciPy backends) an
 simulation   every scenario simulated with ``Simulator``: telemetry rows every 50 ms,
              with a mid-run point push (v2 path) as a second case
 experiment   ``run_experiment`` metrics for every scenario
+session      form fields and values, a scripted session (edits, structure changes, LQR,
+             undo of the model) with the configuration and simulator state after each step,
+             slider mappings, edit rules and texts
 tuning       ``max_recoverable_push`` and ``tuning2.evaluate_controller`` for fixed
              candidate controllers, plus the candidates and scores of one seeded
              ``tuning2.tune`` run (workers = 1)
@@ -66,6 +69,7 @@ TOLERANCES = {
     "simulation": {"rel": 1e-7, "abs": 1e-9, "note": "thousands of RK4 steps"},
     "experiment": {"rel": 1e-6, "abs": 1e-9, "note": "metrics from long runs"},
     "tuning": {"rel": 1e-9, "abs": 1e-12, "note": "push forces from bisection; must match exactly up to rounding"},
+    "session": {"rel": 1e-9, "abs": 1e-12, "note": "forms, edit rules, texts; states after 0.2 s of simulation"},
 }
 
 
@@ -304,12 +308,122 @@ def gen_tuning() -> None:
     write("tuning", {"max_push": pushes, "evaluate_controller": evals, "tune_run": run})
 
 
+# ----------------------------------------------------------------- session
+def gen_session() -> None:
+    from types import SimpleNamespace
+
+    from pendulum_sim.session import IncompatibleRun, Session, apply, rules, sliders, texts
+    from pendulum_sim.session.forms import ControllerForm, ExperimentForm, PlantForm, SimulationForm
+
+    def dump_form(form) -> dict:
+        sections = [{"key": sec.key, "title": sec.title, "expanded": sec.expanded, "note": sec.note,
+                     "fields": [{"key": f.key, "label": f.label, "kind": f.kind, "minimum": f.minimum,
+                                 "maximum": f.maximum, "decimals": f.decimals, "unit": f.unit, "mapping": f.mapping,
+                                 "step": f.step, "hint": f.hint, "options": [list(o) for o in f.options]}
+                                for f in sec.fields]} for sec in form.sections]
+        return {"sections": sections, "values": dict(form.values)}
+
+    base = scenario("single_cart_full")
+    pf, sf, cf, ef = PlantForm(), SimulationForm(), ControllerForm(), ExperimentForm()
+    pf.set_plant(base.plant)
+    sf.set_simulation(base.simulation)
+    cf.set_config(scenario("double_cart_lqr").controller)
+    forms = {"plant": dump_form(pf), "simulation": dump_form(sf), "controller": dump_form(cf),
+             "experiment": dump_form(ef)}
+
+    # A scripted session; after every step the operations go to a simulator that then runs 0.2 s.
+    s = Session(scenario("single_cart_full"))
+    sim = Simulator(s.config.copy(), telemetry_window_s=None)
+    pf, cf, sf = PlantForm(), ControllerForm(), SimulationForm()
+    pf.set_plant(s.config.plant)
+    cf.set_config(s.config.controller)
+    sf.set_simulation(s.config.simulation)
+    steps = []
+
+    def record(action: str, ops=(), extra: dict | None = None) -> None:
+        nonlocal sim
+        for op in ops:
+            sim = apply(sim, op)
+        for _ in range(200):
+            sim.step()
+        steps.append({"action": action, "operations": [op[0] for op in ops], "config": config_to_dict(s.config),
+                      "state": sim.state.copy(), "time": sim.time, **(extra or {})})
+
+    def plant_edit(key, value):
+        plant, structural = pf.set(key, value)
+        ch = s.change_plant(plant, structural)
+        if ch.controller is not None:
+            cf.set_config(ch.controller)
+        record(f"plant {key}={value}", ch.operations, {"structural": ch.structural, "reset_if_idle": ch.reset_if_idle})
+
+    plant_edit("seg0.mass", 0.3)
+    plant_edit("seg0.rod", False)
+    plant_edit("seg0.inertia", 0.01)
+    plant_edit("seg0.angle", 5.0)
+    plant_edit("segments", 2)
+    ctrl, ops = s.seed_lqr()
+    cf.set_config(ctrl)
+    record("seed_lqr", ops)
+    record("controller loop1.kp=12.5", s.change_controller(cf.set("loop1.kp", 12.5)))
+    record("controller loop0.anti=back_calculation", s.change_controller(cf.set("loop0.anti", "back_calculation")))
+    plant_edit("base", "fixed")
+    ctrl, ops = s.restore_gains()
+    record("restore_gains", ops)
+    try:
+        s.use_run_gains(scenario("double_cart_lqr"))
+        incompatible = False
+    except IncompatibleRun:
+        incompatible = True
+    record("use_run_gains double_cart_lqr", [], {"incompatible": incompatible})
+    ch = s.restore_model(s.original_plant, s.original_simulation, s.original_controller)
+    record("restore_model original", ch.operations, {"structural": ch.structural})
+    record("simulation seed=7.6", s.change_simulation(sf.set("seed", 7.6)))
+    record("simulation dt=0.5ms", s.change_simulation(sf.set("dt", 0.5)))
+    ctrl, ops = s.use_run_gains(scenario("single_cart_pid"))
+    record("use_run_gains single_cart_pid", ops)
+    record("reset_integrators", [("reset_integrators",)])
+
+    slider_cases = []
+    for lo, hi, mapping, dec in [(0.02, 5.0, "log", 3), (-1e6, 1e6, "symlog", 3), (0.0, 5.0, "symlog", 5),
+                                 (-180.0, 180.0, "linear", 2), (0.0, 1.0, "symlog", 6)]:
+        pos = [sliders.from_position(t, lo, hi, mapping, dec) for t in (0.0, 0.1, 0.37, 0.5, 0.9, 1.0)]
+        vals = [lo, 0.5 * (lo + hi), hi, 0.123, -0.0004, 42.0]
+        slider_cases.append({"lo": lo, "hi": hi, "mapping": mapping, "decimals": dec, "from_position": pos,
+                             "values": vals, "to_position": [sliders.to_position(v, lo, hi, mapping, dec) for v in vals],
+                             "nudge_up": [sliders.nudge(v, 1, lo, hi, mapping, dec) for v in vals],
+                             "nudge_down": [sliders.nudge(v, -1, lo, hi, mapping, dec) for v in vals]})
+
+    run = run_experiment(scenario("single_fixed_pid"), "run")
+    fake = SimpleNamespace(baseline_max_push=0.42, max_push=1.234, recommended_push=0.61, evaluations=37,
+                           elapsed=83.4, cancelled=True)
+    text_cases = {
+        "durations": [[v, texts.fmt_duration(v)] for v in (None, float("inf"), 0.0, 4.4, 59.5, 61.0, 3599.0, 3725.0)],
+        "gains": {k: texts.gains_text(scenario(k).controller) for k in ("single_cart_pid", "double_cart_lqr", "windup_demo")},
+        "metric_pairs": [list(p) for p in texts.metric_pairs(run)],
+        "status": texts.status_text(run),
+        "headline": texts.tune_headline(fake),
+        "notes": texts.tune_notes(fake),
+        "applied": texts.tuning_applied(fake),
+        "cores": texts.tune_cores(3, 8),
+    }
+    rule_cases = {
+        "drag": [[p, o, rules.drag_force(p, o)] for p, o in ((1.0, 0.3), (2.5, 3.0), (2.5, -3.0), (0.4, -0.1))],
+        "point_drag": [[p, o, rules.point_drag_force(p, o)] for p, o in ((1.0, 0.3), (2.5, 3.0), (-2.5, -3.0))],
+        "single_step": [[per, dt, rules.single_step_count(per, dt)] for per, dt in ((0.002, 0.001), (0.0005, 0.001), (0.01, 0.0005))],
+        "labels": rules.loop_labels(scenario("triple_cart_lqr").controller),
+        "output_limit": rules.output_limit(scenario("windup_demo")),
+    }
+    write("session", {"forms": forms, "steps": steps, "sliders": slider_cases, "texts": text_cases,
+                      "rules": rule_cases, "run_config": config_to_dict(run.config)})
+
+
 GROUPS: dict[str, Callable[[], None]] = {
     "physics": gen_physics,
     "control": gen_control,
     "simulation": gen_simulation,
     "experiment": gen_experiment,
     "tuning": gen_tuning,
+    "session": gen_session,
 }
 
 

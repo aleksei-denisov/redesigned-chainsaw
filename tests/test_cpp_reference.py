@@ -40,7 +40,7 @@ def _close(a, b, rel: float, abs_: float, path: str = "") -> None:
         assert a == b, f"{path}: {a!r} != {b!r}"
 
 
-@pytest.mark.parametrize("group", ["physics", "control", "experiment"])
+@pytest.mark.parametrize("group", ["physics", "control", "experiment", "session"])
 def test_reference_data_is_current(tmp_path: Path, group: str) -> None:
     gen = _load_generator()
     gen.DATA = tmp_path

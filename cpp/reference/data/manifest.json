@@ -26,12 +26,18 @@
       "rel": 1e-09,
       "abs": 1e-12,
       "note": "push forces from bisection; must match exactly up to rounding"
+    },
+    "session": {
+      "rel": 1e-09,
+      "abs": 1e-12,
+      "note": "forms, edit rules, texts; states after 0.2 s of simulation"
     }
   },
   "files": [
     "control.json",
     "experiment.json",
     "physics.json",
+    "session.json",
     "simulation.json",
     "tuning.json"
   ]
