@@ -43,6 +43,15 @@ cmake -S cpp -B cpp/build -DPENDULUM_BUILD_APP=ON
 ```
 
 CI: `.github/workflows/cpp.yml` (core tests on Linux/macOS/Windows, app build on Linux).
+The JSON library is nlohmann/json (config and result files, reference data).
+
+## Status
+
+| Phase | State |
+|---|---|
+| 0 | Done — skeleton, CI, feature matrix |
+| 1 | Done — golden data in `cpp/reference/data`, see [cpp/reference/README.md](../cpp/reference/README.md) |
+| 2 | Next — physics and controllers |
 
 ## Phases
 

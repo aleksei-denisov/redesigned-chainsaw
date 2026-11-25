@@ -1,0 +1,48 @@
+#pragma once
+// Access to the golden data written by cpp/reference/generate.py (Phase 1).
+#include <cmath>
+#include <fstream>
+#include <limits>
+#include <stdexcept>
+#include <string>
+
+#include <nlohmann/json.hpp>
+
+namespace reference {
+
+using nlohmann::json;
+
+/// Loads data/<group>.json; throws if the file is missing or of an unknown format.
+inline json load(const std::string& group) {
+    const std::string path = std::string(PENDULUM_REFERENCE_DIR) + "/" + group + ".json";
+    std::ifstream in(path);
+    if (!in) throw std::runtime_error("reference data not found: " + path);
+    json data = json::parse(in);
+    if (data.at("format").get<int>() != 1) throw std::runtime_error("unknown reference format: " + path);
+    return data;
+}
+
+/// A number from the data; "nan", "inf" and "-inf" are written as strings.
+inline double number(const json& v) {
+    if (v.is_number()) return v.get<double>();
+    const auto s = v.get<std::string>();
+    if (s == "nan") return std::numeric_limits<double>::quiet_NaN();
+    if (s == "inf") return std::numeric_limits<double>::infinity();
+    if (s == "-inf") return -std::numeric_limits<double>::infinity();
+    throw std::runtime_error("not a number: " + s);
+}
+
+struct Tolerance {
+    double rel;
+    double abs;
+    explicit Tolerance(const json& group) : rel(number(group.at("tolerance").at("rel"))),
+                                            abs(number(group.at("tolerance").at("abs"))) {}
+    /// |actual − expected| ≤ abs + rel·|expected|; NaN matches NaN.
+    bool close(double actual, double expected) const {
+        if (std::isnan(expected)) return std::isnan(actual);
+        if (std::isinf(expected)) return actual == expected;
+        return std::abs(actual - expected) <= abs + rel * std::abs(expected);
+    }
+};
+
+}  // namespace reference

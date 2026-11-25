@@ -1,0 +1,38 @@
+{
+  "format": 1,
+  "numpy": "2.5.3",
+  "groups": {
+    "physics": {
+      "rel": 1e-12,
+      "abs": 1e-12,
+      "note": "single evaluations"
+    },
+    "control": {
+      "rel": 1e-08,
+      "abs": 1e-10,
+      "note": "linearisation uses finite differences; CARE solvers differ"
+    },
+    "simulation": {
+      "rel": 1e-07,
+      "abs": 1e-09,
+      "note": "thousands of RK4 steps"
+    },
+    "experiment": {
+      "rel": 1e-06,
+      "abs": 1e-09,
+      "note": "metrics from long runs"
+    },
+    "tuning": {
+      "rel": 1e-09,
+      "abs": 1e-12,
+      "note": "push forces from bisection; must match exactly up to rounding"
+    }
+  },
+  "files": [
+    "control.json",
+    "experiment.json",
+    "physics.json",
+    "simulation.json",
+    "tuning.json"
+  ]
+}
