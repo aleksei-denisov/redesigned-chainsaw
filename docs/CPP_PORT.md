@@ -66,7 +66,46 @@ The JSON library is nlohmann/json (config and result files, reference data).
 | 2 | Done — physics and controllers, matching the reference data (physics to 1e-12) |
 | 3 | Done — simulation engine, experiments, scenarios, auto-tune (improvements 1–4 included) |
 | 4 | Done — session layer: edit rules, Session + operations, undo/redo, slider mappings, forms, texts, background jobs |
-| 5 | Next — the Qt Quick app in C++ (QML reused) |
+| 5 | In progress — stage 1 done: app shell, Simulate, Graphs and Settings screens on the C++ core; Android APK in CI |
+
+### Phase 5, stage 1: the app on the C++ core
+
+`cpp/app` is the Qt Quick app with the C++ backend. The QML is **shared** with the Python
+Qt Quick app: `pendulum_sim/quick/qml` and the fonts are compiled into the app's resources
+unchanged, and the C++ objects carry the same names, properties and functions as the Python
+bridges.
+
+| C++ (`cpp/app/backend`) | Python original | Notes |
+|---|---|---|
+| `simhost` | `quick/backend/sim_source.py` | Physics on its own thread (2 ms tick, `RealtimeStepper`); state samples interpolated per frame; telemetry ring; commands = session operations |
+| `simulation` | `simulation.py` | `sim` |
+| `settings` | `settings.py`, `shell.py` | `Settings`, `App`, `scenarios`; same QSettings keys |
+| `frames` | `frames.py`, `pacing.py` | `frames`: vsync loop, auto pacing (120/60/40/30), paced frames from the swap |
+| `graphmath`, `graphs`, `lineitem` | `signals.py`, `scale.py`, `linegeom.py`, `curves.py`, `graphs.py`, `lineitem.py`, `mobile/plot_math.py` | `graphs`, `GraphLines`; the whole window is recomputed on each refresh (cheap in C++), columns fixed in time; new graphable signal `saturated` |
+| `panel` | `panel_model.py`, `panel.py`, `trail.py`, `trailgeom.py` | `panel` (tiles, layouts, values, status), `trail` |
+| `benchmark` | `bench.py` | `bench`: four phases (Simulate 1×, pushes, 4×, Graphs), `--benchmark` prints the report |
+
+Still placeholders (next stages): `controller`, `model`, `autotune`, `experiments`.
+
+```bash
+cmake -S cpp -B cpp/build -DPENDULUM_BUILD_APP=ON && cmake --build cpp/build --parallel
+cpp/build/app/PendulumCpp                       # --theme dark --screen graphs --scenario double_cart_lqr
+cpp/build/app/PendulumCpp --benchmark           # performance test, report on stdout
+cpp/build/app/PendulumCpp --smoke-test 3        # visit the ported screens, fail on QML warnings
+```
+
+Android: CI builds `PendulumCpp.apk` (application id `com.adenisov.invertedpendulumcpp`, Android 9+,
+arm64) and publishes it as the pre-release **android-cpp-latest**; it installs next to both
+Python apps for a side-by-side comparison on the device.
+
+Performance test, desktop CI-class machine with software rendering (Mesa llvmpipe, 60 Hz):
+
+| Phase | fps | Dropped | GUI work per frame (mean / p95) | Graph refresh p95 |
+|---|---|---|---|---|
+| Simulate 1× | 62.5 | 0 | 0.51 / 0.89 ms | 0.33 ms |
+| Simulate, pushes | 62.5 | 0 | 0.61 / 1.29 ms | 0.90 ms |
+| Simulate 4× | 62.5 | 0 | 0.53 / 0.85 ms | 0.53 ms |
+| Graphs screen, pushes | 62.5 | 0 | 0.60 / 1.06 ms | 1.14 ms |
 
 ### Phase 4 contents
 
