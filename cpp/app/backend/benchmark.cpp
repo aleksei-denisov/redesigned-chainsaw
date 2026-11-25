@@ -103,18 +103,15 @@ void Benchmark::endPhase() {
     const HostStats st = sim_->host().stats();
     const double wall = monotonic() - wall0_;
     std::vector<double> gaps, work;
-    for (const auto& [g, w] : frames_rec_) {
-        gaps.push_back(g);
-        work.push_back(w);
-    }
-    const double interval = 1000.0 / frames_->pacer.rate;
     int dropped = 0;
     double gsum = 0, wsum = 0;
-    for (double g : gaps) {
-        dropped += g > 1.8 * interval;
-        gsum += g;
+    for (const auto& f : frames_rec_) {
+        gaps.push_back(f.gap_ms);
+        work.push_back(f.work_ms);
+        dropped += f.gap_ms > 1.8 * f.interval_ms;  // late for the rate this frame was paced at
+        gsum += f.gap_ms;
+        wsum += f.work_ms;
     }
-    for (double w : work) wsum += w;
     std::vector<double> sorted = gaps;
     std::sort(sorted.begin(), sorted.end());
     const double p50 = sorted.empty() ? 0 : sorted[sorted.size() / 2];

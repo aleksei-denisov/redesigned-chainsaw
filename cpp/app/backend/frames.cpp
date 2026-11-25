@@ -120,7 +120,11 @@ void Pacer::frameDone(double now, double cost) {
     const double cost95 = p95(costs);
     const double misses = static_cast<double>(misses_n) / samples_.size();
     const auto index = std::find(rates.begin(), rates.end(), rate) - rates.begin();
-    if ((misses > kMissFraction || cost95 > kDownFraction * intervalMs()) && index + 1 < static_cast<long>(rates.size())) {
+    // Lower the rate only when frames are really late: many missed, or some missed while the
+    // work no longer fits the interval. Work alone can spike (the system moving the GUI thread
+    // to a slower core) while every frame is still on time – the Python pacer stepped down then.
+    const bool late = misses > kMissFraction || (misses > 0.0 && cost95 > kDownFraction * intervalMs());
+    if (late && index + 1 < static_cast<long>(rates.size())) {
         if (stepped_up_at_ && now - *stepped_up_at_ < kFailedTryS) {
             hold_ = std::min(2.0 * hold_, kMaxHoldS);
             ++failures_[rate];
@@ -228,7 +232,7 @@ void FrameDriver::showFrame() {
             recent_.push_back(work);
             gaps_.push_back(gap);
         }
-        if (recording) recording->emplace_back(gap, work);
+        if (recording) recording->push_back({gap, work, 1000.0 / rate});
     }
     cpu_last_ = cpu;
     wall_last_ = now;

@@ -103,6 +103,16 @@ First measurement on the Xiaomi Mi Pad 6 (Android 11, 120 Hz, pixel ratio 2.25, 
 6.9 ms on the Graphs screen, where the graph calculation (p95 5.8 ms) still ran in the frame. It now
 runs on its own thread (`GraphWorker`), and the report shows rate changes with their reason.
 
+Second measurement: Graphs screen GUI work p95 6.86 → 3.45 ms, graph work left on the GUI thread
+p95 0.24 ms. Phase 1 showed one step down to 60 fps for 3.3 s with 0 % missed frames, caused by a
+short work spike (p95 8.8 ms). Two changes followed:
+
+- **Pacer rule (differs from Python):** the rate is lowered only when frames are really late —
+  more than the miss fraction, or some misses while work p95 no longer fits the interval. Work
+  alone no longer lowers it; the Python pacer did.
+- **Dropped-frame count:** each frame is judged against the interval of the rate it was paced at,
+  not the rate at the end of the phase.
+
 Performance test, desktop CI-class machine with software rendering (Mesa llvmpipe, 60 Hz):
 
 | Phase | fps | Dropped | GUI work per frame (mean / p95) | Graph refresh p95 |

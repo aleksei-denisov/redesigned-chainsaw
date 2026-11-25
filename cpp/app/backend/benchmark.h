@@ -8,6 +8,8 @@
 #include <QPointer>
 #include <QQuickWindow>
 
+#include "frames.h"
+
 namespace app {
 
 class SimulationBridge;
@@ -49,7 +51,7 @@ private:
     QString progress_, report_;
     bool copied_ = false;
     QStringList lines_;
-    std::vector<std::pair<double, double>> frames_rec_;
+    std::vector<FrameDriver::FrameRecord> frames_rec_;
     std::vector<double> graph_ms_, graph_gui_ms_;
     int changes0_ = 0;
     QTimer settle_, measure_, push_timer_, graph_timer_;

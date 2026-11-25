@@ -82,8 +82,11 @@ public:
     void setRefresh(double hz);
     std::vector<std::function<void(double)>> listeners;  ///< per shown frame (graphs, panel, trail)
 
-    /// Frame records for the performance test: (gap ms, work ms).
-    std::vector<std::pair<double, double>>* recording = nullptr;
+    /// Frame records for the performance test.
+    struct FrameRecord {
+        double gap_ms, work_ms, interval_ms;  ///< interval of the rate this frame was paced at
+    };
+    std::vector<FrameRecord>* recording = nullptr;
     QString describe() const;
     Pacer pacer;
 
