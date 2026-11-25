@@ -1,0 +1,133 @@
+# C++ / Qt Quick port (branch `cpp-core`)
+
+Goal: one application written in **C++ with a Qt Quick (QML) interface** that has the full
+feature set of both current versions — the desktop app (`pendulum_sim/ui`, Qt Widgets) and the
+Qt Quick app (`pendulum_sim/quick`) — on Android, iOS/iPadOS, macOS, Windows and Linux.
+
+The Python package is not changed by the port. It stays the **reference implementation**: Phase 1
+adds scripts in `cpp/reference/` that run it and write golden data, and every C++ module must
+reproduce those results within a stated tolerance.
+
+## Decisions
+
+| Question | Decision |
+|---|---|
+| Desktop interface | Same QML as mobile, with a wide (desktop) layout. Qt Widgets is not kept. |
+| Default core behaviour | `quick-core-v2` (push at the tapped point, push force, auto-tune with Ki ≠ 0, gain limits, selected loops) on every platform. The classic behaviour stays available as a setting (`pendulum::CoreMode`). |
+| iOS | Only after the Android build passes its tests on the Xiaomi Mi Pad 6. |
+| Intermediate Python bindings (pybind11) | No — the core is rewritten in C++ directly. |
+
+## Layout
+
+```
+cpp/
+  CMakeLists.txt        options: PENDULUM_BUILD_TESTS (ON), PENDULUM_BUILD_APP (OFF, needs Qt 6)
+  core/                 Qt-free library: physics, control, simulation, session (mirrors pendulum_sim/*)
+  tests/                GoogleTest unit + reference-comparison tests
+  reference/            Python golden-data generators (Phase 1) and data/
+  app/                  Qt Quick application (Phase 5+)
+```
+
+The layer rules from `CLAUDE.md` apply unchanged: `core` never includes Qt. Dependencies:
+Eigen 3.4 (system package if found, otherwise fetched from its GitHub mirror) and GoogleTest
+(tests only). Qt 6.5+ is needed only for `app/`.
+
+```bash
+cmake -S cpp -B cpp/build -DCMAKE_BUILD_TYPE=Release
+cmake --build cpp/build --parallel
+ctest --test-dir cpp/build --output-on-failure
+# with the app (Qt 6 installed):
+cmake -S cpp -B cpp/build -DPENDULUM_BUILD_APP=ON
+```
+
+CI: `.github/workflows/cpp.yml` (core tests on Linux/macOS/Windows, app build on Linux).
+
+## Phases
+
+| # | Phase | Python source | Estimate |
+|---|---|---|---|
+| 0 | Build skeleton, CI, feature matrix | — | 2–3 days |
+| 1 | Golden reference data | tests, scenarios | 3–4 days |
+| 2 | Physics and controllers | `physics`, `control` (~1.3k lines) | 1–1.5 weeks |
+| 3 | Simulation, experiments, auto-tune (thread pool) | `simulation` (~2.8k lines) | 1–1.5 weeks |
+| 4 | Session layer and files (same file formats) | `session`, `ui/file_io` | 1 week |
+| 5 | Qt Quick app in C++ (QML reused) | `quick/backend` (~5.4k lines), `quick/qml` | 2–3 weeks |
+| 6 | Desktop features in QML (wide layout) | `ui` | 2–3 weeks |
+| 7 | Platforms and acceptance (Android, then iOS) | — | 1–1.5 weeks |
+| 8 | Switch-over; Python kept only as reference | — | — |
+
+## Feature matrix
+
+Acceptance list for Phases 5–7. "Desktop" and "Quick" show where the feature exists today
+(✓ yes, ~ partly / different form, — no, ? to verify). The C++ app must have **every row**, on both
+the wide (desktop) and the tablet layout.
+
+### Model and controller
+
+| Feature | Desktop | Quick | Notes |
+|---|---|---|---|
+| Plant editor: cart on a track or fixed pivot, segments (mass, length, inertia, friction) | ✓ | ✓ | `plant_panel`, `ModelScreen.qml` |
+| Actuator limit (force / torque) | ✓ | ✓ | |
+| Multi-loop PID controller editor | ✓ | ✓ | `controller_panel`, `ControllerScreen.qml` |
+| Reset integrators | ✓ | ✓ | |
+| Seed gains from LQR | ✓ | ✓ | |
+| Restore original gains | ✓ | ~ | Quick: "Reset to default" |
+| Undo / redo of edits | ? | ✓ | `session/history` |
+| Scenarios: load built-in / save / load JSON configs | ✓ | ✓ | `configs/`, `SettingsBridge`/`ScenarioBridge` |
+
+### Simulation and view
+
+| Feature | Desktop | Quick | Notes |
+|---|---|---|---|
+| Real-time simulation, fixed `dt`, start / pause / step / reset | ✓ | ✓ | |
+| Simulation settings (dt, speed, view) | ✓ | ✓ | `settings_panel`, `SettingsScreen.qml` |
+| Pendulum view: zoom (wheel / pinch), fit view, trails, clear trajectories | ✓ | ✓ | |
+| Mouse / touch push | ✓ | ✓ | v2: push at the tapped point, user-set push force |
+| Left / right push buttons (0.1 s pulse) | ? | ✓ | |
+| Status tiles / readouts under the view, editable tile layout, saved layouts | — | ✓ | `TileEditor.qml` |
+| Light and dark theme | ~ | ✓ | |
+| Performance report / benchmark | — | ✓ | `bench`, `android_perf` |
+
+### Graphs and analysis
+
+| Feature | Desktop | Quick | Notes |
+|---|---|---|---|
+| Live telemetry plots (angles, cart, output, per-loop signals) | ✓ | ✓ | `telemetry_panel`, `GraphsScreen.qml` |
+| Loop selector, time window | ✓ | ? | |
+| Wrap angles to ±180° | ✓ | ? | |
+| Calm Y scaling (expand fast, shrink slowly) | ✓ | ? | |
+| Display smoothing (10 / 30 / 100 ms moving average) | — | ✓ | |
+| Choose graphs, graph cards | ~ | ✓ | |
+| Graph analyser: zoom / pan, cursors and value read-out, compare runs, export data and images | ~ | ~ | To be specified in detail before Phase 6 |
+
+### Experiments
+
+| Feature | Desktop | Quick | Notes |
+|---|---|---|---|
+| Run experiment, list of runs, before / after comparison | ✓ | ✓ | `experiment_panel`, `ExperimentsScreen.qml` |
+| Metrics per run | ✓ | ✓ | `simulation/metrics` |
+| Remove selected / clear all runs | ✓ | ✓ | |
+| Load selected gains into controller | ✓ | ? | |
+| Save / load results, export selected as CSV | ✓ | ? | |
+
+### Auto-tune
+
+| Feature | Desktop | Quick | Notes |
+|---|---|---|---|
+| Auto-tune for robustness (largest recoverable push) | ✓ | ✓ | `tuning_dialog`, `AutotuneScreen.qml` |
+| Foreground task, multi-core, progress with ETA, cancel (keep best so far) | ✓ | ✓ | C++: thread pool instead of processes |
+| Live round chart (best push per round, candidates) | ? | ✓ | |
+| Choose loops to tune, Ki not forced to zero | — | ✓ | v2 |
+| Gain limits: per loop / general / none | — | ✓ | v2 |
+| Before / after result and "apply gains" | ✓ | ✓ | |
+
+### Platform and files
+
+| Feature | Desktop | Quick | Notes |
+|---|---|---|---|
+| System file dialogs (incl. Android `content://` URIs) | ✓ | ✓ | `ui/file_io` |
+| Menu, keyboard shortcuts, About | ✓ | — | Wide layout only |
+| Exit confirmation, "previous start did not finish" recovery | — | ✓ | |
+
+Rows marked **?** are checked against the running apps at the end of Phase 0; the graph
+analyser row is expanded into sub-features before Phase 6 starts.

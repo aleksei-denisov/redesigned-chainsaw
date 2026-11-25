@@ -106,3 +106,9 @@ tests/                     physics, controller, simulation and offscreen GUI tes
 docs/                      technical documentation and figures
 start.sh / start.bat       one-step launchers
 ```
+
+## C++ / Qt Quick port (in progress)
+
+A C++ version with a Qt Quick interface for Android, iOS and the desktop is being built in
+`cpp/` on the `cpp-core` branch. The Python package stays the reference implementation.
+Plan, build commands and feature matrix: [docs/CPP_PORT.md](docs/CPP_PORT.md).

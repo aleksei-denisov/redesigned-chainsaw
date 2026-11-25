@@ -1,0 +1,43 @@
+name: C++ core
+
+on:
+  push:
+    paths: ["cpp/**", ".github/workflows/cpp.yml"]
+  pull_request:
+    paths: ["cpp/**", ".github/workflows/cpp.yml"]
+  workflow_dispatch:
+
+concurrency:
+  group: cpp-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core:
+    name: Core tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S cpp -B cpp/build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build cpp/build --config Release --parallel
+      - name: Test
+        run: ctest --test-dir cpp/build -C Release --output-on-failure
+
+  app:
+    name: Qt Quick app builds (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: "6.8.*"
+          cache: true
+      - name: Configure
+        run: cmake -S cpp -B cpp/build -DCMAKE_BUILD_TYPE=Release -DPENDULUM_BUILD_APP=ON -DPENDULUM_BUILD_TESTS=OFF
+      - name: Build
+        run: cmake --build cpp/build --parallel
