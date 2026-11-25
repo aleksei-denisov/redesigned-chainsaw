@@ -66,7 +66,7 @@ The JSON library is nlohmann/json (config and result files, reference data).
 | 2 | Done — physics and controllers, matching the reference data (physics to 1e-12) |
 | 3 | Done — simulation engine, experiments, scenarios, auto-tune (improvements 1–4 included) |
 | 4 | Done — session layer: edit rules, Session + operations, undo/redo, slider mappings, forms, texts, background jobs |
-| 5 | In progress — stage 1 done: app shell, Simulate, Graphs and Settings screens on the C++ core; Android APK in CI. Stage 2 done: Controller and Model screens |
+| 5 | In progress — stage 1 done: app shell, Simulate, Graphs and Settings screens on the C++ core; Android APK in CI. Stage 2 done: Controller and Model screens. Stage 3 done: Auto-tune and Experiments screens |
 
 ### Phase 5, stage 1: the app on the C++ core
 
@@ -85,7 +85,7 @@ bridges.
 | `panel` | `panel_model.py`, `panel.py`, `trail.py`, `trailgeom.py` | `panel` (tiles, layouts, values, status), `trail` |
 | `benchmark` | `bench.py` | `bench`: four phases (Simulate 1×, pushes, 4×, Graphs), `--benchmark` prints the report |
 
-Still placeholders (next stages): `autotune`, `experiments`.
+Every screen of the Qt Quick app now runs on the C++ core (no placeholders left).
 
 ### Phase 5, stage 2: Controller and Model screens
 
@@ -99,6 +99,28 @@ The backend is now a static library (`pendulum_app_backend`) shared by the app a
 the loops, undo / redo / reset, simulation settings in ms, LQR seeding and restoring gains, a
 new scenario clearing the history, the slider helpers, sub-pages and live outputs. CI runs them
 in the app job (`ctest -R ^App`) and adds Controller and Model screenshots.
+
+### Phase 5, stage 3: Auto-tune and Experiments screens
+
+| C++ (`cpp/app/backend`) | Python original | Notes |
+|---|---|---|
+| `autotune` | `autotune.py` | `autotune`: set-up (presets with time estimates from a one-off device calibration, quick-core-v2 options stored under the same QSettings key), running (progress, best so far, best push per candidate, candidates of the round, 10 Hz), result (headline, notes, gains before / after, response metrics, θ1 before / after); Apply keeps the user's push force; the simulation is paused during the search and resumed after; leaving the app cancels it |
+| `experiments` | `experiments.py` | `experiments`: settings form, runs on `ExperimentWorker`, "Same start" from the first run, colour per run, plots thinned to ≤ 600 points (min / max per bucket), show / hide, use gains (undoable), remove, clear |
+
+Better than Python here:
+
+- The search keeps the current controller as a candidate, so a result is never worse than the
+  gains before tuning; the notes say "No candidate beat the current gains – they are kept"
+  when that happens (improvement 1). The search runs on a thread pool on every platform,
+  Android included (improvement 4).
+- A run that spends ≥ 10 % of its time at the actuator limit triggers a warning message, and
+  each run carries the saturation note (`note` in `runs`) for the screen (improvement 2).
+
+Tests: `cpp/app/tests/test_jobs.cpp` – a short search from set-up through Apply (never worse,
+push force kept, simulation paused and resumed, undoable), cancelling a thorough search, the
+options map, two experiment runs with plots, "Same start", use gains, hide, remove (colours stay),
+clear, and peak-keeping thinning. New command-line options for CI screenshots:
+`--autotune running|result` and `--experiments`.
 
 ```bash
 cmake -S cpp -B cpp/build -DPENDULUM_BUILD_APP=ON && cmake --build cpp/build --parallel

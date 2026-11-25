@@ -20,7 +20,8 @@ qt_add_library(pendulum_app_backend STATIC
     backend/benchmark.cpp backend/benchmark.h
     backend/formmodel.cpp backend/formmodel.h
     backend/parameters.cpp backend/parameters.h
-    backend/placeholders.h
+    backend/autotune.cpp backend/autotune.h
+    backend/experiments.cpp backend/experiments.h
 )
 target_link_libraries(pendulum_app_backend PUBLIC pendulum_core Qt6::Quick Qt6::Gui)
 target_compile_definitions(pendulum_app_backend PUBLIC QT_NO_KEYWORDS)
@@ -39,8 +40,8 @@ set_target_properties(pendulum_app PROPERTIES
     # Android: own application id, so it installs next to both Python apps
     QT_ANDROID_PACKAGE_NAME "com.adenisov.invertedpendulumcpp"
     QT_ANDROID_APP_NAME "Pendulum C++"
-    QT_ANDROID_VERSION_NAME "0.6"
-    QT_ANDROID_VERSION_CODE 6
+    QT_ANDROID_VERSION_NAME "0.7"
+    QT_ANDROID_VERSION_CODE 7
     QT_ANDROID_MIN_SDK_VERSION 28
     QT_ANDROID_TARGET_SDK_VERSION 35
     # androiddeployqt scans these QML files for the Qt Quick modules to bundle
@@ -62,7 +63,7 @@ endif()
 
 # Bridge tests (headless: QT_QPA_PLATFORM=offscreen), with the core tests' GoogleTest.
 if(PENDULUM_BUILD_TESTS AND NOT ANDROID AND TARGET GTest::gtest_main)
-    add_executable(pendulum_app_tests tests/test_parameters.cpp)
+    add_executable(pendulum_app_tests tests/test_parameters.cpp tests/test_jobs.cpp)
     target_link_libraries(pendulum_app_tests PRIVATE pendulum_app_backend GTest::gtest_main)
     include(GoogleTest)
     gtest_discover_tests(pendulum_app_tests TEST_PREFIX "App." PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen"

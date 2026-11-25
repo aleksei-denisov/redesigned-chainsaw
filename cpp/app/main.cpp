@@ -19,7 +19,8 @@
 #include "backend/lineitem.h"
 #include "backend/panel.h"
 #include "backend/parameters.h"
-#include "backend/placeholders.h"
+#include "backend/autotune.h"
+#include "backend/experiments.h"
 #include "backend/settings.h"
 #include "backend/simulation.h"
 #include "pendulum/simulation/scenarios.hpp"
@@ -38,6 +39,8 @@ struct Backend {
     Benchmark* bench = nullptr;
     ModelBridge* model = nullptr;
     ControllerBridge* controller = nullptr;
+    AutotuneBridge* autotune = nullptr;
+    ExperimentsBridge* experiments = nullptr;
 };
 
 }  // namespace
@@ -57,7 +60,10 @@ int main(int argc, char* argv[]) {
     QCommandLineOption smokeOpt("smoke-test", "Visit the ported screens for N seconds each, then exit.", "seconds");
     QCommandLineOption shotOpt("screenshot", "Save a screenshot of the window after the start, then exit.", "file");
     QCommandLineOption sizeOpt("size", "Window size WxH.", "size");
-    cli.addOptions({themeOpt, screenOpt, scenarioOpt, benchOpt, smokeOpt, shotOpt, sizeOpt});
+    QCommandLineOption tuneOpt("autotune", "With --screenshot: start a quick search; shoot it running or its result.",
+                               "running|result");
+    QCommandLineOption expOpt("experiments", "With --screenshot: two experiment runs (the second with a changed gain).");
+    cli.addOptions({themeOpt, screenOpt, scenarioOpt, benchOpt, smokeOpt, shotOpt, sizeOpt, tuneOpt, expOpt});
     cli.process(app);
 
     for (const char* f : {"SpaceGrotesk-Regular.ttf", "SpaceGrotesk-Medium.ttf", "SpaceGrotesk-Bold.ttf",
@@ -129,7 +135,6 @@ int main(int argc, char* argv[]) {
             QObject::connect(window, &QQuickWindow::frameSwapped, b.frames, &FrameDriver::swapped, Qt::QueuedConnection);
             b.bench = new Benchmark(shell, b.sim, b.graphs, b.frames, &app);
             b.bench->window = window;
-            auto* placeholder = new Placeholder(&app);
             QQmlContext* ctx = engine.rootContext();
             ctx->setContextProperty("sim", b.sim);
             ctx->setContextProperty("graphs", b.graphs);
@@ -142,8 +147,10 @@ int main(int argc, char* argv[]) {
             b.controller = new ControllerBridge(b.sim, &app);
             ctx->setContextProperty("model", b.model);
             ctx->setContextProperty("controller", b.controller);
-            for (const char* name : {"experiments", "autotune"})
-                ctx->setContextProperty(name, placeholder);
+            b.autotune = new AutotuneBridge(b.sim, b.controller, &app);
+            b.experiments = new ExperimentsBridge(b.sim, b.controller, &app);
+            ctx->setContextProperty("autotune", b.autotune);
+            ctx->setContextProperty("experiments", b.experiments);
             QObject::connect(settings, &SettingsBridge::frameRateChanged, b.frames,
                              [&] { b.frames->setMode(settings->frameRate()); });
             QObject::connect(settings, &SettingsBridge::graphRateChanged, b.graphs,
@@ -152,8 +159,11 @@ int main(int argc, char* argv[]) {
             QObject::connect(&app, &QGuiApplication::applicationStateChanged, b.sim, [&](Qt::ApplicationState s) {
                 if (s == Qt::ApplicationActive)
                     b.sim->resume();
-                else if (s == Qt::ApplicationSuspended || s == Qt::ApplicationHidden)
+                else if (s == Qt::ApplicationSuspended || s == Qt::ApplicationHidden) {
+                    b.bench->cancel();
+                    b.autotune->cancel();  // a running search stops; its best result so far is offered
                     b.sim->suspend();
+                }
             });
             shell->setStatus("Building the Simulate screen…", 0.6);
             shell->setReady();
@@ -171,7 +181,8 @@ int main(int argc, char* argv[]) {
             QTimer::singleShot(1500, b.bench, &Benchmark::start);
         } else if (cli.isSet(smokeOpt)) {
             const int ms = static_cast<int>(1000 * cli.value(smokeOpt).toDouble());
-            const QStringList screens = {"simulate", "graphs", "settings", "simulate"};
+            const QStringList screens = {"simulate", "graphs", "controller", "model",
+                                         "autotune", "experiments", "settings", "simulate"};
             for (int i = 0; i < screens.size(); ++i)
                 QTimer::singleShot(ms * i, &app, [&, s = screens[i]] {
                     shell->setScreen(s);
@@ -183,7 +194,25 @@ int main(int argc, char* argv[]) {
                 app.exit(warnings ? 2 : result);
             });
         } else if (cli.isSet(shotOpt)) {
-            QTimer::singleShot(2500, &app, [&] {
+            int delay = 2500;
+            if (cli.isSet(tuneOpt)) {
+                shell->setScreen("autotune");
+                b.autotune->open();
+                const bool result_page = cli.value(tuneOpt) == "result";
+                b.autotune->choose(result_page ? "quick" : "thorough");  // a quick search can end within a second
+                QTimer::singleShot(800, b.autotune, &AutotuneBridge::start);
+                if (result_page) QTimer::singleShot(6000, b.autotune, &AutotuneBridge::cancel);
+                delay = result_page ? 9000 : 2000;
+            } else if (cli.isSet(expOpt)) {
+                shell->setScreen("experiments");
+                b.experiments->run();
+                QTimer::singleShot(2500, &app, [&] {
+                    b.controller->form()->apply("loop0.kp", b.sim->session.config.controller.loops[0].kp * 0.6);
+                    b.experiments->run();
+                });
+                delay = 6000;
+            }
+            QTimer::singleShot(delay, &app, [&] {
                 const QImage img = window->grabWindow();
                 const bool ok = img.save(cli.value(shotOpt));
                 std::printf("screenshot %s: %s\n", ok ? "saved" : "FAILED", qPrintable(cli.value(shotOpt)));
@@ -195,6 +224,8 @@ int main(int argc, char* argv[]) {
     // the graph worker reads the physics host: stop it before the backend objects go away
     QObject::connect(&app, &QCoreApplication::aboutToQuit, [&] {
         if (b.graphs) b.graphs->shutdown();
+        if (b.autotune) b.autotune->shutdown();
+        if (b.experiments) b.experiments->shutdown();
     });
     const int code = app.exec();
     return code ? code : result;

@@ -43,7 +43,7 @@ jobs:
         run: cmake -S cpp -B cpp/build -DCMAKE_BUILD_TYPE=Release -DPENDULUM_BUILD_APP=ON -DPENDULUM_BUILD_TESTS=ON
       - name: Build
         run: cmake --build cpp/build --parallel
-      - name: Bridge tests (Model, Controller)
+      - name: Bridge tests (Model, Controller, Auto-tune, Experiments)
         run: ctest --test-dir cpp/build -R "^App" --output-on-failure
       - name: Smoke test (every ported screen, fails on QML warnings)
         run: xvfb-run -a -s "-screen 0 1280x800x24" cpp/build/app/PendulumCpp --smoke-test 3 --size 1138x637
@@ -54,6 +54,9 @@ jobs:
           xvfb-run -a -s "-screen 0 1280x800x24" cpp/build/app/PendulumCpp --screenshot shots/graphs.png --screen graphs --size 1138x637
           xvfb-run -a -s "-screen 0 1280x800x24" cpp/build/app/PendulumCpp --screenshot shots/controller.png --screen controller --size 1138x637
           xvfb-run -a -s "-screen 0 1280x800x24" cpp/build/app/PendulumCpp --screenshot shots/model.png --screen model --size 1138x637
+          xvfb-run -a -s "-screen 0 1280x800x24" cpp/build/app/PendulumCpp --screenshot shots/autotune-running.png --autotune running --size 1138x637
+          xvfb-run -a -s "-screen 0 1280x800x24" cpp/build/app/PendulumCpp --screenshot shots/autotune-result.png --autotune result --size 1138x637
+          xvfb-run -a -s "-screen 0 1280x800x24" cpp/build/app/PendulumCpp --screenshot shots/experiments.png --experiments --size 1138x637
           xvfb-run -a -s "-screen 0 1280x800x24" cpp/build/app/PendulumCpp --screenshot shots/portrait-dark.png --theme dark --scenario double_cart_lqr --size 900x1200
       - name: Performance test
         run: xvfb-run -a -s "-screen 0 1280x800x24" cpp/build/app/PendulumCpp --benchmark --size 1138x637 | tee shots/performance.txt
