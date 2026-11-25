@@ -78,7 +78,7 @@ jobs:
           arch: android_arm64_v8a
           autodesktop: true
           cache: true
-      - name: Debug keystore (cached: the same signature, so a new APK installs over the old one)
+      - name: Debug keystore (cached, so a new APK installs over the old one)
         uses: actions/cache@v4
         with:
           path: ~/.android-cpp
