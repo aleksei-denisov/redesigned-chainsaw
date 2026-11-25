@@ -9,11 +9,20 @@ add_library(pendulum_core
     src/control/riccati.cpp
     src/control/lqr.cpp
     src/io/config_json.cpp
+    src/simulation/config.cpp
+    src/simulation/telemetry.cpp
+    src/simulation/engine.cpp
+    src/simulation/realtime.cpp
+    src/simulation/metrics.cpp
+    src/simulation/experiment.cpp
+    src/simulation/scenarios.cpp
+    src/simulation/tuning.cpp
 )
 target_include_directories(pendulum_core PUBLIC include)
-target_link_libraries(pendulum_core PUBLIC Eigen3::Eigen nlohmann_json::nlohmann_json)
+find_package(Threads REQUIRED)
+target_link_libraries(pendulum_core PUBLIC Eigen3::Eigen nlohmann_json::nlohmann_json Threads::Threads)
 if(MSVC)
     target_compile_options(pendulum_core PRIVATE /W4 /permissive-)
 else()
-    target_compile_options(pendulum_core PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(pendulum_core PRIVATE -Wall -Wextra -Wpedantic $<$<CXX_COMPILER_ID:GNU>:-Wno-maybe-uninitialized>)
 endif()

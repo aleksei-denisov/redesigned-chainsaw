@@ -64,7 +64,8 @@ The JSON library is nlohmann/json (config and result files, reference data).
 | 0 | Done — skeleton, CI, feature matrix |
 | 1 | Done — golden data in `cpp/reference/data`, see [cpp/reference/README.md](../cpp/reference/README.md) |
 | 2 | Done — physics and controllers, matching the reference data (physics to 1e-12) |
-| 3 | Next — simulation engine, experiments, auto-tune |
+| 3 | Done — simulation engine, experiments, scenarios, auto-tune (improvements 1–4 included) |
+| 4 | Next — session layer and files |
 
 ### Phase 2 contents
 
@@ -74,6 +75,40 @@ The JSON library is nlohmann/json (config and result files, reference data).
 | `control/pid`, `control/multiloop` | `control/pid.py`, `multiloop.py` | `setConfig` keeps a loop's integrator when the loop at the same position (or any loop) has the same signal |
 | `control/riccati`, `control/lqr` | `control/riccati.py`, `lqr_tuning.py` | Hamiltonian eigenvectors + Newton–Kleinman; agrees with both Python backends (NumPy and SciPy) to 1e-9 |
 | `io/config_json` | `simulation/config.py` (plant, controller) | Same JSON format (degrees in files, radians in memory) |
+
+### Phase 3 contents
+
+| C++ (`cpp/core`) | Python original | Notes |
+|---|---|---|
+| `simulation/config`, `io/config_json` | `simulation/config.py` | Whole `AppConfig`, same JSON files (load/save) |
+| `simulation/engine`, `telemetry`, `realtime` | `engine.py`, `telemetry.py`, `realtime.py` | Same step order; extra telemetry column `saturated`; `saturationFraction()` |
+| `simulation/metrics`, `experiment` | `metrics.py`, `experiment.py` | Same metrics plus `saturation_pct`; experiment JSON and CSV files compatible both ways |
+| `simulation/scenarios` | `scenarios.py` | The nine built-in scenarios, identical values |
+| `simulation/tuning` | `tuning.py` + `tuning2.py` | One search for both apps (`TuneOptions::classic()` = desktop `robust_tune`); thread pool; current controller is a candidate |
+| `simulation/rng` | NumPy generator | xoshiro256** + polar normal: same numbers on every platform |
+
+Checked against the reference data: every trajectory and telemetry column of the 18 simulation runs,
+the experiment metrics, `max_recoverable_push`, and all 26 candidate evaluations of a Python auto-tune
+run (push, recovery cost, number of simulations).
+
+Saturation (improvement 2) explains the rounding-sensitive scenarios: share of the experiment with the
+command beyond the actuator limit or clipped by the controller —
+
+| Scenario | Saturated |
+|---|---|
+| double_fixed_lqr | 95.8 % |
+| triple_cart_lqr | 18.4 % |
+| windup_demo | 2.6 % |
+| single_cart_full | 1.0 % |
+| others | < 0.5 % |
+
+Auto-tune, quick preset, one core, same machine (desktop `robust_tune` vs `TuneOptions::classic()`):
+
+| Scenario | Python | C++ |
+|---|---|---|
+| single_cart_full | 13.2 s, 5.12 N → 4.48 N (worse) | 0.13 s, keeps 5.12 N |
+| double_cart_lqr | 23.1 s, 0.54 N → 0.46 N (worse) | 0.20 s, keeps 0.54 N |
+| triple_cart_lqr | 13.9 s, 0.124 N → 0.120 N (worse) | 0.21 s, keeps 0.124 N |
 
 Speed (`cpp/build/pendulum_bench`, physics step + controller, dt = 1 ms, same machine):
 

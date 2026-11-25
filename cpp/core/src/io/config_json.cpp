@@ -1,6 +1,8 @@
 #include "pendulum/io/config_json.hpp"
 
 #include <cmath>
+#include <fstream>
+#include <sstream>
 #include <numbers>
 #include <stdexcept>
 
@@ -160,6 +162,140 @@ json toJson(const ControllerConfig& c) {
             {"output_max", c.output_max},
             {"action", toString(c.action)},
             {"loops", loops}};
+}
+
+
+AppConfig appConfigFromJson(const json& data) {
+    if (!data.is_object()) throw std::invalid_argument("configuration must be a JSON object");
+    const int version = data.value("version", kConfigVersion);
+    if (version != kConfigVersion)
+        throw std::invalid_argument("unsupported configuration version " + std::to_string(version));
+    AppConfig c;
+    const json empty = json::object();
+    auto sub = [&](const json& d, const char* k) -> const json& { return d.contains(k) ? d.at(k) : empty; };
+    try {
+        c.plant = plantFromJson(sub(data, "plant"));
+    } catch (const std::invalid_argument& e) {
+        const std::string m = e.what();
+        throw std::invalid_argument(m.find("BaseType") != std::string::npos ? "plant: " + m : m);
+    }
+    try {
+        c.controller = controllerFromJson(sub(data, "controller"), c.plant);
+    } catch (const std::invalid_argument& e) {
+        const std::string m = e.what();
+        throw std::invalid_argument(m.find("ControlAction") != std::string::npos ? "controller: " + m : m);
+    }
+    const json& sd = sub(data, "simulation");
+    c.simulation.dt = get(sd, "dt", 0.001);
+    c.simulation.sensor_noise_angle_deg = get(sd, "sensor_noise_angle_deg", 0.0);
+    c.simulation.sensor_noise_rate_dps = get(sd, "sensor_noise_rate_dps", 0.0);
+    c.simulation.sensor_noise_position = get(sd, "sensor_noise_position", 0.0);
+    c.simulation.noise_seed = static_cast<std::int64_t>(get(sd, "noise_seed", 1.0));
+    c.simulation.telemetry_rate_hz = get(sd, "telemetry_rate_hz", 200.0);
+    const json& ed = sub(data, "experiment");
+    const json& dd = sub(ed, "disturbance");
+    c.experiment.duration = get(ed, "duration", 8.0);
+    c.experiment.settle_tolerance_deg = get(ed, "settle_tolerance_deg", 1.0);
+    c.experiment.disturbance.enabled = get(dd, "enabled", false);
+    c.experiment.disturbance.time = get(dd, "time", 2.0);
+    c.experiment.disturbance.force = get(dd, "force", 2.0);
+    c.experiment.disturbance.duration = get(dd, "duration", 0.1);
+    c.name = get<std::string>(data, "name", "Custom configuration");
+    c.description = get<std::string>(data, "description", "");
+    c.push_force = get(sub(data, "interaction"), "push_force", 1.0);
+    c.validate();
+    return c;
+}
+
+json toJson(const AppConfig& c) {
+    const auto& s = c.simulation;
+    const auto& e = c.experiment;
+    return {{"version", kConfigVersion},
+            {"name", c.name},
+            {"description", c.description},
+            {"plant", toJson(c.plant)},
+            {"controller", toJson(c.controller)},
+            {"simulation",
+             {{"dt", s.dt},
+              {"sensor_noise_angle_deg", s.sensor_noise_angle_deg},
+              {"sensor_noise_rate_dps", s.sensor_noise_rate_dps},
+              {"sensor_noise_position", s.sensor_noise_position},
+              {"noise_seed", s.noise_seed},
+              {"telemetry_rate_hz", s.telemetry_rate_hz}}},
+            {"interaction", {{"push_force", c.push_force}}},
+            {"experiment",
+             {{"duration", e.duration},
+              {"settle_tolerance_deg", e.settle_tolerance_deg},
+              {"disturbance",
+               {{"enabled", e.disturbance.enabled},
+                {"time", e.disturbance.time},
+                {"force", e.disturbance.force},
+                {"duration", e.disturbance.duration}}}}}};
+}
+
+AppConfig loadConfig(const std::string& path) {
+    std::ifstream in(path);
+    if (!in) throw std::invalid_argument("cannot open " + path);
+    json data;
+    try {
+        data = json::parse(in);
+    } catch (const json::parse_error& e) {
+        const auto slash = path.find_last_of("/\\");
+        throw std::invalid_argument((slash == std::string::npos ? path : path.substr(slash + 1)) +
+                                    " is not valid JSON: " + e.what());
+    }
+    return appConfigFromJson(data);
+}
+
+void saveConfig(const AppConfig& config, const std::string& path) {
+    std::ofstream out(path);
+    if (!out) throw std::invalid_argument("cannot write " + path);
+    out << toJson(config).dump(2) << "\n";
+}
+
+namespace {
+json optionalNumber(const std::optional<double>& v) { return v ? json(*v) : json(nullptr); }
+std::optional<double> optionalFrom(const json& v) {
+    return v.is_null() ? std::nullopt : std::optional<double>(v.get<double>());
+}
+}  // namespace
+
+json toJson(const RunMetrics& m) {
+    json segs = json::array();
+    for (const auto& s : m.segments)
+        segs.push_back({{"max_deviation", s.max_deviation},
+                        {"rmse", s.rmse},
+                        {"settling_time", optionalNumber(s.settling_time)},
+                        {"overshoot_pct", s.overshoot_pct}});
+    return {{"segments", segs},
+            {"max_deviation", m.max_deviation},
+            {"rmse", m.rmse},
+            {"settling_time", optionalNumber(m.settling_time)},
+            {"overshoot_pct", m.overshoot_pct},
+            {"control_rms", m.control_rms},
+            {"control_peak", m.control_peak},
+            {"control_energy", m.control_energy},
+            {"max_cart_displacement", m.max_cart_displacement},
+            {"fell", m.fell},
+            {"saturation_pct", m.saturation_pct}};
+}
+
+RunMetrics runMetricsFromJson(const json& d) {
+    RunMetrics m;
+    for (const auto& s : d.at("segments"))
+        m.segments.push_back({s.at("max_deviation").get<double>(), s.at("rmse").get<double>(),
+                              optionalFrom(s.at("settling_time")), s.at("overshoot_pct").get<double>()});
+    m.max_deviation = d.at("max_deviation");
+    m.rmse = d.at("rmse");
+    m.settling_time = optionalFrom(d.at("settling_time"));
+    m.overshoot_pct = d.at("overshoot_pct");
+    m.control_rms = d.at("control_rms");
+    m.control_peak = d.at("control_peak");
+    m.control_energy = d.at("control_energy");
+    m.max_cart_displacement = d.at("max_cart_displacement");
+    m.fell = d.at("fell");
+    m.saturation_pct = d.value("saturation_pct", 0.0);  // absent in files from the Python app
+    return m;
 }
 
 }  // namespace pendulum::io
