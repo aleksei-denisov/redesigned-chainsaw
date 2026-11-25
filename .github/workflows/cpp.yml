@@ -73,7 +73,7 @@ jobs:
       - uses: jurplel/install-qt-action@v4
         with:
           version: "6.8.*"
-          host: linux
+          host: all_os            # Qt 6.7+ ships its Android packages for every host
           target: android
           arch: android_arm64_v8a
           autodesktop: true
