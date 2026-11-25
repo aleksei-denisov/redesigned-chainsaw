@@ -22,8 +22,15 @@ tuning       ``max_recoverable_push`` and ``tuning2.evaluate_controller`` for fi
              ``tuning2.tune`` run (workers = 1)
 
 Not covered on purpose: sensor noise (all scenarios have it off; NumPy's generator is not
-reproduced in C++) and the random sampling inside auto-tune. For auto-tune the C++ code
-must reproduce the deterministic parts exactly — each candidate's evaluation — and the
+reproduced in C++) and the random sampling inside auto-tune.
+
+Chaotic runs: some scenarios (a pendulum that falls or swings freely) amplify rounding
+differences – LAPACK on another platform already changes their long-run numbers. Each
+experiment case carries ``sensitive`` and each plain simulation case ``sensitive_from_s``
+(found by rerunning with every gain changed by 1e-11); the C++ tests compare those cases
+only up to that time, or by coarse properties.
+
+For auto-tune the C++ code must reproduce the deterministic parts exactly — each candidate's evaluation — and the
 search as a whole is compared by result quality, not candidate by candidate.
 """
 
@@ -84,6 +91,17 @@ def clean(value: Any) -> Any:
     if isinstance(value, np.bool_):
         return bool(value)
     return value
+
+
+def clean_numbers(value: Any) -> list[float]:
+    """All finite numbers in a cleaned structure, in order (for sensitivity checks)."""
+    if isinstance(value, dict):
+        return [x for v in value.values() for x in clean_numbers(v)]
+    if isinstance(value, list):
+        return [x for v in value for x in clean_numbers(v)]
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return [float(value)]
+    return []
 
 
 def write(name: str, payload: dict) -> None:
@@ -209,8 +227,14 @@ def gen_simulation() -> None:
     cases = []
     for name, cfg in scenarios():
         n = cfg.plant.n_segments
-        cases.append({"scenario": name, "config": config_to_dict(cfg), "case": "plain",
-                      **run_sim(cfg, 4.0, None)})
+        plain = run_sim(cfg, 4.0, None)
+        other = run_sim(nudged(cfg), 4.0, None)
+        a, b = np.array(plain["states"]), np.array(other["states"])
+        dev = np.abs(a - b).max(axis=1) / (np.abs(a).max(axis=1) + 1e-9) if a.shape == b.shape else None
+        # first sample time from which a rounding-size change shows up beyond 1e-6
+        bad = None if dev is None else np.nonzero(dev > 1e-6)[0]
+        plain["sensitive_from_s"] = None if bad is None or bad.size == 0 else float((bad[0] + 1) * 0.05)
+        cases.append({"scenario": name, "config": config_to_dict(cfg), "case": "plain", **plain})
         push = {"force": 1.0, "duration": 0.1, "start": 1.0, "segment": n - 1, "ratio": 0.5}
         cases.append({"scenario": name, "config": config_to_dict(cfg), "case": "point_push", "push": push,
                       **run_sim(cfg, 4.0, push)})
@@ -218,14 +242,25 @@ def gen_simulation() -> None:
 
 
 # -------------------------------------------------------------- experiment
+def nudged(cfg):
+    """Same configuration with every gain changed by 1e-11 (relative): a rounding-size change."""
+    c = cfg.copy()
+    for loop in c.controller.loops:
+        loop.kp *= 1.0 + 1e-11
+    return c
+
+
 def gen_experiment() -> None:
     cases = []
     for name, cfg in scenarios():
         r = run_experiment(cfg, name)
         m = r.metrics
+        m2 = run_experiment(nudged(cfg), name).metrics
+        a, b = np.array(clean_numbers(clean(m))), np.array(clean_numbers(clean(m2)))
+        sensitive = bool(np.nanmax(np.abs(a - b) / (np.abs(a) + 1e-9)) > 1e-6) if a.size else False
         cases.append({"scenario": name, "config": config_to_dict(cfg),
                       "diverged": getattr(r, "diverged", False),
-                      "metrics": m})
+                      "sensitive": sensitive, "metrics": m})
     write("experiment", {"cases": cases})
 
 

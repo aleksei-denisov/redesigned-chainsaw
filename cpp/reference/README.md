@@ -24,6 +24,12 @@ Not reproduced on purpose:
   deterministic part (each candidate's evaluation, the push bisection) must match exactly; the
   search as a whole is judged by result quality on the same scenarios.
 
+**Chaotic / ill-conditioned runs.** `double_fixed_lqr` and `triple_cart_lqr` amplify
+rounding-size changes (a gain changed by 1e-11 moves `double_fixed_lqr` by ~3e-5 rad within
+50 ms); LAPACK on another platform already changes their long-run numbers in Python itself.
+Such cases are marked (`sensitive` in experiments, `sensitive_from_s` in simulations) and the
+C++ tests compare them only up to that time or by coarse properties.
+
 `tests/test_cpp_reference.py` regenerates the fast groups and fails if the Python code no
 longer produces the stored numbers. When physics or control change on purpose, regenerate the
 data and commit it with the change.
