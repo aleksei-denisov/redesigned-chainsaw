@@ -16,6 +16,8 @@ reproduce those results within a stated tolerance.
 | Default core behaviour | `quick-core-v2` (push at the tapped point, push force, auto-tune with Ki ≠ 0, gain limits, selected loops) on every platform. The classic behaviour stays available as a setting (`pendulum::CoreMode`). |
 | iOS | Only after the Android build passes its tests on the Xiaomi Mi Pad 6. |
 | Intermediate Python bindings (pybind11) | No — the core is rewritten in C++ directly. |
+| Feature scope | The **union** of all versions: anything that exists in the desktop app, the first Android app (`pendulum_sim/mobile`) or the Qt Quick app is implemented in the C++ app. |
+| Graph analyser | Modelled on the first Android app's explorer (`mobile/plot_view.py`), available on phone, tablet and desktop — see below. |
 
 ## Layout
 
@@ -58,9 +60,9 @@ CI: `.github/workflows/cpp.yml` (core tests on Linux/macOS/Windows, app build on
 
 ## Feature matrix
 
-Acceptance list for Phases 5–7. "Desktop" and "Quick" show where the feature exists today
-(✓ yes, ~ partly / different form, — no, ? to verify). The C++ app must have **every row**, on both
-the wide (desktop) and the tablet layout.
+Acceptance list for Phases 5–7. "Desktop" and "Quick" show where the feature was found in the code
+(✓ yes, ~ partly / different form, — no, ? not confirmed). The columns are informational only:
+by decision the C++ app implements **every row**, on the phone, tablet and wide (desktop) layout.
 
 ### Model and controller
 
@@ -98,7 +100,7 @@ the wide (desktop) and the tablet layout.
 | Calm Y scaling (expand fast, shrink slowly) | ✓ | ? | |
 | Display smoothing (10 / 30 / 100 ms moving average) | — | ✓ | |
 | Choose graphs, graph cards | ~ | ✓ | |
-| Graph analyser: zoom / pan, cursors and value read-out, compare runs, export data and images | ~ | ~ | To be specified in detail before Phase 6 |
+| Graph analyser (full-screen explorer) | — | ~ | First Android app: ✓. Specified below |
 
 ### Experiments
 
@@ -129,5 +131,25 @@ the wide (desktop) and the tablet layout.
 | Menu, keyboard shortcuts, About | ✓ | — | Wide layout only |
 | Exit confirmation, "previous start did not finish" recovery | — | ✓ | |
 
-Rows marked **?** are checked against the running apps at the end of Phase 0; the graph
-analyser row is expanded into sub-features before Phase 6 starts.
+### Graph analyser (from the first Android app)
+
+Every graph — live telemetry, experiment runs, auto-tune charts — can be opened full-screen and
+explored with the fingers (mouse and wheel on the desktop). Reference: `GraphExplorer` and
+`PlotView` in `pendulum_sim/mobile/plot_view.py`, fast drawing in `mobile/graphs.py` and
+`mobile/plot_math.py`.
+
+| Feature | Notes |
+|---|---|
+| Open any graph full-screen by tapping it (Graphs, Experiments, Auto-tune) | Thumbnails stay non-interactive so the page scrolls |
+| Pinch zoom: sideways = time, vertical = values, diagonal = both; point between the fingers stays put | Desktop: wheel = time, Shift+wheel = values |
+| One-finger drag pans | |
+| Double tap fits all data | Plus a **Fit** button |
+| Tap = read-out cursor with the value of every curve at that time | |
+| **Live on / off**: follow the running simulation or freeze the graph to study it | Freezing does not stop the simulation |
+| **Now**: jump back to the newest point and resume following | |
+| **Scroll on / off**: while live, a sideways drag looks back in time and keeps that offset as the run continues | |
+| Zoom / value range kept while following | |
+| **Image**: save the graph as PNG; **Data**: save its data as CSV | Through the system file dialog |
+| Min/max downsampling to two points per pixel column | Pan and zoom stay smooth however long the recording |
+| Graph strip on the Graphs page: choose graphs, time window, PID loop, remembered between starts | Plus Quick's smoothing, desktop's angle wrapping and calm Y scaling |
+
