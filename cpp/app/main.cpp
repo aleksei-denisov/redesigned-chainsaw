@@ -185,6 +185,10 @@ int main(int argc, char* argv[]) {
         }
     });
 
+    // the graph worker reads the physics host: stop it before the backend objects go away
+    QObject::connect(&app, &QCoreApplication::aboutToQuit, [&] {
+        if (b.graphs) b.graphs->shutdown();
+    });
     const int code = app.exec();
     return code ? code : result;
 }

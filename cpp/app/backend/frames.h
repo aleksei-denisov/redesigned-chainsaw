@@ -10,6 +10,7 @@
 #include <functional>
 #include <map>
 #include <optional>
+#include <string>
 #include <vector>
 
 namespace app {
@@ -30,12 +31,19 @@ public:
 
     double refresh_hz;
     std::vector<int> rates;
+    struct Change {
+        double t;  ///< seconds since the pacer started
+        int from, to;
+        std::string why;
+    };
+    std::vector<Change> log;  ///< every rate change (the first 64)
     QString mode = "auto";
     int rate = 60;
     int changes = 0;
 
 private:
-    void setRate(int r);
+    void setRate(int r, const std::string& why = "");
+    double started_;
     int phase_ = 0;
     struct S {
         double t, cost;

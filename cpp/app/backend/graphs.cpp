@@ -5,6 +5,7 @@
 
 #include "pendulum/session/rules.hpp"
 #include "pendulum/simulation/telemetry.hpp"
+#include "simhost.h"
 #include "simulation.h"
 
 namespace app {
@@ -242,8 +243,7 @@ void GraphView::configure(const Spec& spec) {
     Q_EMIT legendChanged();
 }
 
-void GraphView::compute(const std::map<int, std::vector<double>>& data, double now) {
-    Output out = state.update(data, width_, height_, dpr_, now);
+void GraphView::apply(Output out) {
     curves_ = std::move(out.curves);
     dx_ = out.dx;
     QVariantList ticks[2];
@@ -262,7 +262,78 @@ void GraphView::compute(const std::map<int, std::vector<double>>& data, double n
     Q_EMIT updated();
 }
 
+// ---------------------------------------------------------------- GraphWorker
+GraphWorker::GraphWorker(SimHost* host, Deliver deliver) : host_(host), deliver_(std::move(deliver)) {
+    thread_ = std::thread([this] { run(); });
+}
+
+GraphWorker::~GraphWorker() { stop(); }
+
+void GraphWorker::stop() {
+    {
+        std::lock_guard lock(mutex_);
+        stop_ = true;
+    }
+    cv_.notify_one();
+    if (thread_.joinable()) thread_.join();
+}
+
+void GraphWorker::submit(Job job) {
+    {
+        std::lock_guard lock(mutex_);
+        if (stop_) return;
+        pending_ = std::move(job);  // latest wins
+    }
+    cv_.notify_one();
+}
+
+void GraphWorker::run() {
+    constexpr long kForgetAfterJobs = 250;  // ~10 s at 25 Hz: states of views no longer shown
+    for (;;) {
+        Job job;
+        {
+            std::unique_lock lock(mutex_);
+            cv_.wait(lock, [&] { return stop_ || pending_; });
+            if (stop_) return;
+            job = std::move(*pending_);
+            pending_.reset();
+        }
+        const auto started = std::chrono::steady_clock::now();
+        ++jobs_;
+        const auto data = host_->tail(job.columns, job.window + 0.5);
+        const double now = monotonic();
+        std::vector<std::pair<QPointer<GraphView>, Output>> results;
+        results.reserve(job.views.size());
+        for (auto& v : job.views) {
+            Entry& e = states_[v.id];
+            if (!e.state)
+                e.state = std::make_unique<GraphState>(v.spec, *job.catalogue, job.rate_hz);
+            else if (!(e.state->spec() == v.spec) || e.state->rate_hz != job.rate_hz) {
+                e.state->rate_hz = job.rate_hz;
+                e.state->configure(v.spec, *job.catalogue);
+            }
+            e.last_used = jobs_;
+            e.state->setStyle(v.style);
+            try {
+                results.emplace_back(v.view, e.state->update(data, v.width, v.height, v.dpr, now));
+            } catch (const std::exception&) {
+                results.emplace_back(v.view, Output{});
+            }
+        }
+        for (auto it = states_.begin(); it != states_.end();)
+            it = jobs_ - it->second.last_used > kForgetAfterJobs ? states_.erase(it) : std::next(it);
+        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+        deliver_(std::move(results), ms);
+    }
+}
+
 // --------------------------------------------------------------- GraphsBridge
+GraphsBridge::~GraphsBridge() { shutdown(); }
+
+void GraphsBridge::shutdown() {
+    if (worker_) worker_->stop();
+}
+
 GraphsBridge::GraphsBridge(SimulationBridge* sim, QObject* parent) : QObject(parent), sim_(sim) {
     const QVariant stored = settings_.value("quick/graphs/selected");
     QStringList sel = stored.isValid() ? stored.toStringList() : QStringList();
@@ -274,6 +345,19 @@ GraphsBridge::GraphsBridge(SimulationBridge* sim, QObject* parent) : QObject(par
     const std::string sm = settings_.value("quick/graphs/smoothing", "off").toString().toStdString();
     smoothing_ = kSmoothingS.count(sm) ? sm : "off";
     rate_telemetry_ = sim->session.config.simulation.telemetry_rate_hz;
+    worker_ = std::make_unique<GraphWorker>(
+        &sim->host(), [this](std::vector<std::pair<QPointer<GraphView>, Output>> results, double ms) {
+            // back on the GUI thread: swap the finished triangles into the views
+            auto shared = std::make_shared<decltype(results)>(std::move(results));
+            QMetaObject::invokeMethod(
+                this,
+                [this, shared, ms] {
+                    ms_ = ms;
+                    for (auto& [view, out] : *shared)
+                        if (view) view->apply(std::move(out));
+                },
+                Qt::QueuedConnection);
+        });
     connect(&timer_, &QTimer::timeout, this, &GraphsBridge::refresh);
     timer_.start(static_cast<int>(1000 / rate_));
     connect(sim, &SimulationBridge::structureChanged, this, &GraphsBridge::onStructure);
@@ -458,6 +542,7 @@ void GraphsBridge::onStructure() {
     loop_ = std::min(loop_, std::max(static_cast<int>(labs.size()) - 1, 0));
     catalogue_.clear();
     for (auto& s : graph::catalogue(p.nSegments(), p.hasCart(), labs)) catalogue_[s.key] = s;
+    shared_catalogue_ = std::make_shared<const std::map<std::string, Signal>>(catalogue_);
     rate_telemetry_ = sim_->session.config.simulation.telemetry_rate_hz;
     reconfigureCards();
     for (auto& [id, v] : tiles_) v->configure(v->state.spec());
@@ -473,29 +558,20 @@ void GraphsBridge::refresh() {
         if (v->active() && std::find(av.begin(), av.end(), k.toStdString()) != av.end()) active.push_back(v);
     for (auto& [k, v] : tiles_)
         if (v->active()) active.push_back(v);
-    if (active.empty()) return;
+    if (active.empty() || !worker_) return;
     const auto started = std::chrono::steady_clock::now();
-    std::vector<int> cols;
-    double window = 0.0;
+    GraphWorker::Job job;
+    job.window = 0.0;
+    job.rate_hz = rate_telemetry_;
+    job.catalogue = shared_catalogue_;
     for (auto* v : active) {
         for (int c : v->state.columns())
-            if (std::find(cols.begin(), cols.end(), c) == cols.end()) cols.push_back(c);
-        window = std::max(window, v->state.spec().window_s);
+            if (std::find(job.columns.begin(), job.columns.end(), c) == job.columns.end()) job.columns.push_back(c);
+        job.window = std::max(job.window, v->state.spec().window_s);
+        job.views.push_back({QPointer<GraphView>(v), v, v->state.spec(), v->style(), v->width(), v->height(), v->dpr()});
     }
-    const auto data = sim_->host().tail(cols, window + 0.5);
-    const double now = monotonic();
-    for (auto* v : active) {
-        try {
-            v->compute(data, now);
-        } catch (const std::exception& e) {
-            const QString p = "graph " + v->key() + ": " + e.what();
-            if (p != problem_) {
-                problem_ = p;
-                Q_EMIT problemChanged();
-            }
-        }
-    }
-    ms_ = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+    worker_->submit(std::move(job));
+    gui_ms_ = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
 }
 
 }  // namespace app

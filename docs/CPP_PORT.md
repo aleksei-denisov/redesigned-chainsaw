@@ -81,7 +81,7 @@ bridges.
 | `simulation` | `simulation.py` | `sim` |
 | `settings` | `settings.py`, `shell.py` | `Settings`, `App`, `scenarios`; same QSettings keys |
 | `frames` | `frames.py`, `pacing.py` | `frames`: vsync loop, auto pacing (120/60/40/30), paced frames from the swap |
-| `graphmath`, `graphs`, `lineitem` | `signals.py`, `scale.py`, `linegeom.py`, `curves.py`, `graphs.py`, `lineitem.py`, `mobile/plot_math.py` | `graphs`, `GraphLines`; the whole window is recomputed on each refresh (cheap in C++), columns fixed in time; new graphable signal `saturated` |
+| `graphmath`, `graphs` (+ `GraphWorker` thread), `lineitem` | `signals.py`, `scale.py`, `linegeom.py`, `curves.py`, `graphs.py`, `lineitem.py`, `mobile/plot_math.py` | `graphs`, `GraphLines`; computed on a background thread (the GUI thread only snapshots the views and swaps in finished triangles; latest request wins); the whole window is recomputed per refresh, columns fixed in time; new graphable signal `saturated` |
 | `panel` | `panel_model.py`, `panel.py`, `trail.py`, `trailgeom.py` | `panel` (tiles, layouts, values, status), `trail` |
 | `benchmark` | `bench.py` | `bench`: four phases (Simulate 1×, pushes, 4×, Graphs), `--benchmark` prints the report |
 
@@ -97,6 +97,11 @@ cpp/build/app/PendulumCpp --smoke-test 3        # visit the ported screens, fail
 Android: CI builds `PendulumCpp.apk` (application id `com.adenisov.invertedpendulumcpp`, Android 9+,
 arm64) and publishes it as the pre-release **android-cpp-latest**; it installs next to both
 Python apps for a side-by-side comparison on the device.
+
+First measurement on the Xiaomi Mi Pad 6 (Android 11, 120 Hz, pixel ratio 2.25, triple pendulum):
+120 fps in every phase, 3 dropped frames of ~3800; GUI work per frame mean 1.6–2.1 ms, p95 up to
+6.9 ms on the Graphs screen, where the graph calculation (p95 5.8 ms) still ran in the frame. It now
+runs on its own thread (`GraphWorker`), and the report shows rate changes with their reason.
 
 Performance test, desktop CI-class machine with software rendering (Mesa llvmpipe, 60 Hz):
 

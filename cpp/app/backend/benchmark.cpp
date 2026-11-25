@@ -41,7 +41,10 @@ Benchmark::Benchmark(AppBridge* app, SimulationBridge* sim, GraphsBridge* graphs
         push_dir_ = -push_dir_;
     });
     graph_timer_.setInterval(40);
-    connect(&graph_timer_, &QTimer::timeout, this, [this] { graph_ms_.push_back(graphs_->lastMs()); });
+    connect(&graph_timer_, &QTimer::timeout, this, [this] {
+        graph_ms_.push_back(graphs_->lastMs());
+        graph_gui_ms_.push_back(graphs_->lastGuiMs());
+    });
 }
 
 void Benchmark::start() {
@@ -84,8 +87,10 @@ void Benchmark::beginMeasuring() {
     busy0_ = st.busy_s;
     t0_ = st.t;
     wall0_ = monotonic();
+    changes0_ = frames_->pacer.changes;
     frames_rec_.clear();
     graph_ms_.clear();
+    graph_gui_ms_.clear();
     frames_->recording = &frames_rec_;
     graph_timer_.start();
     measure_.start(kPhaseMs);
@@ -116,6 +121,8 @@ void Benchmark::endPhase() {
     const double gmax = sorted.empty() ? 0 : sorted.back();
     const long steps = st.steps - steps0_;
     lines_ << QString("%1. %2").arg(phase_ + 1).arg(p.name);
+    if (frames_->pacer.changes != changes0_)
+        lines_ << QString("   frame rate changed %1× during this phase").arg(frames_->pacer.changes - changes0_);
     lines_ << QString::asprintf("   frames %zu in %.1f s = %.1f fps (rate %d, %s)", gaps.size(), wall,
                                 gsum > 0 ? 1000.0 * gaps.size() / gsum : 0.0, frames_->pacer.rate,
                                 frames_->pacer.mode.toUtf8().constData());
@@ -125,7 +132,9 @@ void Benchmark::endPhase() {
                                 p95(work));
     lines_ << QString::asprintf("   physics %.2f× real time (speed %g×), %ld steps, %.4f ms CPU per step",
                                 (st.t - t0_) / wall, p.speed, steps, steps ? 1000.0 * (st.busy_s - busy0_) / steps : 0.0);
-    if (!graph_ms_.empty()) lines_ << QString::asprintf("   graph refresh p95 %.2f ms", p95(graph_ms_));
+    if (!graph_ms_.empty())
+        lines_ << QString::asprintf("   graphs: background thread p95 %.2f ms · GUI thread p95 %.3f ms", p95(graph_ms_),
+                                    p95(graph_gui_ms_));
     if (phase_ + 1 < static_cast<int>(std::size(kPhases)))
         startPhase(phase_ + 1);
     else
@@ -139,6 +148,7 @@ void Benchmark::finish(bool cancelled) {
     graph_timer_.stop();
     frames_->recording = nullptr;
     if (cancelled) lines_ << "" << "Cancelled.";
+    lines_ << "" << "Frame-rate log: " + frames_->describe();
     report_ = lines_.join("\n");
     phase_ = -1;
     progress_.clear();

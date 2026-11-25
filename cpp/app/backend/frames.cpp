@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <ctime>
 
 #include "simhost.h"
@@ -40,7 +41,7 @@ double p95(std::vector<double> v) {
 }
 
 // ---------------------------------------------------------------------- Pacer
-Pacer::Pacer(double refresh, const QString& m) : refresh_hz(refresh > 1 ? refresh : 60.0) {
+Pacer::Pacer(double refresh, const QString& m) : refresh_hz(refresh > 1 ? refresh : 60.0), started_(monotonic()) {
     rates = supportedRates(refresh_hz);
     rate = rates[0];
     setMode(m);
@@ -54,17 +55,18 @@ void Pacer::setMode(const QString& m) {
         if (!ok) {
             mm = "auto";
         } else {
+            // fixed rate chosen in Settings
             int r = rates.back();
             for (int c : rates)
                 if (c <= wanted) {
                     r = c;
                     break;
                 }
-            setRate(r);
+            setRate(r, "fixed " + std::to_string(r) + " fps");
         }
     }
     if (mm == "auto" && mode != "auto") {
-        setRate(rates[0]);
+        setRate(rates[0], "auto");
         failures_.clear();
         hold_ = kUpHoldS;
     }
@@ -77,15 +79,16 @@ void Pacer::setRefresh(double hz) {
         rates = supportedRates(hz);
         const QString m = mode;
         mode = "auto";
-        setRate(rates[0]);
+        setRate(rates[0], "display " + std::to_string(static_cast<int>(hz)) + " Hz");
         setMode(m);
     }
 }
 
 int Pacer::divisor() const { return std::max(1, static_cast<int>(std::nearbyint(refresh_hz / rate))); }
 
-void Pacer::setRate(int r) {
+void Pacer::setRate(int r, const std::string& why) {
     if (r != rate) {
+        if (log.size() < 64) log.push_back({monotonic() - started_, rate, r, why});
         rate = r;
         ++changes;
     }
@@ -123,7 +126,9 @@ void Pacer::frameDone(double now, double cost) {
             ++failures_[rate];
         }
         stepped_up_at_.reset();
-        setRate(rates[index + 1]);
+        char why[96];
+        std::snprintf(why, sizeof why, "down: %.0f %% missed, work p95 %.1f ms", misses * 100, cost95);
+        setRate(rates[index + 1], why);
         return;
     }
     if (index > 0 && misses == 0 && failures_[rates[index - 1]] < kMaxFailedTries) {
@@ -131,7 +136,7 @@ void Pacer::frameDone(double now, double cost) {
             good_since_ = now;
         else if (now - *good_since_ >= hold_) {
             stepped_up_at_ = now;
-            setRate(rates[index - 1]);
+            setRate(rates[index - 1], "up: smooth for " + std::to_string(static_cast<int>(hold_)) + " s");
         }
     } else {
         good_since_.reset();
@@ -248,11 +253,14 @@ void FrameDriver::updateStats() {
 }
 
 QString FrameDriver::describe() const {
-    return QString("pacing %1 at %2 fps of %3 Hz (rate changes so far: %4)")
-        .arg(pacer.mode)
-        .arg(pacer.rate)
-        .arg(pacer.refresh_hz)
-        .arg(pacer.changes);
+    QString s = QString("pacing %1 at %2 fps of %3 Hz (rate changes so far: %4)")
+                    .arg(pacer.mode)
+                    .arg(pacer.rate)
+                    .arg(pacer.refresh_hz)
+                    .arg(pacer.changes);
+    for (const auto& c : pacer.log)
+        s += QString::asprintf("\n   t %6.1f s  %3d → %3d fps  %s", c.t, c.from, c.to, c.why.c_str());
+    return s;
 }
 
 }  // namespace app

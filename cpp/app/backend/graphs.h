@@ -5,8 +5,17 @@
 //     columns fixed in time, so curves never shimmer while scrolling.
 //   LineSource – what a GraphLines item draws (graph views and the trajectory).
 //   GraphView – one graph card or side-panel tile; GraphsBridge – context object `graphs`.
+//   GraphWorker – computes every visible graph on its own thread: the GUI thread only
+//     collects a snapshot of the views and swaps in the finished triangles, so a frame's cost
+//     does not depend on how many graphs are shown or how wide they are.
 #include <QObject>
+#include <QPointer>
 #include <QTimer>
+#include <condition_variable>
+#include <functional>
+#include <optional>
+#include <mutex>
+#include <thread>
 #include <QSettings>
 #include <QVariantList>
 #include <map>
@@ -142,10 +151,15 @@ public:
     double window() const { return state.spec().window_s; }
     Q_INVOKABLE QVariantList ranges() const;
 
-    void setStyle(const graph::Style& style) override { state.setStyle(style); }
+    void setStyle(const graph::Style& style) override { style_ = style; }
+    const graph::Style& style() const { return style_; }
+    double width() const { return width_; }
+    double height() const { return height_; }
     void configure(const graph::Spec& spec);
-    void compute(const std::map<int, std::vector<double>>& data, double now);
+    /// Finished triangles and axes from the worker (GUI thread).
+    void apply(graph::Output out);
 
+    /// GUI-side copy: spec, legend and columns only – the worker owns the computing state.
     graph::GraphState state;
 Q_SIGNALS:
     void legendChanged();
@@ -153,9 +167,54 @@ Q_SIGNALS:
 private:
     QString key_, title_;
     GraphsBridge* owner_;
+    graph::Style style_;
     std::vector<graph::Axis> axes_;
     QVariantList ticks_[2];
     std::vector<std::string> units_;
+};
+
+class SimHost;
+
+/// The background thread that computes the graphs. One job at a time; a new job replaces a
+/// waiting one ("latest wins"), so a slow device skips refreshes instead of queueing them.
+class GraphWorker {
+public:
+    struct ViewJob {
+        QPointer<GraphView> view;
+        const void* id;
+        graph::Spec spec;
+        graph::Style style;
+        double width, height, dpr;
+    };
+    struct Job {
+        std::vector<ViewJob> views;
+        std::vector<int> columns;
+        double window = 10.0;
+        double rate_hz = 200.0;
+        std::shared_ptr<const std::map<std::string, graph::Signal>> catalogue;
+    };
+    using Deliver = std::function<void(std::vector<std::pair<QPointer<GraphView>, graph::Output>>, double ms)>;
+
+    GraphWorker(SimHost* host, Deliver deliver);
+    ~GraphWorker();
+    void submit(Job job);
+    void stop();  ///< joins the thread (before the physics host goes away)
+
+private:
+    void run();
+    struct Entry {
+        std::unique_ptr<graph::GraphState> state;
+        long last_used = 0;
+    };
+    SimHost* host_;
+    Deliver deliver_;
+    std::mutex mutex_;
+    std::condition_variable cv_;
+    std::optional<Job> pending_;
+    bool stop_ = false;
+    std::map<const void*, Entry> states_;  // worker thread only
+    long jobs_ = 0;
+    std::thread thread_;
 };
 
 class GraphsBridge : public QObject {
@@ -174,6 +233,8 @@ class GraphsBridge : public QObject {
     Q_PROPERTY(double rateHz READ rateHz WRITE setRateHz NOTIFY rateChanged)
 public:
     explicit GraphsBridge(SimulationBridge* sim, QObject* parent = nullptr);
+    ~GraphsBridge() override;
+    void shutdown();  ///< stop the worker thread (call before the simulation is destroyed)
 
     QVariantList available() const;
     QVariantList selection() const;
@@ -202,7 +263,8 @@ public:
     void driveFromFrames() { timer_.stop(); }
     void onFrame(double now);  ///< a frame is being shown: refresh if due
     void refresh();
-    double lastMs() const { return ms_; }
+    double lastMs() const { return ms_; }          ///< worker time of the last refresh [ms]
+    double lastGuiMs() const { return gui_ms_; }   ///< GUI-thread time of the last refresh [ms]
 
 Q_SIGNALS:
     void selectionChanged();
@@ -232,7 +294,9 @@ private:
     std::map<std::string, graph::Signal> catalogue_;
     std::map<QString, GraphView*> views_;
     std::map<QString, GraphView*> tiles_;
-    double ms_ = 0.0, due_ = 0.0;
+    double ms_ = 0.0, gui_ms_ = 0.0, due_ = 0.0;
+    std::shared_ptr<const std::map<std::string, graph::Signal>> shared_catalogue_;
+    std::unique_ptr<GraphWorker> worker_;
     QString problem_;
     QTimer timer_;
 };
