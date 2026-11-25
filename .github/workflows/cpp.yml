@@ -87,7 +87,7 @@ jobs:
         with:
           path: ~/.android-cpp
           key: android-cpp-keystore-v1
-      - name: Gradle downloads (cached: Maven Central rate-limits repeated downloads)
+      - name: Gradle downloads (cached, Maven Central rate-limits repeated downloads)
         uses: actions/cache@v4
         with:
           path: |
