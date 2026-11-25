@@ -1,6 +1,7 @@
 #pragma once
 // Access to the golden data written by cpp/reference/generate.py (Phase 1).
 #include <cmath>
+#include <iomanip>
 #include <fstream>
 #include <limits>
 #include <stdexcept>
@@ -44,5 +45,42 @@ struct Tolerance {
         return std::abs(actual - expected) <= abs + rel * std::abs(expected);
     }
 };
+
+}  // namespace reference
+
+#include <gtest/gtest.h>
+#include <Eigen/Dense>
+
+namespace reference {
+
+inline Eigen::VectorXd vec(const json& v) {
+    Eigen::VectorXd out(static_cast<Eigen::Index>(v.size()));
+    for (std::size_t i = 0; i < v.size(); ++i) out[static_cast<Eigen::Index>(i)] = number(v[i]);
+    return out;
+}
+
+inline Eigen::MatrixXd mat(const json& v) {
+    const auto r = static_cast<Eigen::Index>(v.size());
+    const auto c = r ? static_cast<Eigen::Index>(v[0].size()) : 0;
+    Eigen::MatrixXd out(r, c);
+    for (Eigen::Index i = 0; i < r; ++i)
+        for (Eigen::Index j = 0; j < c; ++j) out(i, j) = number(v[i][j]);
+    return out;
+}
+
+/// Element-wise comparison with a message naming the first mismatch.
+template <typename A, typename B>
+::testing::AssertionResult allClose(const A& actual, const B& expected, const Tolerance& tol) {
+    if (actual.rows() != expected.rows() || actual.cols() != expected.cols())
+        return ::testing::AssertionFailure() << "shape " << actual.rows() << "x" << actual.cols() << " vs "
+                                             << expected.rows() << "x" << expected.cols();
+    for (Eigen::Index i = 0; i < expected.rows(); ++i)
+        for (Eigen::Index j = 0; j < expected.cols(); ++j)
+            if (!tol.close(actual(i, j), expected(i, j)))
+                return ::testing::AssertionFailure()
+                       << "(" << i << "," << j << "): " << std::setprecision(17) << actual(i, j) << " vs "
+                       << expected(i, j);
+    return ::testing::AssertionSuccess();
+}
 
 }  // namespace reference

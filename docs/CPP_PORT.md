@@ -19,6 +19,17 @@ reproduce those results within a stated tolerance.
 | Feature scope | The **union** of all versions: anything that exists in the desktop app, the first Android app (`pendulum_sim/mobile`) or the Qt Quick app is implemented in the C++ app. |
 | Graph analyser | Modelled on the first Android app's explorer (`mobile/plot_view.py`), available on phone, tablet and desktop — see below. |
 
+## Improvements over the Python version
+
+Found while porting; the C++ version fixes or adds these (the Python versions stay as they are).
+
+| # | Finding | C++ version |
+|---|---|---|
+| 1 | Auto-tune "All loops (LQR design)" can return a controller weaker than the current one: the current controller is measured but is not a candidate (seen: 4.48 N result vs 5.12 N before, `single_cart_full`, quick preset) | The current controller is always a candidate, so the result is never worse than before tuning |
+| 2 | Saturated, near bang-bang control (e.g. `double_fixed_lqr`: Kp up to −647 against 2 N·m) makes runs extremely sensitive to rounding: a switch moves by one controller sample | Saturation indicator: share of time at the actuator limit, with a warning when it is high; graphs mark saturated stretches |
+| 3 | Sensor noise and auto-tune sampling use NumPy's generator; results differ between Python and C++ | One seedable generator in the core, the same on every platform, so a seed reproduces a run on desktop, phone and tablet alike |
+| 4 | Auto-tune runs in processes (Android: limited) | Thread pool on every platform, including iOS |
+
 ## Layout
 
 ```
@@ -40,6 +51,7 @@ cmake --build cpp/build --parallel
 ctest --test-dir cpp/build --output-on-failure
 # with the app (Qt 6 installed):
 cmake -S cpp -B cpp/build -DPENDULUM_BUILD_APP=ON
+./cpp/build/pendulum_bench                 # physics + controller speed
 ```
 
 CI: `.github/workflows/cpp.yml` (core tests on Linux/macOS/Windows, app build on Linux).
@@ -51,7 +63,25 @@ The JSON library is nlohmann/json (config and result files, reference data).
 |---|---|
 | 0 | Done — skeleton, CI, feature matrix |
 | 1 | Done — golden data in `cpp/reference/data`, see [cpp/reference/README.md](../cpp/reference/README.md) |
-| 2 | Next — physics and controllers |
+| 2 | Done — physics and controllers, matching the reference data (physics to 1e-12) |
+| 3 | Next — simulation engine, experiments, auto-tune |
+
+### Phase 2 contents
+
+| C++ (`cpp/core`) | Python original | Notes |
+|---|---|---|
+| `physics/params`, `physics/model`, `physics/actuator` | `physics/params.py`, `model.py`, `fast_dynamics.py`, `actuator.py` | Reference equations plus the fast path (`rk4Step`, Cholesky) with the same operation order; fixed-capacity vectors, no heap allocation per step |
+| `control/pid`, `control/multiloop` | `control/pid.py`, `multiloop.py` | `setConfig` keeps a loop's integrator when the loop at the same position (or any loop) has the same signal |
+| `control/riccati`, `control/lqr` | `control/riccati.py`, `lqr_tuning.py` | Hamiltonian eigenvectors + Newton–Kleinman; agrees with both Python backends (NumPy and SciPy) to 1e-9 |
+| `io/config_json` | `simulation/config.py` (plant, controller) | Same JSON format (degrees in files, radians in memory) |
+
+Speed (`cpp/build/pendulum_bench`, physics step + controller, dt = 1 ms, same machine):
+
+| Segments | Python | C++ | Factor |
+|---|---|---|---|
+| 1 | 48 k steps/s | 3.6 M steps/s | ≈ 75× |
+| 2 | 29 k steps/s | 1.8 M steps/s | ≈ 61× |
+| 3 | 19 k steps/s | 1.2 M steps/s | ≈ 63× |
 
 ## Phases
 
