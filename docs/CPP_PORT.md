@@ -113,6 +113,19 @@ short work spike (p95 8.8 ms). Two changes followed:
 - **Dropped-frame count:** each frame is judged against the interval of the rate it was paced at,
   not the rate at the end of the phase.
 
+Third measurement (commit 922488d): **120 fps in all four phases, no rate changes, 1 dropped frame
+of 3824.**
+
+| Phase | fps | Dropped | GUI work (mean / p95) | Graphs: background / GUI p95 |
+|---|---|---|---|---|
+| Simulate 1× | 120.0 | 0 | 2.37 / 4.01 ms | 1.69 / 0.13 ms |
+| Simulate, pushes | 119.9 | 1 | 3.31 / 4.91 ms | 2.12 / 0.12 ms |
+| Simulate 4× | 119.9 | 0 | 1.98 / 3.55 ms | 2.18 / 0.09 ms |
+| Graphs screen, pushes | 119.9 | 0 | 1.38 / 3.21 ms | 5.42 / 1.21 ms |
+
+Physics costs 0.013–0.023 ms CPU per step (about 2.5 % of one core at 1×). Phase 5 performance
+work is done; the worst GUI frame uses under 40 % of the 8.3 ms budget.
+
 Performance test, desktop CI-class machine with software rendering (Mesa llvmpipe, 60 Hz):
 
 | Phase | fps | Dropped | GUI work per frame (mean / p95) | Graph refresh p95 |
